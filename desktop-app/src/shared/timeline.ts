@@ -1,4 +1,8 @@
-import { normalizeCharacterToken, parseCharacterTokens } from "./character";
+import {
+  normalizeCharacterToken,
+  parseCharacterTokens,
+  type CharacterRosterEntry,
+} from "./character";
 
 export const TIMELINE_GENERATE_CHANNEL = "timeline:generate";
 export const TIMELINE_CANCEL_CHANNEL = "timeline:cancel";
@@ -65,6 +69,7 @@ export interface TimelineGenerateInput {
   srtText: string;
   scriptText: string;
   visualBible: VisualBible;
+  characterRoster: CharacterRosterEntry[];
 }
 
 export interface TimelineResult {

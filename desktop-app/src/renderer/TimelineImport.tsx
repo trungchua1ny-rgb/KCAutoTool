@@ -15,7 +15,12 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
-import { parseCharacterTokens, type CharacterView } from "../shared/character";
+import {
+  matchCharacterNames,
+  parseCharacterTokens,
+  recurringCharacterRoster,
+  type CharacterView,
+} from "../shared/character";
 import type { SceneMediaType, SceneJobProgress } from "../shared/scene-job";
 import {
   DEFAULT_VISUAL_BIBLE,
@@ -924,16 +929,36 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     setRunning(true);
     setProgress(null);
     try {
-      const [srtText, scriptText] = await Promise.all([
+      const [srtText, scriptText, availableCharacters] = await Promise.all([
         srtFile.text(),
         scriptFile.text(),
+        window.flowx?.characters.list() || Promise.resolve(characters),
       ]);
+      setCharacters(availableCharacters);
+      const characterRoster = recurringCharacterRoster(
+        scriptText,
+        availableCharacters,
+        2,
+      );
       const result = await window.flowx.timeline.generate({
         srtText,
         scriptText,
         visualBible,
+        characterRoster,
       });
-      setScenes(result.scenes);
+      setScenes(result.scenes.map((scene) => {
+        const detectedTokens = matchCharacterNames(
+          `${scene.imagePrompt}\n${scene.videoPrompt}`,
+          characterRoster,
+        );
+        const tokens = [...new Set([...scene.usedCharacterTokens, ...detectedTokens])].slice(0, 4);
+        return {
+          ...scene,
+          usedCharacterTokens: tokens,
+          characterPolicy: tokens.length > 0 ? "selected" : "none",
+          assignedCharacterTokens: tokens,
+        };
+      }));
       setVisualBible(result.visualBible);
       setProgress(null);
     } catch (caught) {

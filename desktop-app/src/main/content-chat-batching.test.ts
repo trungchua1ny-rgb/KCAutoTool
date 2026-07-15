@@ -63,6 +63,7 @@ test("splits a long SRT into batches of six 8-second scenes", async () => {
         continuityNotes: string;
         aspectRatio: "16:9";
       },
+      characterRoster?: Array<{ token: string; name: string }>,
     ) => string;
     validateBatchResult: (
       result: { scenes: Array<Record<string, unknown>>; visualBible?: unknown },
@@ -133,6 +134,17 @@ The hero crosses the hall.`;
   assert.match(firstPrompt, /aspectRatio must always be exactly "16:9"/);
   assert.match(firstPrompt, /Never invent a character/);
   assert.doesNotMatch(firstPrompt, /Stickman, flat 2D illustration/);
+
+  const rosterPrompt = internals.buildTimelinePrompt(
+    batches[0] as TimelineBatch & { index: number },
+    batches.length,
+    "Gullit enters and Gullit returns later.",
+    undefined,
+    [{ token: "@GULLIT", name: "Gullit" }],
+  );
+  assert.match(rosterPrompt, /Gullit = @GULLIT/);
+  assert.match(rosterPrompt, /token beside the name/);
+  assert.match(rosterPrompt, /mention alone does not make the person visible/i);
 
   const lockedStylePrompt = internals.buildTimelinePrompt(
     batches[0] as TimelineBatch & { index: number },

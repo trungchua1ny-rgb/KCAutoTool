@@ -52,7 +52,7 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
         type: "REGISTER",
         role: "chat-worker",
         profileTag: "isolated-test",
-      workerVersion: "2.20.1",
+      workerVersion: "2.21.0",
       }),
     );
     const ping = await pingPromise;
@@ -70,8 +70,13 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
         continuityNotes: "locked round heads and single-line limbs",
         aspectRatio: "16:9",
       },
+      characterRoster: [{ token: "@HERO", name: "Hero" }],
     });
     const job = await jobMessagePromise;
+    assert.deepEqual(
+      (job.payload as { characterRoster: Array<{ token: string; name: string }> }).characterRoster,
+      [{ token: "@HERO", name: "Hero" }],
+    );
     socket.send(
       JSON.stringify({
         type: "JOB_DONE",
@@ -113,6 +118,7 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
         continuityNotes: "",
         aspectRatio: "16:9",
       },
+      characterRoster: [],
     });
     const stoppedAssertion = assert.rejects(stoppedResult, (error: unknown) => {
       assert.ok(error instanceof WorkerJobError);
@@ -145,6 +151,7 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
         continuityNotes: "",
         aspectRatio: "16:9",
       },
+      characterRoster: [],
     });
     const staleAssertion = assert.rejects(staleResult, /Reload KC Dev/);
     await staleJobMessage;
@@ -171,7 +178,7 @@ test("routes a Phase 5 image job with bound character references", async () => {
       type: "REGISTER",
       role: "flow-worker",
       profileTag: "phase5-test-flow",
-      workerVersion: "2.20.1",
+      workerVersion: "2.21.0",
     }));
     const registrationDeadline = Date.now() + 500;
     while (

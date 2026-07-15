@@ -8,6 +8,7 @@ import {
   type TimelineGenerateInput,
   type TimelineProgress,
 } from "../shared/timeline";
+import { normalizeCharacterToken } from "../shared/character";
 import { WorkerServer } from "./worker-server";
 
 function validateText(value: unknown, label: string): string {
@@ -30,10 +31,23 @@ function validateInput(value: unknown): TimelineGenerateInput {
     throw new Error("File phụ đề không chứa timestamp SRT hợp lệ");
   }
 
+  const characterRoster = Array.isArray(input.characterRoster)
+    ? input.characterRoster.slice(0, 100).flatMap((entry) => {
+      if (!entry || typeof entry !== "object") return [];
+      const source = entry as Record<string, unknown>;
+      const token = typeof source.token === "string"
+        ? normalizeCharacterToken(source.token)
+        : null;
+      const name = typeof source.name === "string" ? source.name.trim().slice(0, 80) : "";
+      return token && name ? [{ token, name }] : [];
+    })
+    : [];
+
   return {
     srtText,
     scriptText: validateText(input.scriptText, "File kịch bản"),
     visualBible: normalizeVisualBible(input.visualBible),
+    characterRoster,
   };
 }
 

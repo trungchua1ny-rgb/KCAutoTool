@@ -163,7 +163,7 @@ function connectChatWorker() {
           type: "REGISTER",
           role: "chat-worker",
           profileTag: "phase3-smoke-chat",
-          workerVersion: "2.20.1",
+          workerVersion: "2.21.0",
         }),
       );
       resolveRegistered();
@@ -194,7 +194,7 @@ function connectFlowWorker() {
         type: "REGISTER",
         role: "flow-worker",
         profileTag: "phase4-smoke-flow",
-        workerVersion: "2.20.1",
+        workerVersion: "2.21.0",
       }));
       resolveRegistered();
     });

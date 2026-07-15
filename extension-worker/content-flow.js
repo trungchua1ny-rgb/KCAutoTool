@@ -288,7 +288,7 @@ async function getFreshUploadedAsset() {
     return fresh.at(-1) || null;
   }, 30000);
   return asset
-    ? { ok: true, ...centerOf(asset) }
+    ? { ok: true, ...centerOf(asset), assetKey: flowAssetKeyForElement(asset) }
     : { ok: false, code: "FLOW_REF_UPLOAD_FAILED", error: "Không thấy thumbnail ảnh nhân vật mới trong popup sau khi chọn file." };
 }
 
@@ -905,6 +905,16 @@ async function getAttachedPromptIngredient(assetKey) {
   return matched
     ? { ok: true, found: true, assetKey: key, ingredientCount: elements.length }
     : { ok: true, found: false, ingredientCount: elements.length };
+}
+
+async function getLatestPromptAssetKey() {
+  await wakePromptBox();
+  const baselineElements = window.__flowx_ingredient_baseline_elements || new Set();
+  const fresh = promptIngredientElements().filter((element) => !baselineElements.has(element));
+  const assetKey = fresh.map(flowAssetKeyForElement).filter(Boolean).at(-1) || "";
+  return assetKey
+    ? { ok: true, assetKey }
+    : { ok: true, assetKey: "", unavailable: true };
 }
 
 async function prepareReferenceInput(targetId) {
@@ -1694,6 +1704,11 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
 
     if (msg.type === "FLOWX_GET_ATTACHED_PROMPT_INGREDIENT") {
       getAttachedPromptIngredient(msg.assetKey).then(sendResponse);
+      return true;
+    }
+
+    if (msg.type === "FLOWX_GET_LATEST_PROMPT_ASSET_KEY") {
+      getLatestPromptAssetKey().then(sendResponse);
       return true;
     }
 

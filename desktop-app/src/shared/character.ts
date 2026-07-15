@@ -8,6 +8,11 @@ export interface CharacterView extends Character {
   refImageDataUrl: string | null;
 }
 
+export interface CharacterRosterEntry {
+  token: string;
+  name: string;
+}
+
 export interface CharacterImageInput {
   bytes: ArrayBuffer;
   mimeType: string;
@@ -61,3 +66,46 @@ export function parseCharacterTokens(text: string): string[] {
   return tokens;
 }
 
+function foldedText(value: string): string {
+  // Preserve Vietnamese diacritics so a name such as "Lân" is not confused
+  // with ordinary words such as "lần". Explicit aliases can cover unaccented names later.
+  return value.normalize("NFC").toLocaleLowerCase("vi-VN");
+}
+
+function escapedPattern(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+}
+
+export function countCharacterNameMentions(text: string, name: string): number {
+  const foldedName = foldedText(name.trim());
+  if (!foldedName) return 0;
+  const pattern = new RegExp(
+    `(?:^|[^\\p{L}\\p{N}_])${escapedPattern(foldedName)}(?=$|[^\\p{L}\\p{N}_])`,
+    "gu",
+  );
+  return [...foldedText(text).matchAll(pattern)].length;
+}
+
+export function recurringCharacterRoster(
+  text: string,
+  characters: CharacterRosterEntry[],
+  minimumMentions = 2,
+): CharacterRosterEntry[] {
+  const threshold = Math.max(1, Math.floor(minimumMentions));
+  return characters.flatMap((character) => {
+    const token = normalizeCharacterToken(character.token);
+    const name = typeof character.name === "string" ? character.name.trim() : "";
+    return token && name && countCharacterNameMentions(text, name) >= threshold
+      ? [{ token, name }]
+      : [];
+  });
+}
+
+export function matchCharacterNames(
+  text: string,
+  roster: CharacterRosterEntry[],
+): string[] {
+  return roster.flatMap((character) =>
+    countCharacterNameMentions(text, character.name) > 0 ? [character.token] : []
+  );
+}

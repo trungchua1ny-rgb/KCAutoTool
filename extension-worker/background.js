@@ -3,6 +3,7 @@ import { WorkerConnection } from "./worker-connection.js";
 const RECONNECT_ALARM = "flowx-worker-reconnect";
 const PROFILE_TAG_KEY = "flowxProfileTag";
 const DETECTED_ROLE_KEY = "flowxDetectedRole";
+const CHARACTER_ASSET_CACHE_KEY = "flowxCharacterAssetCacheV1";
 
 let profileTagPromise = null;
 let roleRefreshTimer = null;
@@ -451,10 +452,98 @@ async function chooseLocalFile(tabId, x, y, localPath) {
   }
 }
 
+function reusableCharacterReference(reference) {
+  return /^@(?!STYLE_ANCHOR_|CHAIN_)[A-Z0-9_]{1,40}$/.test(reference?.token || "");
+}
+
+async function referenceContentHash(reference) {
+  const bytes = new TextEncoder().encode(String(reference?.imageBase64 || ""));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function flowWorkspaceCacheKey(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  try {
+    const url = new URL(tab.url || "");
+    return `${url.origin}${url.pathname.replace(/\/+$/, "") || "/"}`;
+  } catch {
+    return `tab:${tabId}`;
+  }
+}
+
+async function characterAssetCacheIdentity(tabId, reference) {
+  return [
+    await flowWorkspaceCacheKey(tabId),
+    reference.token,
+    await referenceContentHash(reference),
+  ].join("|");
+}
+
+async function cachedCharacterAsset(tabId, reference) {
+  if (!reusableCharacterReference(reference)) return { identity: "", assetKey: "" };
+  const identity = await characterAssetCacheIdentity(tabId, reference);
+  const stored = await chrome.storage.local.get(CHARACTER_ASSET_CACHE_KEY);
+  const cache = stored[CHARACTER_ASSET_CACHE_KEY];
+  return {
+    identity,
+    assetKey: cache && typeof cache === "object" && typeof cache[identity] === "string"
+      ? cache[identity]
+      : "",
+  };
+}
+
+async function rememberCharacterAsset(identity, assetKey) {
+  if (!identity || !assetKey) return;
+  const stored = await chrome.storage.local.get(CHARACTER_ASSET_CACHE_KEY);
+  const cache = stored[CHARACTER_ASSET_CACHE_KEY] && typeof stored[CHARACTER_ASSET_CACHE_KEY] === "object"
+    ? { ...stored[CHARACTER_ASSET_CACHE_KEY] }
+    : {};
+  cache[identity] = assetKey;
+  const entries = Object.entries(cache);
+  const compact = entries.length > 200 ? Object.fromEntries(entries.slice(-200)) : cache;
+  await chrome.storage.local.set({ [CHARACTER_ASSET_CACHE_KEY]: compact });
+}
+
+async function addSelectedAssetToPrompt(tabId) {
+  const addToPrompt = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_ADD_TO_PROMPT_BUTTON" });
+  if (!addToPrompt?.ok) return addToPrompt;
+  await clickAt(tabId, addToPrompt.x, addToPrompt.y);
+  return sendImageToFlowTab(tabId, {
+    type: "FLOWX_CONFIRM_INGREDIENT_DROP",
+    expectedCount: 1,
+  });
+}
+
 async function attachReferenceWithPicker(tabId, reference) {
+  const cached = await cachedCharacterAsset(tabId, reference);
+  if (cached.assetKey) {
+    const attached = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_GET_ATTACHED_PROMPT_INGREDIENT",
+      assetKey: cached.assetKey,
+    });
+    if (attached?.ok && attached.found) {
+      return { ok: true, reusedProjectAsset: true, alreadyAttached: true };
+    }
+  }
+
   const add = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_PROMPT_ADD_BUTTON" });
   if (!add?.ok) return add;
   await clickAt(tabId, add.x, add.y);
+
+  if (cached.assetKey) {
+    const existing = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_GET_EXISTING_PROJECT_ASSET",
+      assetKey: cached.assetKey,
+    });
+    if (existing?.ok && existing.found) {
+      await clickAt(tabId, existing.x, existing.y);
+      const confirmed = await addSelectedAssetToPrompt(tabId);
+      return confirmed?.ok ? { ...confirmed, reusedProjectAsset: true } : confirmed;
+    }
+  }
 
   const upload = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_UPLOAD_MEDIA_BUTTON" });
   if (!upload?.ok) return upload;
@@ -464,14 +553,13 @@ async function attachReferenceWithPicker(tabId, reference) {
   if (!asset?.ok) return asset;
   await clickAt(tabId, asset.x, asset.y);
 
-  const addToPrompt = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_ADD_TO_PROMPT_BUTTON" });
-  if (!addToPrompt?.ok) return addToPrompt;
-  await clickAt(tabId, addToPrompt.x, addToPrompt.y);
-
-  return sendImageToFlowTab(tabId, {
-    type: "FLOWX_CONFIRM_INGREDIENT_DROP",
-    expectedCount: 1,
-  });
+  const confirmed = await addSelectedAssetToPrompt(tabId);
+  if (!confirmed?.ok) return confirmed;
+  const latest = asset.assetKey
+    ? { assetKey: asset.assetKey }
+    : await sendImageToFlowTab(tabId, { type: "FLOWX_GET_LATEST_PROMPT_ASSET_KEY" });
+  await rememberCharacterAsset(cached.identity, latest?.assetKey || "");
+  return { ...confirmed, reusedProjectAsset: false, cachedAssetKey: latest?.assetKey || "" };
 }
 
 async function attachVideoIngredient(tabId, payload) {

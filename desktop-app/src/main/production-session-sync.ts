@@ -133,7 +133,7 @@ export function syncTimelineSessionToProject(
           timeEnd: scene.timeEnd,
           imagePrompt: scene.imagePrompt,
           videoPrompt: scene.videoPrompt,
-          usedCharacterTokens: selectedTokens.length ? selectedTokens : scene.usedCharacterTokens,
+          usedCharacterTokens: selectedTokens,
           narrationSrtRange: null,
           visualBibleId: VISUAL_BIBLE_ID,
           chainId: scene.chainId,
@@ -161,7 +161,7 @@ export function syncTimelineSessionToProject(
         `).run(
           Math.floor(index / 6), index, scene.timeStart, scene.timeEnd,
           scene.imagePrompt, scene.videoPrompt,
-          JSON.stringify(selectedTokens.length ? selectedTokens : scene.usedCharacterTokens),
+          JSON.stringify(selectedTokens),
           VISUAL_BIBLE_ID, scene.chainId, scene.chainRole, scene.durationSeconds,
           nextStatus, scene.imageResultPath || null,
           scene.imageFlowAssetKey || null, scene.videoResultPath || null,

@@ -138,7 +138,7 @@ export function migrateLegacyProjectData(
           timeEnd: scene.timeEnd,
           imagePrompt: scene.imagePrompt,
           videoPrompt: scene.videoPrompt,
-          usedCharacterTokens: selectedTokens.length ? selectedTokens : scene.usedCharacterTokens,
+          usedCharacterTokens: selectedTokens,
           narrationSrtRange: null,
           visualBibleId: LEGACY_VISUAL_BIBLE_ID,
           chainId: null,

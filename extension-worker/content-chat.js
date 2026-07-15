@@ -307,7 +307,25 @@ ${scriptText}
     };
   }
 
-  function buildTimelinePrompt(batch, batchCount, scriptText, visualBibleInput = {}) {
+  function normalizeCharacterRoster(value) {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 100).flatMap((entry) => {
+      const token = typeof entry?.token === "string" ? entry.token.trim().toUpperCase() : "";
+      const name = typeof entry?.name === "string" ? entry.name.trim() : "";
+      return /^@[A-Z0-9_]{1,40}$/.test(token) && name
+        ? [{ token, name: name.slice(0, 80) }]
+        : [];
+    });
+  }
+
+  function characterRosterContract(value) {
+    const roster = normalizeCharacterRoster(value);
+    return roster.length > 0
+      ? `KNOWN RECURRING CHARACTER ROSTER\n${roster.map((entry) => `- ${entry.name} = ${entry.token}`).join("\n")}\n- The desktop app found each listed natural-language name at least twice in the full source.\n- Match names case-insensitively. When a listed person is visibly present, include the canonical token in usedCharacterTokens and write the token beside the name in SUBJECT AND ACTION, for example \"${roster[0].token} ${roster[0].name} ...\".\n- A mention alone does not make the person visible. Do not attach the token when the source merely discusses the person off-screen.`
+      : "KNOWN RECURRING CHARACTER ROSTER\n- No library character name met the automatic two-mention threshold. Preserve only explicit @TOKENS found in the source.";
+  }
+
+  function buildTimelinePrompt(batch, batchCount, scriptText, visualBibleInput = {}, characterRoster = []) {
     const boundaryList = batch.boundaries
       .map((boundary, index) => `${index + 1}. ${boundary.start} --> ${boundary.end}`)
       .join("\n");
@@ -362,6 +380,8 @@ ${outputShape}
 
 ${visualBibleContract}
 
+${characterRosterContract(characterRoster)}
+
 STRICT SCENE SEGMENTATION
 - Do NOT create one scene per subtitle line. Merge consecutive subtitles when location, time of day, characters, and continuous action remain the same.
 - Every scene MUST use its exact required boundary from the Phase 3a contract. Do not change its 4, 6, or 8-second duration.
@@ -410,7 +430,7 @@ CHARACTER AND SHOT CONTINUITY
 - When splitting a long passage, create visual variety through camera or action while preserving spatial and narrative continuity.
 
 CHARACTER TOKENS
-- Preserve a relevant @CHARACTER token only when that exact token appears in the SRT or supporting script and the character is visibly present in the scene.
+- Use a canonical @CHARACTER token when it appears explicitly in the source OR its mapped natural-language name appears in the source and that person is visibly present in the scene.
 - Never invent a character, character token, crowd, narrator avatar, presenter, or human figure merely to make an empty scene more interesting.
 - If a scene has no visible character, focus on source-grounded environments, objects, evidence, maps, architecture, weather, or other visible details.
 - usedCharacterTokens must contain unique uppercase @TOKEN values in order of appearance. Use [] when no character token applies.
@@ -426,7 +446,7 @@ ${scriptSource}
 </SCRIPT_SOURCE>`;
   }
 
-  function buildTimelineRetryPrompt(batch, batchCount, reason, attempt, visualBibleInput = {}) {
+  function buildTimelineRetryPrompt(batch, batchCount, reason, attempt, visualBibleInput = {}, characterRoster = []) {
     const boundaryList = batch.boundaries
       .map((boundary, index) => `${index + 1}. ${boundary.start} --> ${boundary.end}`)
       .join("\n");
@@ -445,6 +465,8 @@ Use exactly this shape:
 ${outputShape}
 
 ${bibleRequirement}
+
+${characterRosterContract(characterRoster)}
 
 Return exactly ${batch.boundaries.length} scenes with these exact boundaries in this exact order:
 ${boundaryList}
@@ -821,6 +843,7 @@ ${batch.srtText}
                   batches.length,
                   payload.scriptText,
                   payload.visualBible,
+                  payload.characterRoster,
                 )
               : buildTimelineRetryPrompt(
                   batch,
@@ -828,6 +851,7 @@ ${batch.srtText}
                   lastInvalidError?.message || "Invalid scene JSON",
                   attempt,
                   payload.visualBible,
+                  payload.characterRoster,
                 );
           const attemptLabel =
             attempt === 1 ? label : `${label}, lần thử ${attempt}/${MAX_BATCH_ATTEMPTS}`;
