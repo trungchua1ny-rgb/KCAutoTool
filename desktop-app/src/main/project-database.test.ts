@@ -174,6 +174,9 @@ test("migrates the latest LowDB timeline and graphic styles idempotently", async
       usedCharacterTokens: ["@HERO"],
       characterPolicy: "selected",
       assignedCharacterTokens: ["@HERO"],
+      chainId: null,
+      chainRole: "single",
+      durationSeconds: 8,
     }],
   };
   const presets: GraphicStylePreset[] = [{

@@ -166,6 +166,11 @@ Required role: `chat-worker`.
 returned by ChatGPT and is carried through the Visual Bible to every Google
 Flow image prompt.
 
+Before scene prompt batches, the ChatGPT content worker runs an internal
+`beat_planning` task over the complete SRT and script. Its locked contract uses
+continuous 4/6/8-second boundaries and carries `chainId` plus `chainRole`
+(`single`, `start`, or `continue`) into every generated scene.
+
 The result is:
 
 ```json
@@ -177,7 +182,16 @@ The result is:
     "continuityNotes": "Keep recurring character designs and wardrobe unchanged",
     "aspectRatio": "16:9"
   },
-  "scenes": []
+  "scenes": [{
+    "timeStart": "00:00:00,000",
+    "timeEnd": "00:00:08,000",
+    "durationSeconds": 8,
+    "chainId": "opening-001",
+    "chainRole": "start",
+    "imagePrompt": "...",
+    "videoPrompt": "...",
+    "usedCharacterTokens": []
+  }]
 }
 ```
 

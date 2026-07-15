@@ -7,6 +7,8 @@ if (!window.__FLOWX_CHAT_WORKER__) {
   const SCENE_DURATION_MS = 8_000;
   const SCENES_PER_BATCH = 6;
   const MAX_BATCH_ATTEMPTS = 3;
+  const MAX_BEAT_PLANNING_ATTEMPTS = 3;
+  const ALLOWED_SCENE_DURATIONS = new Set([4, 6, 8]);
   const activeControllers = new Map();
 
   function stoppedError() {
@@ -108,26 +110,31 @@ if (!window.__FLOWX_CHAT_WORKER__) {
     return cues.sort((left, right) => left.startMs - right.startMs);
   }
 
-  function createTimelineBatches(srtText) {
+  function createTimelineBatches(srtText, plannedBoundaries = null) {
     const cues = parseSrtCues(srtText);
     const timelineStart = cues[0].startMs;
     const timelineEnd = Math.max(...cues.map((cue) => cue.endMs));
-    const sceneCount = Math.ceil(
-      (timelineEnd - timelineStart) / SCENE_DURATION_MS,
-    );
+    const boundariesSource = Array.isArray(plannedBoundaries) && plannedBoundaries.length > 0
+      ? plannedBoundaries
+      : Array.from(
+          { length: Math.ceil((timelineEnd - timelineStart) / SCENE_DURATION_MS) },
+          (_value, index) => {
+            const startMs = timelineStart + index * SCENE_DURATION_MS;
+            return {
+              startMs,
+              endMs: startMs + SCENE_DURATION_MS,
+              start: formatTimecode(startMs),
+              end: formatTimecode(startMs + SCENE_DURATION_MS),
+              durationSeconds: 8,
+              chainId: null,
+              chainRole: "single",
+            };
+          },
+        );
     const batches = [];
 
-    for (let offset = 0; offset < sceneCount; offset += SCENES_PER_BATCH) {
-      const count = Math.min(SCENES_PER_BATCH, sceneCount - offset);
-      const boundaries = Array.from({ length: count }, (_value, index) => {
-        const startMs = timelineStart + (offset + index) * SCENE_DURATION_MS;
-        return {
-          startMs,
-          endMs: startMs + SCENE_DURATION_MS,
-          start: formatTimecode(startMs),
-          end: formatTimecode(startMs + SCENE_DURATION_MS),
-        };
-      });
+    for (let offset = 0; offset < boundariesSource.length; offset += SCENES_PER_BATCH) {
+      const boundaries = boundariesSource.slice(offset, offset + SCENES_PER_BATCH);
       const batchStart = boundaries[0].startMs;
       const batchEnd = boundaries.at(-1).endMs;
       const relevantCues = cues.filter(
@@ -145,6 +152,148 @@ if (!window.__FLOWX_CHAT_WORKER__) {
       });
     }
     return batches;
+  }
+
+  function beatPlanningContract(srtText) {
+    const cues = parseSrtCues(srtText);
+    const startMs = cues[0].startMs;
+    const sourceEndMs = Math.max(...cues.map((cue) => cue.endMs));
+    const sourceDurationMs = sourceEndMs - startMs;
+    const contractDurationMs = Math.max(4_000, Math.ceil(sourceDurationMs / 2_000) * 2_000);
+    return {
+      startMs,
+      sourceEndMs,
+      endMs: startMs + contractDurationMs,
+      start: formatTimecode(startMs),
+      sourceEnd: formatTimecode(sourceEndMs),
+      end: formatTimecode(startMs + contractDurationMs),
+      durationSeconds: contractDurationMs / 1_000,
+    };
+  }
+
+  function buildBeatPlanningPrompt(srtText, scriptText, previousError = "") {
+    const contract = beatPlanningContract(srtText);
+    const correction = previousError
+      ? `\nYour previous beat plan was invalid: ${previousError}\nRegenerate the complete plan from scratch.`
+      : "";
+    return `JOB TYPE: beat_planning
+
+Analyze the COMPLETE SRT and supporting script before scene prompt generation. Return ONLY one valid JSON object, without Markdown or commentary, using exactly this shape:
+{"beats":[{"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","durationSeconds":8,"chainId":"chain-001","chainRole":"start"}]}
+
+BOUNDARY CONTRACT
+- The first beat MUST start at ${contract.start}.
+- The final beat MUST end at ${contract.end}. The spoken SRT ends at ${contract.sourceEnd}; the small final padding exists only to fit a supported Flow clip duration and must continue the final visible action without inventing a new event.
+- The sum of durationSeconds MUST equal exactly ${contract.durationSeconds} seconds.
+- Every durationSeconds must be exactly 4, 6, or 8 and must equal timeEnd minus timeStart.
+- Beats must be chronological, consecutive, gap-free, overlap-free, and cover the contract exactly.
+- Prefer boundaries that closely match narration changes and minimize unused padding.
+
+CHAIN RULES
+- single: a self-contained beat. chainId must be null.
+- start: the first beat of a continuous sequence. Give it a short stable chainId such as chain-001.
+- continue: only when the same setting, characters, physical action, and story time continue directly from the immediately preceding beat. It must reuse that preceding beat's chainId.
+- Start a new chain or use single whenever location, time, subject, or action continuity breaks.
+- Never join unrelated moments merely because the narration topic is similar.
+
+Do not write imagePrompt or videoPrompt in this job. Do not add events absent from the sources.${correction}
+
+<COMPLETE_SRT>
+${srtText}
+</COMPLETE_SRT>
+
+<COMPLETE_SCRIPT>
+${scriptText}
+</COMPLETE_SCRIPT>`;
+  }
+
+  function parseBeatPlanningResponse(text) {
+    const candidates = [text.trim()];
+    for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+      candidates.push(match[1].trim());
+    }
+    const objectStart = text.indexOf("{");
+    const objectEnd = text.lastIndexOf("}");
+    if (objectStart >= 0 && objectEnd > objectStart) {
+      candidates.push(text.slice(objectStart, objectEnd + 1));
+    }
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (Array.isArray(parsed?.beats)) return parsed.beats;
+      } catch {
+        // Try the next JSON-shaped section.
+      }
+    }
+    const error = new Error("ChatGPT response does not contain a valid beat_planning JSON object");
+    error.code = "INVALID_JOB";
+    throw error;
+  }
+
+  function validateBeatPlanningResult(beats, srtText) {
+    if (!Array.isArray(beats) || beats.length === 0 || beats.length > 1_000) {
+      const error = new Error("beat_planning must return between 1 and 1000 beats");
+      error.code = "INVALID_JOB";
+      throw error;
+    }
+    const contract = beatPlanningContract(srtText);
+    let previousEnd = contract.startMs;
+    let previous = null;
+    const seenChains = new Set();
+    const normalized = beats.map((beat, index) => {
+      const order = index + 1;
+      const startMs = parseTimecode(String(beat?.timeStart || ""));
+      const endMs = parseTimecode(String(beat?.timeEnd || ""));
+      const durationSeconds = Number(beat?.durationSeconds);
+      if (startMs === null || endMs === null || !ALLOWED_SCENE_DURATIONS.has(durationSeconds)) {
+        const error = new Error(`Beat ${order} has an invalid boundary or durationSeconds`);
+        error.code = "INVALID_JOB";
+        throw error;
+      }
+      if (startMs !== previousEnd || endMs - startMs !== durationSeconds * 1_000) {
+        const error = new Error(`Beat ${order} creates a gap, overlap, or duration mismatch`);
+        error.code = "INVALID_JOB";
+        throw error;
+      }
+      const chainRole = ["single", "start", "continue"].includes(beat?.chainRole)
+        ? beat.chainRole
+        : null;
+      const rawChainId = typeof beat?.chainId === "string" ? beat.chainId.trim().slice(0, 80) : "";
+      const chainId = chainRole === "single" ? null : rawChainId;
+      if (!chainRole || (chainRole !== "single" && !chainId)) {
+        const error = new Error(`Beat ${order} has an invalid chainId or chainRole`);
+        error.code = "INVALID_JOB";
+        throw error;
+      }
+      if (chainRole === "start" && seenChains.has(chainId)) {
+        const error = new Error(`Beat ${order} reuses an existing chain as start`);
+        error.code = "INVALID_JOB";
+        throw error;
+      }
+      if (chainRole === "continue" && (!previous || previous.chainId !== chainId || previous.chainRole === "single")) {
+        const error = new Error(`Beat ${order} continue does not follow the same chain`);
+        error.code = "INVALID_JOB";
+        throw error;
+      }
+      if (chainId) seenChains.add(chainId);
+      previousEnd = endMs;
+      previous = { chainId, chainRole };
+      return {
+        startMs,
+        endMs,
+        start: formatTimecode(startMs),
+        end: formatTimecode(endMs),
+        durationSeconds,
+        chainId,
+        chainRole,
+      };
+    });
+    if (previousEnd !== contract.endMs) {
+      const error = new Error(`Beat plan must end exactly at ${contract.end}`);
+      error.code = "INVALID_JOB";
+      throw error;
+    }
+    return normalized;
   }
 
   function normalizeRequestedVisualBible(value) {
@@ -199,7 +348,7 @@ ${requestedBibleContract}
 
 TASK
 This timeline is generated in ${batchCount} consecutive batches to prevent truncated responses. Process ONLY batch ${batch.index + 1} of ${batchCount}. Read its SRT segment and the supporting script context, then write one image prompt plus one video prompt for each required boundary. The SRT controls timing and spoken-story coverage. The script may clarify characters and visual context but must never override the SRT timeline.
-The intended finished program is 10-15 minutes long. Always follow the actual SRT timestamps exactly; the desktop divides that duration into consecutive 8-second scenes.
+The intended finished program is 10-15 minutes long. Always follow the locked Beat & Chain boundary contract exactly; every scene is a supported 4, 6, or 8-second Flow clip.
 
 BATCH CONTRACT
 Return exactly ${batch.boundaries.length} scenes, in the exact order and with these exact boundaries:
@@ -215,16 +364,16 @@ ${visualBibleContract}
 
 STRICT SCENE SEGMENTATION
 - Do NOT create one scene per subtitle line. Merge consecutive subtitles when location, time of day, characters, and continuous action remain the same.
-- Every scene MUST last exactly 8 seconds, measured from timeStart to timeEnd. Build consecutive fixed 8-second windows starting at the first SRT timestamp.
-- If one narrative segment spans multiple 8-second windows, vary the camera angle, visible action, important object, or meaningful close-up in each window while preserving spatial and narrative continuity.
-- Merge short subtitle fragments into the 8-second window that contains them. Do not create shorter clips for individual subtitle lines.
+- Every scene MUST use its exact required boundary from the Phase 3a contract. Do not change its 4, 6, or 8-second duration.
+- If one narrative segment spans multiple required windows, vary the camera angle, visible action, important object, or meaningful close-up in each window while preserving spatial and narrative continuity.
+- Merge short subtitle fragments into the required window that contains them. Do not create clips outside the supplied boundary list.
 - The required boundary list already includes final padding when needed. For a padded final scene, naturally continue or hold the last visible action without adding a new event; the editor will trim the padding.
 - Cover the entire provided batch from its first required boundary to its last. Scene boundaries must be chronological and continuous: no gaps, overlaps, duplicate coverage, or omitted intervals.
 - Each scene must match what is being narrated at that exact time. Do not invent unrelated events or scenes absent from the source.
 - Use canonical SRT timecodes HH:MM:SS,mmm for every boundary.
 
 INTERNAL VISUAL ANALYSIS
-Before writing each scene, silently build a shot brief from the exact subtitles overlapping that 8-second window and the supporting script:
+Before writing each scene, silently build a shot brief from the exact subtitles overlapping that required boundary window and the supporting script:
 1. Identify the precise story fact or event that must be visible now; distinguish it from dialogue, interpretation, and later events.
 2. Identify who or what is visible, their screen position, physical action, interaction, and any small secondary action.
 3. Convert emotion into observable facial expression, head angle, posture, gesture, distance between characters, and reaction to the environment.
@@ -240,7 +389,7 @@ PROMPT RULES
 - Describe ONLY what the audience can see. Never quote or describe dialogue, narration, internal thoughts, themes, or abstract ideas.
 - Avoid vague phrases such as "a man thinking." Show the idea through specific pose, action, environment, props, composition, and visible emotion.
 - Write every prompt as a shootable film shot, never as a summary, explanation, theme, or list of keywords.
-- imagePrompt must depict the strongest keyframe of the exact story beat covered by this 8-second SRT window. It MUST use these five labels exactly once in this order inside the single prompt string: "SUBJECT AND ACTION:", "EMOTION AND BODY LANGUAGE:", "SETTING AND BACKGROUND:", "DEPTH LAYERS:", and "CAMERA AND COMPOSITION:".
+- imagePrompt must depict the strongest keyframe of the exact story beat covered by this required SRT window. It MUST use these five labels exactly once in this order inside the single prompt string: "SUBJECT AND ACTION:", "EMOTION AND BODY LANGUAGE:", "SETTING AND BACKGROUND:", "DEPTH LAYERS:", and "CAMERA AND COMPOSITION:".
 - SUBJECT AND ACTION identifies every visible subject, their exact pose/action, interaction, and story-relevant object. EMOTION AND BODY LANGUAGE gives a concrete facial expression, eyebrow/eye/mouth state, head angle, posture, and gesture for each visible character. If nobody is visible, explicitly say no character is present and describe the observable environmental mood instead.
 - SETTING AND BACKGROUND must state the source-grounded location, time of day, weather, architecture, and readable environmental objects. A white canvas or minimalist style never permits an empty background unless the source explicitly requires empty space.
 - DEPTH LAYERS must separately identify at least one foreground element, one middle-ground subject/object, and one background element, with concrete spatial relationships. CAMERA AND COMPOSITION gives exactly one shot size, one angle, subject placement, and screen direction.
@@ -248,7 +397,7 @@ PROMPT RULES
 - For abstract narration, translate the meaning into concrete source-grounded visual evidence, objects, behavior, or scenery. Do not fall back to a generic presenter, a random person, or unrelated symbolism.
 - When no character is visible, make the environment carry the story through specific objects, traces, architecture, maps, evidence, damage, weather, or chronological change rather than adding a person.
 - videoPrompt must treat the imagePrompt as the opening frame and use these six labels exactly once in this order: "STARTING STATE:", "PRIMARY MOTION:", "REACTION:", "ENVIRONMENTAL MOTION:", "CAMERA MOTION:", and "END FRAME:".
-- Describe one continuous, physically possible 8-second shot without retelling the static image. Allow only ONE simple primary body action per character, ONE readable reaction/expression change, ONE subtle environmental motion, and ONE slow motivated camera movement. The END FRAME must clearly state the stable final pose and composition that can connect to the next scene.
+- Describe one continuous, physically possible shot lasting exactly the required boundary duration without retelling the static image. Allow only ONE simple primary body action per character, ONE readable reaction/expression change, ONE subtle environmental motion, and ONE slow motivated camera movement. The END FRAME must clearly state the stable final pose and composition that can connect to the next scene.
 - Prefer small, joint-safe motion: a head turns slightly, a whole arm raises once, a character takes two short steps, a door opens slowly. Avoid fast gestures, crossed or overlapping limbs, hands passing behind the torso, full-body spins, acrobatics, detailed finger manipulation, simultaneous arm-and-leg choreography, or multiple unrelated actions. Never request extra limbs, limb transformation, body morphing, or a camera move that hides the main action.
 - Do NOT repeat global graphic style, palette, default lighting, aspect ratio, stable character design, wardrobe, or recurring-location rules already present in the Visual Bible. Mention a visual property only when it changes specifically in this scene because the story requires it.
 - Do NOT include meta phrases such as "according to the Visual Bible", "keep consistent", "same style", or lists of negative rendering instructions in scene prompts. The desktop app attaches the Visual Bible separately.
@@ -576,8 +725,71 @@ ${batch.srtText}
     });
   }
 
+  async function planTimelineBeats(jobId, payload, signal) {
+    let lastInvalidError = null;
+    for (let attempt = 1; attempt <= MAX_BEAT_PLANNING_ATTEMPTS; attempt += 1) {
+      try {
+        const composer = findComposer();
+        if (!composer) {
+          const error = new Error(
+            "Không tìm thấy ô nhập ChatGPT. Hãy đăng nhập và mở một cuộc trò chuyện.",
+          );
+          error.code = "NOT_LOGGED_IN";
+          error.retryable = true;
+          throw error;
+        }
+        const messages = assistantMessages();
+        const baseline = {
+          count: messages.length,
+          lastElement: messages.at(-1) || null,
+        };
+        const attemptLabel = attempt === 1
+          ? "Phase 3a · Beat & Chain Planning"
+          : `Phase 3a · sửa kế hoạch lần ${attempt}/${MAX_BEAT_PLANNING_ATTEMPTS}`;
+        notifyProgress(jobId, `Đang gửi ${attemptLabel} tới ChatGPT`);
+        await submitPrompt(
+          composer,
+          buildBeatPlanningPrompt(
+            payload.srtText,
+            payload.scriptText,
+            lastInvalidError?.message || "",
+          ),
+          signal,
+        );
+        notifyProgress(jobId, `Đang chờ ${attemptLabel}`);
+        const responseText = await waitForAssistantResponse(
+          baseline,
+          signal,
+          (elapsedSeconds) => notifyProgress(
+            jobId,
+            `Đang chờ ${attemptLabel} · ${elapsedSeconds} giây`,
+          ),
+        );
+        return validateBeatPlanningResult(
+          parseBeatPlanningResponse(responseText),
+          payload.srtText,
+        );
+      } catch (error) {
+        if (error?.code === "INVALID_JOB" && attempt < MAX_BEAT_PLANNING_ATTEMPTS) {
+          lastInvalidError = error;
+          notifyProgress(
+            jobId,
+            `Kế hoạch beat không hợp lệ, đang tự yêu cầu viết lại (${attempt + 1}/${MAX_BEAT_PLANNING_ATTEMPTS})`,
+          );
+          await delay(1_000, signal);
+          continue;
+        }
+        error.message = `Phase 3a: ${error.message}`;
+        throw error;
+      }
+    }
+    throw lastInvalidError || new Error("Phase 3a could not produce a beat plan");
+  }
+
   async function generateTimeline(jobId, payload, signal) {
-    const batches = createTimelineBatches(payload.srtText);
+    const beatPlan = await planTimelineBeats(jobId, payload, signal);
+    notifyProgress(jobId, `Đã khóa ${beatPlan.length} beat; bắt đầu viết prompt theo boundary`);
+    const batches = createTimelineBatches(payload.srtText, beatPlan);
     const scenes = [];
     let visualBible = null;
 
@@ -634,7 +846,15 @@ ${batch.srtText}
           const result = parseJsonResponse(responseText);
           validateBatchResult(result, batch);
           if (batch.index === 0) visualBible = result.visualBible;
-          scenes.push(...result.scenes);
+          scenes.push(...result.scenes.map((scene, index) => {
+            const boundary = batch.boundaries[index];
+            return {
+              ...scene,
+              durationSeconds: boundary.durationSeconds,
+              chainId: boundary.chainId,
+              chainRole: boundary.chainRole,
+            };
+          }));
           lastInvalidError = null;
           break;
         } catch (error) {
@@ -670,6 +890,10 @@ ${batch.srtText}
 
   window.__FLOWX_CHAT_INTERNALS__ = {
     createTimelineBatches,
+    beatPlanningContract,
+    buildBeatPlanningPrompt,
+    parseBeatPlanningResponse,
+    validateBeatPlanningResult,
     buildTimelinePrompt,
     parseJsonResponse,
     validateBatchResult,

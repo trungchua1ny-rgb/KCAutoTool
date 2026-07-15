@@ -23,7 +23,7 @@ For `GENERATE_TIMELINE`, keep a logged-in ChatGPT conversation open in the
 Chat worker profile. The worker processes one timeline at a time and supports
 the protocol `STOP` message.
 
-Version `2.18.1` powers KC Auto Tool with production-queue heartbeats, reusable local graphic-style presets, completeness-checked scene prompts, stick-figure motion locks, user-seeded Visual Bible generation, automatic Image/Video mode switching in one Flow tab, project-asset reuse, and the Phase
+Version `2.19.0` adds Phase 3a Beat & Chain Planning before prompt generation, with locked 4/6/8-second boundaries and editable chain metadata. It also powers KC Auto Tool with production-queue heartbeats, reusable local graphic-style presets, completeness-checked scene prompts, stick-figure motion locks, user-seeded Visual Bible generation, automatic Image/Video mode switching in one Flow tab, project-asset reuse, and the Phase
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from

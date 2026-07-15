@@ -87,9 +87,13 @@ Projects are locked to 16:9 and are designed for 10-15 minute source timelines.
 Character tokens are optional: the worker preserves a token only when the
 source mentions that character and the scene visibly uses them; otherwise the
 scene carries no character reference.
-Long timelines are generated sequentially in batches of up to 6 fixed
-eight-second scenes, with batch progress reported in the desktop app. Invalid
-scene JSON or boundaries are retried twice for the affected batch only.
+Phase 3a first sends the complete SRT and script as a `beat_planning` task. It
+locks a continuous, gap-free boundary contract using 4, 6, or 8-second scenes
+and marks each scene as `single`, `start`, or `continue` in a chain. Prompt
+generation then runs sequentially in batches of up to 6 scenes without allowing
+ChatGPT to change those boundaries. Invalid beat plans or scene JSON are retried
+twice. The Phase 4 table exposes editable **Chain** and **Thời lượng** columns;
+manual changes are saved with the timeline and synchronized to SQLite.
 Keep the ChatGPT tab visible while timeline generation is running. This stable
 rollback intentionally does not automate hidden or background-tab lifecycle.
 If the extension was reloaded after ChatGPT opened, the worker reinjects the
@@ -155,7 +159,7 @@ one scene. Right-click a scene row for the resume/regenerate commands.
 Jobs run sequentially through the Flow worker, respect `depends_on`, and retry
 retryable failures with 2s/8s/20s backoff (three attempts by default). The
 Error Center groups DOM, response, timeout, quota, and extension-connection
-failures. Extension version `2.18.0` sends a five-second job heartbeat; reload
+failures. Extension version `2.19.0` sends a five-second job heartbeat; reload
 the unpacked extension before using the production queue.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without

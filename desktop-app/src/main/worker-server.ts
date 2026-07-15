@@ -93,7 +93,7 @@ function supportsTimelineWorker(value: string | null): boolean {
   if (!value) return false;
   const parts = value.split(".").map((part) => Number.parseInt(part, 10) || 0);
   const current = (parts[0] || 0) * 1_000_000 + (parts[1] || 0) * 1_000 + (parts[2] || 0);
-  return current >= 2_017_000;
+  return current >= 2_019_000;
 }
 
 function supportsSceneJobs(value: string | null): boolean {
@@ -405,7 +405,7 @@ export class WorkerServer {
     if (!supportsTimelineWorker(client.workerVersion)) {
       return Promise.reject(
         new WorkerJobError(
-          `KC Dev ${client.workerVersion || "cũ"} chưa có hợp đồng prompt nền, biểu cảm và chuyển động mới. Hãy Reload extension.`,
+          `KC Dev ${client.workerVersion || "cũ"} chưa hỗ trợ Phase 3a Beat & Chain Planning. Hãy Reload extension.`,
           "INVALID_JOB",
         ),
       );

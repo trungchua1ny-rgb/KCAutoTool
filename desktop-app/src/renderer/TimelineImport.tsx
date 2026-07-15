@@ -21,7 +21,11 @@ import {
   DEFAULT_VISUAL_BIBLE,
   MAX_TIMELINE_FILE_BYTES,
   normalizeStoredScenes,
+  recalculateScenePlanning,
+  SCENE_DURATION_OPTIONS,
   type Scene,
+  type SceneChainRole,
+  type SceneDurationSeconds,
   type TimelineProgress,
   type VisualBible,
 } from "../shared/timeline";
@@ -222,6 +226,7 @@ function TimelineTable({
   errors,
   thumbnails,
   onPromptChange,
+  onPlanningChange,
   onRun,
   onRegenerate,
   onResumeFrom,
@@ -232,6 +237,10 @@ function TimelineTable({
   errors: Record<string, string>;
   thumbnails: Record<string, string>;
   onPromptChange: (sceneId: string, mediaType: SceneMediaType, prompt: string) => void;
+  onPlanningChange: (
+    sceneId: string,
+    change: Partial<Pick<Scene, "chainId" | "chainRole" | "durationSeconds">>,
+  ) => void;
   onRun: (sceneId: string, mediaType: SceneMediaType, prompt: string) => void;
   onRegenerate: (sceneId: string, mediaType: SceneMediaType) => void;
   onResumeFrom: (sceneId: string, mediaType: SceneMediaType) => void;
@@ -268,6 +277,8 @@ function TimelineTable({
         <thead>
           <tr>
             <th scope="col">Scene</th>
+            <th scope="col">Chain</th>
+            <th scope="col">Thời lượng</th>
             <th scope="col">Thumbnail</th>
             <th scope="col">Prompt ảnh</th>
             <th scope="col">Ảnh</th>
@@ -291,6 +302,39 @@ function TimelineTable({
                   <strong>{scene.order}</strong>
                   <span>{scene.timeStart}</span>
                   <span>{scene.timeEnd}</span>
+                </td>
+                <td className="scene-chain-cell">
+                  <select
+                    aria-label={`Vai trò chain scene ${scene.order}`}
+                    value={scene.chainRole}
+                    onChange={(event) => onPlanningChange(scene.id, {
+                      chainRole: event.target.value as SceneChainRole,
+                    })}
+                  >
+                    <option value="single">Độc lập</option>
+                    <option value="start">Bắt đầu</option>
+                    <option value="continue">Tiếp nối</option>
+                  </select>
+                  <input
+                    aria-label={`Mã chain scene ${scene.order}`}
+                    value={scene.chainId || ""}
+                    disabled={scene.chainRole === "single"}
+                    placeholder="chain-001"
+                    onChange={(event) => onPlanningChange(scene.id, { chainId: event.target.value })}
+                  />
+                </td>
+                <td className="scene-duration-cell">
+                  <select
+                    aria-label={`Thời lượng scene ${scene.order}`}
+                    value={scene.durationSeconds}
+                    onChange={(event) => onPlanningChange(scene.id, {
+                      durationSeconds: Number(event.target.value) as SceneDurationSeconds,
+                    })}
+                  >
+                    {SCENE_DURATION_OPTIONS.map((seconds) => (
+                      <option key={seconds} value={seconds}>{seconds} giây</option>
+                    ))}
+                  </select>
                 </td>
                 <td>
                   <div className={`scene-thumbnail is-${scene.imageStatus}`}>
@@ -345,7 +389,7 @@ function TimelineTable({
               </tr>,
               isAlternative ? (
                 <tr className="scene-alternative-row" key={`${scene.id}-alternative`}>
-                  <td colSpan={7}>
+                  <td colSpan={9}>
                     <div className="scene-alternative-editor">
                       <div>
                         <strong>Prompt {alternative.mediaType === "image" ? "ảnh" : "video"} thay thế · Scene {scene.order}</strong>
@@ -667,6 +711,13 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         };
       }),
     );
+  };
+
+  const updatePlanning = (
+    sceneId: string,
+    change: Partial<Pick<Scene, "chainId" | "chainRole" | "durationSeconds">>,
+  ) => {
+    setScenes((current) => recalculateScenePlanning(current, sceneId, change));
   };
 
   const executeSceneJob = async (
@@ -1126,6 +1177,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
             errors={sceneErrors}
             thumbnails={thumbnails}
             onPromptChange={updatePrompt}
+            onPlanningChange={updatePlanning}
             onRun={requestSceneJob}
             onRegenerate={regenerateQueuedScene}
             onResumeFrom={resumeQueueFromScene}

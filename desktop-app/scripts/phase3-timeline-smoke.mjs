@@ -163,7 +163,7 @@ function connectChatWorker() {
           type: "REGISTER",
           role: "chat-worker",
           profileTag: "phase3-smoke-chat",
-          workerVersion: "2.18.0",
+          workerVersion: "2.19.0",
         }),
       );
       resolveRegistered();
@@ -194,7 +194,7 @@ function connectFlowWorker() {
         type: "REGISTER",
         role: "flow-worker",
         profileTag: "phase4-smoke-flow",
-        workerVersion: "2.18.0",
+        workerVersion: "2.19.0",
       }));
       resolveRegistered();
     });
@@ -301,6 +301,9 @@ try {
           {
             timeStart: "00:00:00,000",
             timeEnd: "00:00:08,000",
+            durationSeconds: 8,
+            chainId: "temple-entry",
+            chainRole: "start",
             imagePrompt: "@ancestor entering an ancient temple at sunrise",
             videoPrompt: "Slow tracking shot toward the temple doors",
             usedCharacterTokens: ["ancestor"],
@@ -308,6 +311,9 @@ try {
           {
             timeStart: "00:00:08,000",
             timeEnd: "00:00:16,000",
+            durationSeconds: 8,
+            chainId: "temple-entry",
+            chainRole: "continue",
             imagePrompt: "Temple doors closing behind @ANCESTOR",
             videoPrompt: "Doors close as the camera holds steady",
             usedCharacterTokens: ["@ANCESTOR"],
@@ -321,6 +327,18 @@ try {
   const bodyText = await client.evaluate("document.body.innerText");
   assert.match(bodyText, /2 scene/);
   assert.match(bodyText, /@ANCESTOR/);
+  const planningUi = await client.evaluate(`(() => {
+    const rows = [...document.querySelectorAll('.timeline-table tbody > tr:not(.scene-alternative-row)')];
+    return rows.map((row) => ({
+      role: row.querySelector('.scene-chain-cell select').value,
+      chainId: row.querySelector('.scene-chain-cell input').value,
+      duration: row.querySelector('.scene-duration-cell select').value,
+    }));
+  })()`);
+  assert.deepEqual(planningUi, [
+    { role: "start", chainId: "temple-entry", duration: "8" },
+    { role: "continue", chainId: "temple-entry", duration: "8" },
+  ]);
   const graphicStyle = await client.evaluate("document.querySelector('.graphic-style-input').value");
   assert.equal(graphicStyle, overrideGraphicStyle);
   await waitFor(client, "document.querySelector('.visual-bible-fields')");

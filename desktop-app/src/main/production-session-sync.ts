@@ -136,9 +136,9 @@ export function syncTimelineSessionToProject(
           usedCharacterTokens: selectedTokens.length ? selectedTokens : scene.usedCharacterTokens,
           narrationSrtRange: null,
           visualBibleId: VISUAL_BIBLE_ID,
-          chainId: null,
-          chainRole: "single",
-          durationSeconds: 8,
+          chainId: scene.chainId,
+          chainRole: scene.chainRole,
+          durationSeconds: scene.durationSeconds,
           startFrameAssetPath: null,
           status: nextStatus,
           imageAssetPath: scene.imageResultPath || null,
@@ -154,14 +154,16 @@ export function syncTimelineSessionToProject(
           UPDATE scenes SET
             batch_index = ?, order_index = ?, time_start = ?, time_end = ?,
             image_prompt = ?, video_prompt = ?, used_character_tokens = ?,
-            visual_bible_id = ?, status = ?, image_asset_path = ?, flow_image_asset_id = ?,
+            visual_bible_id = ?, chain_id = ?, chain_role = ?, duration_seconds = ?,
+            status = ?, image_asset_path = ?, flow_image_asset_id = ?,
             video_asset_path = ?, approved_image = ?, approved_video = ?, updated_at = ?
           WHERE id = ?
         `).run(
           Math.floor(index / 6), index, scene.timeStart, scene.timeEnd,
           scene.imagePrompt, scene.videoPrompt,
           JSON.stringify(selectedTokens.length ? selectedTokens : scene.usedCharacterTokens),
-          VISUAL_BIBLE_ID, nextStatus, scene.imageResultPath || null,
+          VISUAL_BIBLE_ID, scene.chainId, scene.chainRole, scene.durationSeconds,
+          nextStatus, scene.imageResultPath || null,
           scene.imageFlowAssetKey || null, scene.videoResultPath || null,
           approvedImage ? 1 : 0,
           approvedVideo ? 1 : 0,

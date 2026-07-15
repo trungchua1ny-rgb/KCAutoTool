@@ -12,6 +12,10 @@ export const MAX_TIMELINE_FILE_BYTES = 2 * 1024 * 1024;
 export type SceneStatus = "pending" | "queued" | "generating" | "done" | "review" | "error";
 export type CharacterPolicy = "none" | "selected";
 export type ProjectAspectRatio = "16:9";
+export type SceneChainRole = "single" | "start" | "continue";
+export type SceneDurationSeconds = 4 | 6 | 8;
+
+export const SCENE_DURATION_OPTIONS: SceneDurationSeconds[] = [4, 6, 8];
 
 export interface VisualBible {
   style: string;
@@ -52,6 +56,9 @@ export interface Scene {
   usedCharacterTokens: string[];
   characterPolicy: CharacterPolicy;
   assignedCharacterTokens: string[];
+  chainId: string | null;
+  chainRole: SceneChainRole;
+  durationSeconds: SceneDurationSeconds;
 }
 
 export interface TimelineGenerateInput {
@@ -128,6 +135,47 @@ function normalizeTimecode(value: unknown, field: string): {
   };
 }
 
+function normalizeDurationSeconds(
+  value: unknown,
+  actualDurationMilliseconds: number,
+  sceneOrder: number,
+): SceneDurationSeconds {
+  const actualSeconds = actualDurationMilliseconds / 1_000;
+  const requested = typeof value === "number" ? value : actualSeconds;
+  if (!SCENE_DURATION_OPTIONS.includes(requested as SceneDurationSeconds)) {
+    throw new Error(`Scene ${sceneOrder} durationSeconds must be 4, 6, or 8`);
+  }
+  if (actualDurationMilliseconds !== requested * 1_000) {
+    throw new Error(`Scene ${sceneOrder} boundary must match durationSeconds`);
+  }
+  return requested as SceneDurationSeconds;
+}
+
+function normalizeChain(
+  scene: Record<string, unknown>,
+  sceneOrder: number,
+  previous: Pick<Scene, "chainId" | "chainRole"> | null,
+): Pick<Scene, "chainId" | "chainRole"> {
+  const chainRole: SceneChainRole = scene.chainRole === "start" || scene.chainRole === "continue"
+    ? scene.chainRole
+    : "single";
+  if (chainRole === "single") return { chainId: null, chainRole };
+
+  const chainId = typeof scene.chainId === "string"
+    ? scene.chainId.trim().slice(0, 80)
+    : "";
+  if (!chainId) {
+    throw new Error(`Scene ${sceneOrder} ${chainRole} must have a chainId`);
+  }
+  if (
+    chainRole === "continue" &&
+    (!previous || previous.chainId !== chainId || previous.chainRole === "single")
+  ) {
+    throw new Error(`Scene ${sceneOrder} continue must follow the same chain`);
+  }
+  return { chainId, chainRole };
+}
+
 function normalizeTokens(value: unknown, promptText: string): string[] {
   const tokens = Array.isArray(value)
     ? value
@@ -194,6 +242,7 @@ export function normalizeTimelineResult(value: unknown): TimelineResult {
   }
 
   let previousEnd: number | null = null;
+  let previousScene: Scene | null = null;
   const scenes = scenesValue.map((entry, index): Scene => {
     if (!entry || typeof entry !== "object") {
       throw new Error(`Scene ${index + 1} is invalid`);
@@ -204,9 +253,11 @@ export function normalizeTimelineResult(value: unknown): TimelineResult {
     const timeStart = normalizeTimecode(scene.timeStart, "timeStart");
     const timeEnd = normalizeTimecode(scene.timeEnd, "timeEnd");
     const duration = timeEnd.milliseconds - timeStart.milliseconds;
-    if (duration !== 8_000) {
-      throw new Error(`Scene ${order} must last exactly 8 seconds`);
-    }
+    const durationSeconds = normalizeDurationSeconds(
+      scene.durationSeconds,
+      duration,
+      order,
+    );
     if (previousEnd !== null && timeStart.milliseconds !== previousEnd) {
       throw new Error(`Scene ${order} must start exactly when scene ${order - 1} ends`);
     }
@@ -222,7 +273,8 @@ export function normalizeTimelineResult(value: unknown): TimelineResult {
       scene.usedCharacterTokens,
       `${imagePrompt}\n${videoPrompt}`,
     );
-    return {
+    const chain = normalizeChain(scene, order, previousScene);
+    const normalizedScene: Scene = {
       id: `scene-${String(order).padStart(3, "0")}`,
       order,
       timeStart: timeStart.text,
@@ -239,7 +291,11 @@ export function normalizeTimelineResult(value: unknown): TimelineResult {
       usedCharacterTokens,
       characterPolicy: usedCharacterTokens.length > 0 ? "selected" : "none",
       assignedCharacterTokens: usedCharacterTokens,
+      ...chain,
+      durationSeconds,
     };
+    previousScene = normalizedScene;
+    return normalizedScene;
   });
 
   return {
@@ -250,6 +306,85 @@ export function normalizeTimelineResult(value: unknown): TimelineResult {
         : undefined,
     ),
   };
+}
+
+export function recalculateScenePlanning(
+  scenes: Scene[],
+  sceneId: string,
+  change: Partial<Pick<Scene, "chainId" | "chainRole" | "durationSeconds">>,
+): Scene[] {
+  if (scenes.length === 0) return scenes;
+  const targetIndex = scenes.findIndex((scene) => scene.id === sceneId);
+  if (targetIndex < 0) return scenes;
+  const previousChainId = scenes[targetIndex].chainId;
+
+  const updated = scenes.map((scene, index) => {
+    if (index !== targetIndex) return { ...scene };
+    const chainRole = change.chainRole ?? scene.chainRole;
+    const durationSeconds = change.durationSeconds ?? scene.durationSeconds;
+    if (!SCENE_DURATION_OPTIONS.includes(durationSeconds)) return { ...scene };
+    const fallbackChainId = chainRole === "continue"
+      ? scenes[index - 1]?.chainId || scene.chainId || `chain-${String(scene.order).padStart(3, "0")}`
+      : scene.chainId || `chain-${String(scene.order).padStart(3, "0")}`;
+    return {
+      ...scene,
+      durationSeconds,
+      chainRole,
+      chainId: chainRole === "single"
+        ? null
+        : (change.chainId === undefined
+            ? fallbackChainId
+            : (change.chainId || "").trim().slice(0, 80)) || fallbackChainId,
+    };
+  });
+
+  const target = updated[targetIndex];
+  if (target.chainRole === "continue") {
+    if (targetIndex === 0) {
+      target.chainRole = "start";
+    } else {
+      let cursorIndex = targetIndex - 1;
+      while (cursorIndex >= 0 && updated[cursorIndex].chainRole === "continue") {
+        updated[cursorIndex].chainId = target.chainId;
+        cursorIndex -= 1;
+      }
+      if (cursorIndex >= 0) {
+        updated[cursorIndex].chainRole = "start";
+        updated[cursorIndex].chainId = target.chainId;
+      }
+    }
+  }
+  if (target.chainRole === "start" || target.chainRole === "continue") {
+    for (let index = targetIndex + 1; index < updated.length; index += 1) {
+      const candidate = updated[index];
+      if (candidate.chainRole !== "continue" || candidate.chainId !== previousChainId) break;
+      candidate.chainId = target.chainId;
+    }
+  } else {
+    const following = updated[targetIndex + 1];
+    if (following?.chainRole === "continue" && following.chainId === previousChainId) {
+      following.chainRole = "start";
+    }
+  }
+
+  let cursor = normalizeTimecode(updated[0].timeStart, "timeStart").milliseconds;
+  return updated.map((scene) => {
+    const start = cursor;
+    cursor += scene.durationSeconds * 1_000;
+    return {
+      ...scene,
+      timeStart: formatTimecode(start),
+      timeEnd: formatTimecode(cursor),
+    };
+  });
+}
+
+function formatTimecode(milliseconds: number): string {
+  const hours = Math.floor(milliseconds / 3_600_000);
+  const minutes = Math.floor((milliseconds % 3_600_000) / 60_000);
+  const seconds = Math.floor((milliseconds % 60_000) / 1_000);
+  const remainder = milliseconds % 1_000;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")},${String(remainder).padStart(3, "0")}`;
 }
 
 export function normalizeStoredScenes(value: unknown): Scene[] {

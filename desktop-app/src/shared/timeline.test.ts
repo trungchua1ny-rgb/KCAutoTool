@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   normalizeStoredScenes,
   normalizeTimelineResult,
+  recalculateScenePlanning,
   validateTimelineCoverage,
 } from "./timeline";
 
@@ -45,6 +46,9 @@ test("normalizes generated scenes and character tokens", () => {
     "@ANCESTOR",
     "@GUIDE",
   ]);
+  assert.equal(result.scenes[0].durationSeconds, 8);
+  assert.equal(result.scenes[0].chainRole, "single");
+  assert.equal(result.scenes[0].chainId, null);
 });
 
 test("rejects empty or malformed scene results", () => {
@@ -56,20 +60,22 @@ test("rejects empty or malformed scene results", () => {
   );
 });
 
-test("enforces fixed 8-second continuous scene boundaries", () => {
+test("enforces continuous 4, 6, or 8-second scene boundaries", () => {
   const scene = {
     imagePrompt: "A visible action",
     videoPrompt: "A moving camera",
   };
-  assert.throws(
-    () =>
-      normalizeTimelineResult({
-        scenes: [
-          { ...scene, timeStart: "00:00:00", timeEnd: "00:00:04" },
-        ],
-      }),
-    /exactly 8 seconds/,
-  );
+  const result = normalizeTimelineResult({
+    scenes: [
+      { ...scene, timeStart: "00:00:00", timeEnd: "00:00:04", durationSeconds: 4 },
+      { ...scene, timeStart: "00:00:04", timeEnd: "00:00:10", durationSeconds: 6 },
+      { ...scene, timeStart: "00:00:10", timeEnd: "00:00:18", durationSeconds: 8 },
+    ],
+  });
+  assert.deepEqual(result.scenes.map((entry) => entry.durationSeconds), [4, 6, 8]);
+  assert.throws(() => normalizeTimelineResult({
+    scenes: [{ ...scene, timeStart: "00:00:00", timeEnd: "00:00:05", durationSeconds: 4 }],
+  }), /boundary must match|must be 4, 6, or 8/);
   assert.throws(
     () =>
       normalizeTimelineResult({
@@ -80,6 +86,52 @@ test("enforces fixed 8-second continuous scene boundaries", () => {
       }),
     /start exactly/,
   );
+});
+
+test("validates chain continuity and recalculates boundaries after manual duration edits", () => {
+  const result = normalizeTimelineResult({
+    scenes: [
+      {
+        timeStart: "00:00:00",
+        timeEnd: "00:00:08",
+        durationSeconds: 8,
+        chainId: "walk-1",
+        chainRole: "start",
+        imagePrompt: "The walk begins",
+        videoPrompt: "Camera follows",
+      },
+      {
+        timeStart: "00:00:08",
+        timeEnd: "00:00:14",
+        durationSeconds: 6,
+        chainId: "walk-1",
+        chainRole: "continue",
+        imagePrompt: "The walk continues",
+        videoPrompt: "Camera follows",
+      },
+    ],
+  });
+  const edited = recalculateScenePlanning(result.scenes, "scene-001", {
+    durationSeconds: 4,
+  });
+  assert.equal(edited[0].timeEnd, "00:00:04,000");
+  assert.equal(edited[1].timeStart, "00:00:04,000");
+  assert.equal(edited[1].timeEnd, "00:00:10,000");
+  const detached = recalculateScenePlanning(edited, "scene-001", { chainRole: "single" });
+  assert.equal(detached[0].chainRole, "single");
+  assert.equal(detached[1].chainRole, "start");
+  assert.doesNotThrow(() => normalizeStoredScenes(detached));
+  assert.throws(() => normalizeTimelineResult({
+    scenes: [{
+      timeStart: "00:00:00",
+      timeEnd: "00:00:04",
+      durationSeconds: 4,
+      chainId: "walk-1",
+      chainRole: "continue",
+      imagePrompt: "Invalid continuation",
+      videoPrompt: "Invalid continuation",
+    }],
+  }), /continue must follow/);
 });
 
 test("requires complete coverage of the SRT bounds", () => {

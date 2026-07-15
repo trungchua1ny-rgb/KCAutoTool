@@ -354,7 +354,7 @@ body {
 
 .timeline-table {
   width: 100%;
-  min-width: 1420px;
+  min-width: 1680px;
   border-collapse: collapse;
   table-layout: fixed;
   background: #ffffff;
@@ -381,20 +381,28 @@ body {
 }
 
 .timeline-table th:nth-child(2) {
+  width: 152px;
+}
+
+.timeline-table th:nth-child(3) {
+  width: 92px;
+}
+
+.timeline-table th:nth-child(4) {
   width: 98px;
 }
 
-.timeline-table th:nth-child(3),
-.timeline-table th:nth-child(5) {
+.timeline-table th:nth-child(5),
+.timeline-table th:nth-child(7) {
   width: 300px;
 }
 
-.timeline-table th:nth-child(4),
-.timeline-table th:nth-child(6) {
+.timeline-table th:nth-child(6),
+.timeline-table th:nth-child(8) {
   width: 176px;
 }
 
-.timeline-table th:nth-child(7) {
+.timeline-table th:nth-child(9) {
   width: 135px;
 }
 
@@ -428,6 +436,36 @@ body {
   color: #202428;
   font-family: "Segoe UI", Arial, sans-serif;
   font-size: 14px;
+}
+
+.scene-chain-cell {
+  display: grid;
+  gap: 7px;
+}
+
+.scene-chain-cell select,
+.scene-chain-cell input,
+.scene-duration-cell select {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid #cfd6dc;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #202428;
+  font: inherit;
+}
+
+.scene-chain-cell input:disabled {
+  background: #f2f4f5;
+  color: #98a2b3;
+}
+
+.scene-chain-cell select:focus,
+.scene-chain-cell input:focus,
+.scene-duration-cell select:focus {
+  outline: 2px solid #167c5a;
+  outline-offset: 1px;
 }
 
 .scene-thumbnail {

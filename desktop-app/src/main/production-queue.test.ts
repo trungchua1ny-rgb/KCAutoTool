@@ -41,6 +41,9 @@ function timeline(sceneCount = 2): TimelineSessionInput {
       usedCharacterTokens: [],
       characterPolicy: "none" as const,
       assignedCharacterTokens: [],
+      chainId: null,
+      chainRole: "single" as const,
+      durationSeconds: 8 as const,
     })),
   };
 }
@@ -134,6 +137,48 @@ async function fixture() {
   await sessionStore.save(timeline());
   return { directory, database, sessionStore, characterStore };
 }
+
+test("syncs Beat & Chain planning metadata from the saved timeline into SQLite", async () => {
+  const context = await fixture();
+  try {
+    const original = await context.sessionStore.load();
+    assert.ok(original);
+    const planned = await context.sessionStore.save({
+      ...original,
+      scenes: original.scenes.map((scene, index) => index === 0
+        ? {
+            ...scene,
+            timeEnd: "00:00:06,000",
+            durationSeconds: 6,
+            chainId: "walk-cycle",
+            chainRole: "start",
+          }
+        : {
+            ...scene,
+            timeStart: "00:00:06,000",
+            timeEnd: "00:00:10,000",
+            durationSeconds: 4,
+            chainId: "walk-cycle",
+            chainRole: "continue",
+          }),
+    });
+    syncTimelineSessionToProject(context.database, planned, []);
+    const stored = new ProjectRepositories(context.database).scenes.listByProject(DEFAULT_PROJECT_ID);
+    assert.deepEqual(stored.map((scene) => ({
+      durationSeconds: scene.durationSeconds,
+      chainId: scene.chainId,
+      chainRole: scene.chainRole,
+      timeStart: scene.timeStart,
+      timeEnd: scene.timeEnd,
+    })), [
+      { durationSeconds: 6, chainId: "walk-cycle", chainRole: "start", timeStart: "00:00:00,000", timeEnd: "00:00:06,000" },
+      { durationSeconds: 4, chainId: "walk-cycle", chainRole: "continue", timeStart: "00:00:06,000", timeEnd: "00:00:10,000" },
+    ]);
+  } finally {
+    context.database.close();
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
 
 test("runs scenes sequentially, retries with backoff, and auto-enqueues approved videos", async () => {
   const context = await fixture();

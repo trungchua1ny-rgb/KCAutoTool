@@ -7,6 +7,11 @@ import vm from "node:vm";
 interface Boundary {
   startMs: number;
   endMs: number;
+  start?: string;
+  end?: string;
+  durationSeconds?: 4 | 6 | 8;
+  chainId?: string | null;
+  chainRole?: "single" | "start" | "continue";
 }
 
 interface TimelineBatch {
@@ -41,6 +46,12 @@ test("splits a long SRT into batches of six 8-second scenes", async () => {
 
   const internals = windowValue.__FLOWX_CHAT_INTERNALS__ as {
     createTimelineBatches: (srtText: string) => TimelineBatch[];
+    buildBeatPlanningPrompt: (srtText: string, scriptText: string) => string;
+    parseBeatPlanningResponse: (text: string) => Array<Record<string, unknown>>;
+    validateBeatPlanningResult: (
+      beats: Array<Record<string, unknown>>,
+      srtText: string,
+    ) => Boundary[];
     buildTimelinePrompt: (
       batch: TimelineBatch & { index: number },
       batchCount: number,
@@ -77,6 +88,40 @@ Ending`);
   assert.match(batches[0].srtText, /Opening/);
   assert.match(batches[4].srtText, /Ending/);
 
+  const beatSrt = `1
+00:00:00,000 --> 00:00:08,000
+The hero enters.
+
+2
+00:00:08,000 --> 00:00:18,000
+The hero crosses the hall.`;
+  const beatPrompt = internals.buildBeatPlanningPrompt(beatSrt, "A continuous walk through one hall.");
+  assert.match(beatPrompt, /JOB TYPE: beat_planning/);
+  assert.match(beatPrompt, /sum of durationSeconds MUST equal exactly 18 seconds/);
+  const beatPlan = internals.validateBeatPlanningResult(
+    internals.parseBeatPlanningResponse(JSON.stringify({ beats: [
+      { timeStart: "00:00:00,000", timeEnd: "00:00:08,000", durationSeconds: 8, chainId: "hall", chainRole: "start" },
+      { timeStart: "00:00:08,000", timeEnd: "00:00:14,000", durationSeconds: 6, chainId: "hall", chainRole: "continue" },
+      { timeStart: "00:00:14,000", timeEnd: "00:00:18,000", durationSeconds: 4, chainId: null, chainRole: "single" },
+    ] })),
+    beatSrt,
+  );
+  assert.deepEqual(Array.from(beatPlan, (beat) => beat.durationSeconds), [8, 6, 4]);
+  assert.equal(beatPlan.at(-1)?.endMs, 18_000);
+  assert.throws(() => internals.validateBeatPlanningResult([
+    { timeStart: "00:00:00,000", timeEnd: "00:00:08,000", durationSeconds: 8, chainId: null, chainRole: "single" },
+    { timeStart: "00:00:10,000", timeEnd: "00:00:18,000", durationSeconds: 8, chainId: null, chainRole: "single" },
+  ], beatSrt), /gap, overlap/);
+
+  const plannedBatches = (internals.createTimelineBatches as unknown as (
+    srtText: string,
+    boundaries: Boundary[],
+  ) => TimelineBatch[])(beatSrt, beatPlan);
+  assert.deepEqual(
+    Array.from(plannedBatches[0].boundaries, (boundary) => boundary.durationSeconds),
+    [8, 6, 4],
+  );
+
   const firstPrompt = internals.buildTimelinePrompt(
     batches[0] as TimelineBatch & { index: number },
     batches.length,
@@ -107,7 +152,7 @@ Ending`);
   assert.match(lockedStylePrompt, /Do NOT repeat global graphic style, palette, default lighting/);
   assert.match(lockedStylePrompt, /facial expression, head angle, posture, gesture/);
   assert.match(lockedStylePrompt, /foreground element, one middle-ground subject\/object, and one background element/);
-  assert.match(lockedStylePrompt, /one continuous, physically possible 8-second shot/);
+  assert.match(lockedStylePrompt, /one continuous, physically possible shot lasting exactly the required boundary duration/);
   assert.match(lockedStylePrompt, /SETTING AND BACKGROUND:/);
   assert.match(lockedStylePrompt, /Avoid fast gestures, crossed or overlapping limbs/);
 
