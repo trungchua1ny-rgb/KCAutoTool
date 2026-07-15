@@ -619,14 +619,19 @@ async function confirmVideoAspectRatio() {
 
 async function getVideoDurationOption(durationSeconds) {
   const seconds = [4, 6, 8].includes(Number(durationSeconds)) ? Number(durationSeconds) : 8;
-  const option = await waitUntil(() =>
-    [...document.querySelectorAll('button, [role="tab"], [role="option"], [role="radio"]')]
+  const option = await waitUntil(() => {
+    const exactTab = [...document.querySelectorAll(
+      `button[role="tab"][id$="-trigger-${seconds}"], button[role="tab"][aria-controls$="-content-${seconds}"]`,
+    )].filter(isVisible)[0];
+    if (exactTab) return exactTab;
+    return [...document.querySelectorAll('button, [role="tab"], [role="option"], [role="radio"]')]
       .filter(isVisible)
       .find((control) => {
         const label = cleanFlowOptionLabel(control);
         if (/\d+\s*:\s*\d+/.test(label)) return false; // Never confuse 9:16 with duration.
         return new RegExp(`^${seconds}(?:\\s*(?:s|sec|secs|seconds|gi\\u00e2y))?$`, "i").test(label);
-      }) || null, 8000);
+      }) || null;
+  }, 8000);
   return option
     ? { ok: true, ...centerOf(option), label: cleanFlowOptionLabel(option), durationSeconds: seconds }
     : {
@@ -638,14 +643,20 @@ async function getVideoDurationOption(durationSeconds) {
 
 async function confirmVideoDuration(durationSeconds) {
   const seconds = [4, 6, 8].includes(Number(durationSeconds)) ? Number(durationSeconds) : 8;
-  const selected = await waitUntil(() =>
-    [...document.querySelectorAll(
+  const selected = await waitUntil(() => {
+    const exactTab = [...document.querySelectorAll(
+      `button[role="tab"][id$="-trigger-${seconds}"][aria-selected="true"], ` +
+      `button[role="tab"][aria-controls$="-content-${seconds}"][data-state="active"]`,
+    )].filter(isVisible)[0];
+    if (exactTab) return exactTab;
+    return [...document.querySelectorAll(
       'button[aria-selected="true"], [role="tab"][data-state="active"], [role="radio"][aria-checked="true"]',
     )].filter(isVisible).find((control) => {
       const label = cleanFlowOptionLabel(control);
       return !/\d+\s*:\s*\d+/.test(label) &&
         new RegExp(`^${seconds}(?:\\s*(?:s|sec|secs|seconds|gi\\u00e2y))?$`, "i").test(label);
-    }) || null, 5000);
+    }) || null;
+  }, 5000);
   return selected
     ? { ok: true, durationSeconds: seconds }
     : {
