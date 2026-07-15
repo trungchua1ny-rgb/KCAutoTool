@@ -159,7 +159,7 @@ one scene. Right-click a scene row for the resume/regenerate commands.
 Jobs run sequentially through the Flow worker, respect `depends_on`, and retry
 retryable failures with 2s/8s/20s backoff (three attempts by default). The
 Error Center groups DOM, response, timeout, quota, and extension-connection
-failures. Extension version `2.21.0` sends a five-second job heartbeat; reload
+failures. Extension version `2.22.0` sends a five-second job heartbeat and records step-by-step video-setting diagnostics; reload
 the unpacked extension before using the production queue.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without

@@ -518,9 +518,39 @@ async function confirmMediaMode(mediaType) {
 
 function cleanFlowOptionLabel(control) {
   return buttonLabel(control)
-    .replace(/^(?:category|collections|dashboard|view_carousel|photo_library|crop_\d+_\d+|timer|schedule)\s*/i, "")
+    .replace(/^(?:category|collections|dashboard|view_carousel|photo_library|aspect_ratio|crop_(?:\d+_\d+|landscape|portrait)|timer|schedule)\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function flowControlIdentity(control) {
+  return `${control?.id || ""} ${control?.getAttribute?.("aria-controls") || ""}`.trim();
+}
+
+function isLandscapeAspectControl(control) {
+  return /-(?:trigger|content)-(?:LANDSCAPE|WIDE|16_9)$/i.test(flowControlIdentity(control)) ||
+    cleanFlowOptionLabel(control) === "16:9";
+}
+
+function selectedFlowTab(control) {
+  return control?.getAttribute?.("aria-selected") === "true" ||
+    control?.getAttribute?.("data-state") === "active" ||
+    control?.getAttribute?.("aria-checked") === "true";
+}
+
+function videoSettingsDiagnosticSummary() {
+  const controls = [...document.querySelectorAll('button[role="tab"], [role="tab"], [role="radio"]')];
+  const describe = (control) => {
+    const label = cleanFlowOptionLabel(control) || buttonLabel(control) || "(no label)";
+    const identity = flowControlIdentity(control) || "(no id)";
+    return `${label} {${identity}; selected=${selectedFlowTab(control)}; visible=${isVisible(control)}}`;
+  };
+  const active = controls.filter(selectedFlowTab).slice(0, 12).map(describe);
+  const ratios = controls.filter((control) => /\d+\s*:\s*\d+/.test(cleanFlowOptionLabel(control)) ||
+    /LANDSCAPE|PORTRAIT|WIDE|16_9|9_16/i.test(flowControlIdentity(control)))
+    .slice(0, 12)
+    .map(describe);
+  return `Active tabs: ${active.join(" | ") || "none"}. Ratio candidates: ${ratios.join(" | ") || "none"}.`;
 }
 
 async function getVideoSettingsPicker() {
@@ -571,12 +601,19 @@ async function getVideoGenerationModeOption(mode) {
 
 async function confirmVideoGenerationMode(mode) {
   const normalizedMode = mode === "frames" ? "frames" : "ingredients";
+  const identitySuffixes = normalizedMode === "frames"
+    ? ["FRAME", "FRAMES"]
+    : ["INGREDIENT", "INGREDIENTS", "COMPONENT", "COMPONENTS"];
   const selected = await waitUntil(() => {
-    const activeTabs = [...document.querySelectorAll(
-      'button[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]',
-    )].filter(isVisible);
-    return activeTabs.find((control) => videoModePattern(normalizedMode).test(cleanFlowOptionLabel(control))) || null;
-  }, 5000);
+    const tabs = [...document.querySelectorAll('button[role="tab"], [role="tab"]')];
+    return tabs.find((control) => {
+      if (!selectedFlowTab(control)) return false;
+      const identity = flowControlIdentity(control);
+      return identitySuffixes.some((suffix) =>
+        new RegExp(`-(?:trigger|content)-${suffix}$`, "i").test(identity)
+      ) || videoModePattern(normalizedMode).test(cleanFlowOptionLabel(control));
+    }) || null;
+  }, 7000);
   return selected
     ? { ok: true, mode: normalizedMode, label: cleanFlowOptionLabel(selected) }
     : {
@@ -586,34 +623,53 @@ async function confirmVideoGenerationMode(mode) {
     };
 }
 
+function isDurationControl(control, seconds) {
+  if (new RegExp(`-(?:trigger|content)-${seconds}$`, "i").test(flowControlIdentity(control))) {
+    return true;
+  }
+  const label = cleanFlowOptionLabel(control);
+  return !/\d+\s*:\s*\d+/.test(label) &&
+    new RegExp(`^${seconds}(?:\\s*(?:s|sec|secs|seconds|gi\\u00e2y))?$`, "i").test(label);
+}
+
 async function getVideoAspectRatioOption() {
   const option = await waitUntil(() => {
     const tabs = [...document.querySelectorAll('button[role="tab"], [role="tab"]')].filter(isVisible);
-    return tabs.find((control) => {
-      const identity = `${control.id || ""} ${control.getAttribute("aria-controls") || ""}`;
-      return /-(?:trigger|content)-(?:LANDSCAPE|WIDE|16_9)$/i.test(identity);
-    }) || tabs.find((control) => cleanFlowOptionLabel(control) === "16:9") || null;
+    return tabs.find(isLandscapeAspectControl) || null;
   }, 8000);
   return option
-    ? { ok: true, ...centerOf(option), label: cleanFlowOptionLabel(option) }
+    ? {
+      ok: true,
+      ...centerOf(option),
+      label: cleanFlowOptionLabel(option),
+      identity: flowControlIdentity(option),
+      alreadySelected: selectedFlowTab(option),
+    }
     : {
       ok: false,
       code: "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND",
-      error: "Video settings popup has no 16:9 option.",
+      error: `Video settings popup has no 16:9 option. ${videoSettingsDiagnosticSummary()}`,
     };
 }
 
 async function confirmVideoAspectRatio() {
+  // Flow identifies this tab as LANDSCAPE while its visible text can include
+  // a Material Symbol such as "crop_landscape". Use the same identity rule
+  // for both discovery and confirmation, even if the popup closes after click.
   const selected = await waitUntil(() =>
-    [...document.querySelectorAll(
-      'button[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]',
-    )].filter(isVisible).find((control) => cleanFlowOptionLabel(control) === "16:9") || null, 5000);
+    [...document.querySelectorAll('button[role="tab"], [role="tab"], [role="radio"]')]
+      .find((control) => selectedFlowTab(control) && isLandscapeAspectControl(control)) || null, 7000);
   return selected
-    ? { ok: true, aspectRatio: "16:9" }
+    ? {
+      ok: true,
+      aspectRatio: "16:9",
+      label: cleanFlowOptionLabel(selected),
+      identity: flowControlIdentity(selected),
+    }
     : {
       ok: false,
       code: "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED",
-      error: "Google Flow did not select 16:9.",
+      error: `Google Flow did not select 16:9. ${videoSettingsDiagnosticSummary()}`,
     };
 }
 
@@ -633,7 +689,14 @@ async function getVideoDurationOption(durationSeconds) {
       }) || null;
   }, 8000);
   return option
-    ? { ok: true, ...centerOf(option), label: cleanFlowOptionLabel(option), durationSeconds: seconds }
+    ? {
+      ok: true,
+      ...centerOf(option),
+      label: cleanFlowOptionLabel(option),
+      identity: flowControlIdentity(option),
+      alreadySelected: selectedFlowTab(option),
+      durationSeconds: seconds,
+    }
     : {
       ok: false,
       code: "FLOW_VIDEO_DURATION_NOT_FOUND",
@@ -644,25 +707,20 @@ async function getVideoDurationOption(durationSeconds) {
 async function confirmVideoDuration(durationSeconds) {
   const seconds = [4, 6, 8].includes(Number(durationSeconds)) ? Number(durationSeconds) : 8;
   const selected = await waitUntil(() => {
-    const exactTab = [...document.querySelectorAll(
-      `button[role="tab"][id$="-trigger-${seconds}"][aria-selected="true"], ` +
-      `button[role="tab"][aria-controls$="-content-${seconds}"][data-state="active"]`,
-    )].filter(isVisible)[0];
-    if (exactTab) return exactTab;
-    return [...document.querySelectorAll(
-      'button[aria-selected="true"], [role="tab"][data-state="active"], [role="radio"][aria-checked="true"]',
-    )].filter(isVisible).find((control) => {
-      const label = cleanFlowOptionLabel(control);
-      return !/\d+\s*:\s*\d+/.test(label) &&
-        new RegExp(`^${seconds}(?:\\s*(?:s|sec|secs|seconds|gi\\u00e2y))?$`, "i").test(label);
-    }) || null;
-  }, 5000);
+    return [...document.querySelectorAll('button, [role="tab"], [role="radio"]')]
+      .find((control) => selectedFlowTab(control) && isDurationControl(control, seconds)) || null;
+  }, 7000);
   return selected
-    ? { ok: true, durationSeconds: seconds }
+    ? {
+      ok: true,
+      durationSeconds: seconds,
+      label: cleanFlowOptionLabel(selected),
+      identity: flowControlIdentity(selected),
+    }
     : {
       ok: false,
       code: "FLOW_VIDEO_DURATION_CHANGE_FAILED",
-      error: `Google Flow did not select ${seconds} seconds.`,
+      error: `Google Flow did not select ${seconds} seconds. ${videoSettingsDiagnosticSummary()}`,
     };
 }
 
@@ -1548,6 +1606,15 @@ async function toDataUrl(url) {
 // Chống đăng ký listener 2 lần (khi vừa tiêm khai báo vừa tiêm tay)
 if (!window.__H2DEV_FLOW_LISTENER__) {
   window.__H2DEV_FLOW_LISTENER__ = true;
+
+  window.__FLOWX_FLOW_INTERNALS__ = {
+    cleanFlowOptionLabel,
+    confirmVideoAspectRatio,
+    confirmVideoDuration,
+    isDurationControl,
+    isLandscapeAspectControl,
+    selectedFlowTab,
+  };
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || !msg.type) return;

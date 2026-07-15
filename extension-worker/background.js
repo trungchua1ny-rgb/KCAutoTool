@@ -85,6 +85,7 @@ function updateActionState(state, registration) {
 }
 
 function sendJobError(jobId, error, code = "INTERNAL_ERROR", retryable = false) {
+  console.error(`[KC Dev][${jobId}][${code}] ${error}`);
   connection.send({
     type: "JOB_ERROR",
     jobId,
@@ -95,6 +96,7 @@ function sendJobError(jobId, error, code = "INTERNAL_ERROR", retryable = false) 
 }
 
 function sendJobProgress(jobId, status, message) {
+  console.info(`[KC Dev][${jobId}][${status}] ${message}`);
   connection.send({ type: "JOB_PROGRESS", jobId, status, message });
 }
 
@@ -385,6 +387,15 @@ function promptWithReferences(payload) {
 
 async function clickAt(tabId, x, y) {
   await ensureAttached(tabId);
+  // Give Radix popovers enough time to finish layout before using the
+  // coordinates returned by the content script. The mouse move plus the
+  // short holds also make each automated action visible to the operator.
+  await sendCommand(tabId, "Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x,
+    y,
+  });
+  await pause(220);
   await sendCommand(tabId, "Input.dispatchMouseEvent", {
     type: "mousePressed",
     x,
@@ -399,6 +410,7 @@ async function clickAt(tabId, x, y) {
     button: "left",
     clickCount: 1,
   });
+  await pause(650);
 }
 
 async function pressEscape(tabId) {
@@ -674,7 +686,7 @@ async function ensureFreeNanoBananaPro(tabId) {
   }
 }
 
-async function generateFlowImage(tabId, payload) {
+async function generateFlowImage(tabId, payload, jobId) {
   const modelReady = await ensureFreeNanoBananaPro(tabId);
   if (!modelReady?.ok) return modelReady;
 
@@ -689,6 +701,7 @@ async function generateFlowImage(tabId, payload) {
     promptWithReferences(payload),
   );
   if (!submitted?.ok) return submitted;
+  sendJobProgress(jobId, "generating", "Đã gửi prompt; Google Flow đang tạo ảnh scene");
   const image = await sendImageToFlowTab(tabId, { type: "WAIT_IMAGE" });
   if (!image?.ok) return image;
 
@@ -741,20 +754,27 @@ function videoPromptFromFrames(payload) {
   ].join("\n\n");
 }
 
-async function configureFlowVideoSettings(tabId, payload) {
+async function openFlowVideoSettingsPopup(tabId) {
+  await pressEscape(tabId).catch(() => {});
+  await pause(350);
+  const picker = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_SETTINGS_PICKER" });
+  if (!picker?.ok) return picker;
+  await clickAt(tabId, picker.x, picker.y);
+  return { ok: true, pickerLabel: picker.label || "" };
+}
+
+async function configureFlowVideoSettings(tabId, payload, jobId) {
   const mode = payload.videoSettings?.mode === "frames" ? "frames" : "ingredients";
   const durationSeconds = [4, 6, 8].includes(Number(payload.videoSettings?.durationSeconds))
     ? Number(payload.videoSettings.durationSeconds)
     : 8;
-  const picker = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_SETTINGS_PICKER" });
-  if (!picker?.ok) return picker;
-  await clickAt(tabId, picker.x, picker.y);
 
-  // In the current Flow UI, Ingredients/Thành phần is the default video
-  // composition mode and is not exposed as a selectable tab. Requiring that
-  // tab caused valid start/single jobs to fail before the prompt was attached.
-  // Frames remains explicit because continuation clips need two frame slots.
+  // Ingredients is Flow's default video composition mode. Frames remains
+  // explicit because continuation clips require two frame slots.
   if (mode === "frames") {
+    sendJobProgress(jobId, "preparing", "Cấu hình video 1/3: đang mở lựa chọn Khung hình");
+    const opened = await openFlowVideoSettingsPopup(tabId);
+    if (!opened?.ok) return opened;
     const modeOption = await sendImageToFlowTab(tabId, {
       type: "FLOWX_GET_VIDEO_GENERATION_MODE",
       mode,
@@ -766,39 +786,88 @@ async function configureFlowVideoSettings(tabId, payload) {
       mode,
     });
     if (!modeConfirmed?.ok) return modeConfirmed;
+    sendJobProgress(jobId, "preparing", "Cấu hình video 1/3: đã chọn Khung hình");
+  } else {
+    sendJobProgress(jobId, "preparing", "Cấu hình video 1/3: dùng Thành phần mặc định");
   }
 
-  let aspect = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_ASPECT_RATIO" });
-  if (!aspect?.ok) {
-    const reopened = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_SETTINGS_PICKER" });
-    if (!reopened?.ok) return aspect;
-    await clickAt(tabId, reopened.x, reopened.y);
-    aspect = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_ASPECT_RATIO" });
+  let aspectConfirmed = null;
+  let lastAspectResult = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    sendJobProgress(jobId, "preparing", `Cấu hình video 2/3: chọn 16:9 (lần ${attempt}/2)`);
+    const opened = await openFlowVideoSettingsPopup(tabId);
+    if (!opened?.ok) {
+      lastAspectResult = opened;
+      continue;
+    }
+    const aspect = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_ASPECT_RATIO" });
+    if (!aspect?.ok) {
+      lastAspectResult = aspect;
+      continue;
+    }
+    sendJobProgress(
+      jobId,
+      "preparing",
+      `Đã tìm thấy nút 16:9: ${aspect.label || "16:9"} [${aspect.identity || "không có id"}]`,
+    );
+    if (!aspect.alreadySelected) {
+      await clickAt(tabId, aspect.x, aspect.y);
+    }
+    aspectConfirmed = await sendImageToFlowTab(tabId, { type: "FLOWX_CONFIRM_VIDEO_ASPECT_RATIO" });
+    if (aspectConfirmed?.ok) break;
+    lastAspectResult = aspectConfirmed;
   }
-  if (!aspect?.ok) return aspect;
-  await clickAt(tabId, aspect.x, aspect.y);
-  const aspectConfirmed = await sendImageToFlowTab(tabId, { type: "FLOWX_CONFIRM_VIDEO_ASPECT_RATIO" });
-  if (!aspectConfirmed?.ok) return aspectConfirmed;
+  if (!aspectConfirmed?.ok) {
+    return {
+      ...(lastAspectResult || {}),
+      ok: false,
+      code: lastAspectResult?.code || "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED",
+      error: `Bước chọn tỷ lệ 16:9 thất bại sau 2 lần. ${lastAspectResult?.error || "Flow không trả về trạng thái đã chọn."}`,
+    };
+  }
+  sendJobProgress(
+    jobId,
+    "preparing",
+    `Cấu hình video 2/3: đã xác nhận 16:9 [${aspectConfirmed.identity || "LANDSCAPE"}]`,
+  );
 
-  let duration = await sendImageToFlowTab(tabId, {
-    type: "FLOWX_GET_VIDEO_DURATION",
-    durationSeconds,
-  });
-  if (!duration?.ok) {
-    const reopened = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_SETTINGS_PICKER" });
-    if (!reopened?.ok) return duration;
-    await clickAt(tabId, reopened.x, reopened.y);
-    duration = await sendImageToFlowTab(tabId, {
+  let durationConfirmed = null;
+  let lastDurationResult = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    sendJobProgress(jobId, "preparing", `Cấu hình video 3/3: chọn ${durationSeconds}s (lần ${attempt}/2)`);
+    const opened = await openFlowVideoSettingsPopup(tabId);
+    if (!opened?.ok) {
+      lastDurationResult = opened;
+      continue;
+    }
+    const duration = await sendImageToFlowTab(tabId, {
       type: "FLOWX_GET_VIDEO_DURATION",
       durationSeconds,
     });
+    if (!duration?.ok) {
+      lastDurationResult = duration;
+      continue;
+    }
+    if (!duration.alreadySelected) {
+      await clickAt(tabId, duration.x, duration.y);
+    }
+    durationConfirmed = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_CONFIRM_VIDEO_DURATION",
+      durationSeconds,
+    });
+    if (durationConfirmed?.ok) break;
+    lastDurationResult = durationConfirmed;
   }
-  if (!duration?.ok) return duration;
-  await clickAt(tabId, duration.x, duration.y);
-  return sendImageToFlowTab(tabId, {
-    type: "FLOWX_CONFIRM_VIDEO_DURATION",
-    durationSeconds,
-  });
+  if (!durationConfirmed?.ok) {
+    return {
+      ...(lastDurationResult || {}),
+      ok: false,
+      code: lastDurationResult?.code || "FLOW_VIDEO_DURATION_CHANGE_FAILED",
+      error: `Bước chọn thời lượng ${durationSeconds}s thất bại sau 2 lần. ${lastDurationResult?.error || "Flow không trả về trạng thái đã chọn."}`,
+    };
+  }
+  sendJobProgress(jobId, "preparing", `Cấu hình video 3/3: đã xác nhận ${durationSeconds}s`);
+  return { ok: true, mode, aspectRatio: "16:9", durationSeconds };
 }
 
 async function attachStartFrameWithPicker(tabId, localPath) {
@@ -832,7 +901,7 @@ async function attachFrameWithPicker(tabId, localPath, position) {
 async function generateFlowVideo(tabId, payload, jobId) {
   await pressEscape(tabId).catch(() => {});
   await pause(150);
-  const configured = await configureFlowVideoSettings(tabId, payload);
+  const configured = await configureFlowVideoSettings(tabId, payload, jobId);
   if (!configured?.ok) return configured;
   await pressEscape(tabId).catch(() => {});
 
@@ -868,6 +937,11 @@ async function generateFlowVideo(tabId, payload, jobId) {
       : videoPromptFromComponent(payload),
   );
   if (!submitted?.ok) return submitted;
+  sendJobProgress(
+    jobId,
+    "generating",
+    `Đã gửi prompt; Google Flow đang tạo video ${payload.videoSettings.durationSeconds} giây`,
+  );
   const video = await sendImageToFlowTab(tabId, { type: "WAIT_VIDEO" });
   if (!video?.ok) return video;
 
@@ -1032,7 +1106,6 @@ async function handleSceneJob(message) {
     if (payload.mediaType === "image") {
       sendJobProgress(jobId, "preparing", "Đã tự chuyển tab Flow sang chế độ Hình ảnh");
       sendJobProgress(jobId, "preparing", `Đang gắn ${payload.refImages.length} ảnh nhân vật vào Flow`);
-      sendJobProgress(jobId, "generating", "Google Flow đang tạo ảnh scene");
     } else {
       sendJobProgress(jobId, "preparing", "Đã tự chuyển tab Flow sang chế độ Video");
       sendJobProgress(
@@ -1042,10 +1115,9 @@ async function handleSceneJob(message) {
           ? "Đang gắn Start/End frame trong Flow"
           : "Đang gắn ảnh scene và ảnh neo làm Thành phần trong Flow",
       );
-      sendJobProgress(jobId, "generating", `Google Flow đang tạo video ${payload.videoSettings.durationSeconds} giây`);
     }
     const response = payload.mediaType === "image"
-      ? await generateFlowImage(tab.id, payload)
+      ? await generateFlowImage(tab.id, payload, jobId)
       : await generateFlowVideo(tab.id, payload, jobId);
     if (activeJob !== job || job.stopping) return;
     if (!response?.ok) {
@@ -1054,7 +1126,7 @@ async function handleSceneJob(message) {
         jobId,
         response?.error || (response?.timeout ? `Google Flow tạo ${payload.mediaType === "image" ? "ảnh" : "video"} quá thời gian` : `Google Flow không tạo được ${payload.mediaType === "image" ? "ảnh" : "video"}`),
         code,
-        ["TIMEOUT", "FLOW_UI_CHANGED", "FLOW_REF_UPLOAD_FAILED", "FLOW_REF_ATTACH_FAILED", "FLOW_START_FRAME_ATTACH_FAILED", "FLOW_END_FRAME_ATTACH_FAILED", "FLOW_VIDEO_MODE_NOT_FOUND", "FLOW_VIDEO_SETTINGS_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND", "FLOW_VIDEO_DURATION_NOT_FOUND", "FLOW_SUBMIT_FAILED"].includes(code),
+        ["TIMEOUT", "FLOW_UI_CHANGED", "FLOW_REF_UPLOAD_FAILED", "FLOW_REF_ATTACH_FAILED", "FLOW_START_FRAME_ATTACH_FAILED", "FLOW_END_FRAME_ATTACH_FAILED", "FLOW_VIDEO_MODE_NOT_FOUND", "FLOW_VIDEO_MODE_CHANGE_FAILED", "FLOW_VIDEO_SETTINGS_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED", "FLOW_VIDEO_DURATION_NOT_FOUND", "FLOW_VIDEO_DURATION_CHANGE_FAILED", "FLOW_SUBMIT_FAILED"].includes(code),
       );
       return;
     }
@@ -1248,6 +1320,12 @@ async function typeAndSubmit(tabId, x, y, prompt) {
   await ensureAttached(tabId);
 
   await sendCommand(tabId, "Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x,
+    y,
+  });
+  await wait(220);
+  await sendCommand(tabId, "Input.dispatchMouseEvent", {
     type: "mousePressed",
     x,
     y,
@@ -1280,7 +1358,8 @@ async function typeAndSubmit(tabId, x, y, prompt) {
   await wait(60);
 
   await sendCommand(tabId, "Input.insertText", { text: prompt });
-  await wait(250);
+  // Leave the filled prompt visible long enough to verify it before Submit.
+  await wait(900);
 
   await sendCommand(tabId, "Input.dispatchKeyEvent", {
     type: "rawKeyDown",
