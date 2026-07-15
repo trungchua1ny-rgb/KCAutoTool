@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -612,6 +612,110 @@ test("regenerate only one scene does not wake other stopped jobs and may chain i
       "scene-001:image",
       "scene-001:video",
     ]);
+  } finally {
+    queue.shutdown();
+    context.database.close();
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
+test("deletes all generated files and jobs while preserving Phase 3 prompts", async () => {
+  const context = await fixture();
+  const worker = new FakeQueueWorker();
+  const generatedRoot = join(context.directory, "Downloads", "KC Auto Tool");
+  const frameDirectory = join(generatedRoot, ".kc-frames");
+  await mkdir(frameDirectory, { recursive: true });
+  const imagePath = join(generatedRoot, "scene-001-100.png");
+  const videoPath = join(generatedRoot, "scene-001-200.mp4");
+  const framePath = join(frameDirectory, "scene-001-200-last-frame.png");
+  const orphanPath = join(generatedRoot, "scene-001-old-copy.png");
+  await Promise.all([
+    writeFile(imagePath, "image"),
+    writeFile(videoPath, "video"),
+    writeFile(framePath, "frame"),
+    writeFile(orphanPath, "orphan"),
+  ]);
+
+  const phase3 = await context.sessionStore.load();
+  assert.ok(phase3);
+  const phase3ImagePrompts = phase3.scenes.map((scene) => scene.imagePrompt);
+  const phase3VideoPrompts = phase3.scenes.map((scene) => scene.videoPrompt);
+  const withResults = await context.sessionStore.save({
+    visualBible: phase3.visualBible,
+    scenes: phase3.scenes.map((scene, index) => index === 0
+      ? {
+          ...scene,
+          imageStatus: "done" as const,
+          imageResultPath: imagePath,
+          imageFlowAssetKey: "flow:scene-001",
+          imageApproved: true,
+          videoStatus: "done" as const,
+          videoResultPath: videoPath,
+          videoApproved: true,
+        }
+      : scene),
+  });
+  syncTimelineSessionToProject(context.database, withResults, []);
+  const repositories = new ProjectRepositories(context.database);
+  const storedScenes = repositories.scenes.listByProject(DEFAULT_PROJECT_ID);
+  repositories.scenes.setStartFrameAssetPath(storedScenes[1].id, framePath);
+  const bible = repositories.visualBibles.listByProject(DEFAULT_PROJECT_ID)[0];
+  repositories.visualBibles.setAnchors(bible.id, [imagePath], true);
+  const timestamp = new Date().toISOString();
+  repositories.jobs.create({
+    id: "completed-image-job",
+    projectId: DEFAULT_PROJECT_ID,
+    sceneId: storedScenes[0].id,
+    jobType: "image_generation",
+    status: "succeeded",
+    dependsOn: null,
+    attempts: 1,
+    maxAttempts: 3,
+    lastHeartbeatAt: timestamp,
+    lastError: null,
+    payloadHash: "completed-image",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+
+  const queue = new ProductionQueue(
+    context.database,
+    worker,
+    context.characterStore,
+    context.sessionStore,
+    () => {},
+    { generatedMediaRoot: generatedRoot },
+  );
+  try {
+    await queue.start();
+    const result = await queue.clearGeneratedMedia(DEFAULT_PROJECT_ID);
+    assert.equal(result.deletedFiles, 4);
+    assert.equal(result.deletedDirectories, 1);
+    assert.equal(result.retainedScenes, 2);
+    await assert.rejects(access(generatedRoot));
+    assert.equal(result.snapshot.jobs.length, 0);
+    assert.ok(result.snapshot.scenes.every((scene) =>
+      scene.status === "prompt_ready" &&
+      !scene.imageAssetPath &&
+      !scene.videoAssetPath &&
+      !scene.approvedImage &&
+      !scene.approvedVideo
+    ));
+
+    const retained = await context.sessionStore.load();
+    assert.ok(retained);
+    assert.deepEqual(retained.scenes.map((scene) => scene.imagePrompt), phase3ImagePrompts);
+    assert.deepEqual(retained.scenes.map((scene) => scene.videoPrompt), phase3VideoPrompts);
+    assert.deepEqual(retained.visualBible, phase3.visualBible);
+    assert.ok(retained.scenes.every((scene) =>
+      scene.imageStatus === "pending" &&
+      !scene.imageResultPath &&
+      scene.videoStatus === "pending" &&
+      !scene.videoResultPath
+    ));
+    const resetScenes = repositories.scenes.listByProject(DEFAULT_PROJECT_ID);
+    assert.ok(resetScenes.every((scene) => !scene.startFrameAssetPath));
+    assert.deepEqual(repositories.visualBibles.get(bible.id)?.anchorImagePaths, []);
   } finally {
     queue.shutdown();
     context.database.close();

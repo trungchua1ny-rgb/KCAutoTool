@@ -164,3 +164,10 @@ the unpacked extension before using the production queue.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without
 creating duplicates. Completed and approved scenes are left untouched.
+
+Use **Xóa kết quả** in the production queue to return to the Phase 3 output.
+After one irreversible confirmation, the app stops the queue, removes generated
+images, videos, extracted frames, orphaned older copies, and all production jobs
+from `Downloads/KC Auto Tool`. Timeline boundaries, image/video prompts, the
+Visual Bible, character assignments, character library, and style presets are
+preserved.

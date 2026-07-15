@@ -33,6 +33,7 @@ import {
 } from "../shared/visual-style";
 import {
   QUEUE_APPROVE_SCENE_CHANNEL,
+  QUEUE_CLEAR_GENERATED_MEDIA_CHANNEL,
   QUEUE_CHANGED_CHANNEL,
   QUEUE_GENERATE_IMAGES_CHANNEL,
   QUEUE_GENERATE_VIDEOS_CHANNEL,
@@ -99,6 +100,8 @@ const bridge: KCAutoToolBridge = {
     pauseQueue: () => ipcRenderer.invoke(QUEUE_PAUSE_CHANNEL),
     resumeQueue: () => ipcRenderer.invoke(QUEUE_RESUME_CHANNEL),
     stopQueue: () => ipcRenderer.invoke(QUEUE_STOP_CHANNEL),
+    clearGeneratedMedia: (projectId) =>
+      ipcRenderer.invoke(QUEUE_CLEAR_GENERATED_MEDIA_CHANNEL, { projectId }),
     retryFailed: (sceneIds, projectId) =>
       ipcRenderer.invoke(QUEUE_RETRY_FAILED_CHANNEL, { sceneIds, projectId }),
     resumeFrom: (sceneId, mediaType, projectId) =>

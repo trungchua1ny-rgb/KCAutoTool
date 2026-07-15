@@ -128,6 +128,7 @@ app.whenReady().then(async () => {
       characterStore,
       timelineSessionStore,
       broadcastQueueSnapshot,
+      { generatedMediaRoot: join(app.getPath("downloads"), "KC Auto Tool") },
     );
     await productionQueue.start();
     registerProductionQueueIpcHandlers(productionQueue);

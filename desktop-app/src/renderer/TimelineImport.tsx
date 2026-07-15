@@ -11,6 +11,7 @@ import {
   Save,
   Sparkles,
   Square,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -505,6 +506,9 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
   const [imageModal, setImageModal] = useState<{ sceneId: string; prompt: string } | null>(null);
   const [videoModal, setVideoModal] = useState<{ sceneId: string; prompt: string } | null>(null);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [clearMediaConfirmOpen, setClearMediaConfirmOpen] = useState(false);
+  const [clearingGeneratedMedia, setClearingGeneratedMedia] = useState(false);
+  const [clearMediaNotice, setClearMediaNotice] = useState("");
   const [progress, setProgress] = useState<TimelineProgress | null>(null);
   const [error, setError] = useState("");
   const [running, setRunning] = useState(false);
@@ -913,6 +917,34 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     });
   };
 
+  const clearAllGeneratedMedia = async () => {
+    const bridge = window.flowx?.productionQueue;
+    if (!bridge || clearingGeneratedMedia) return;
+    setClearingGeneratedMedia(true);
+    setQueueCommandError("");
+    setClearMediaNotice("");
+    try {
+      await window.flowx?.timeline.saveSession({ scenes, visualBible });
+      const result = await bridge.clearGeneratedMedia(DEFAULT_PROJECT_ID);
+      setQueueSnapshot(result.snapshot);
+      setScenes((current) => applyQueueSnapshotToScenes(current, result.snapshot));
+      setSceneErrors({});
+      setThumbnails({});
+      setImageModal(null);
+      setVideoModal(null);
+      settledSceneJobs.current.clear();
+      loadedThumbnailPaths.current.clear();
+      setClearMediaConfirmOpen(false);
+      setClearMediaNotice(
+        `Đã xóa ${result.deletedFiles} file trong ${result.deletedDirectories} thư mục; giữ nguyên ${result.retainedScenes} scene và toàn bộ prompt Phase 3.`,
+      );
+    } catch (caught) {
+      setQueueCommandError(errorMessage(caught));
+    } finally {
+      setClearingGeneratedMedia(false);
+    }
+  };
+
   const generate = async () => {
     setError("");
     if (!validateFile(srtFile, "File phụ đề", [".srt"])) return;
@@ -1169,6 +1201,18 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
             >
               <Play size={15} /> Tạo video đã duyệt
             </button>
+            <button
+              className="button danger compact"
+              type="button"
+              disabled={clearingGeneratedMedia}
+              title="Xóa vĩnh viễn toàn bộ ảnh, video và frame đã tạo; giữ nguyên prompt Phase 3"
+              onClick={() => setClearMediaConfirmOpen(true)}
+            >
+              {clearingGeneratedMedia
+                ? <LoaderCircle className="spin" size={15} />
+                : <Trash2 size={15} />}
+              Xóa kết quả
+            </button>
             {queueSnapshot?.state === "running" ? (
               <button className="icon-button" type="button" title="Tạm dừng sau job hiện tại" onClick={() => {
                 const bridge = window.flowx?.productionQueue;
@@ -1190,6 +1234,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         </section>
       )}
       {queueCommandError && <div className="form-error">{queueCommandError}</div>}
+      {clearMediaNotice && <div className="form-success">{clearMediaNotice}</div>}
       <ErrorCenter
         errors={queueSnapshot?.errors || []}
         onRetry={(sceneIds) => {
@@ -1212,6 +1257,54 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
           />
       ) : (
         <p className="empty-state timeline-empty">Chưa có dữ liệu scene.</p>
+      )}
+
+      {clearMediaConfirmOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !clearingGeneratedMedia) {
+            setClearMediaConfirmOpen(false);
+          }
+        }}>
+          <section className="session-reset-modal" role="alertdialog" aria-modal="true" aria-labelledby="clear-media-title">
+            <header>
+              <div>
+                <p className="eyebrow">Xác nhận xóa kết quả</p>
+                <h3 id="clear-media-title">Xóa vĩnh viễn toàn bộ ảnh và video đã tạo?</h3>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                title="Đóng"
+                disabled={clearingGeneratedMedia}
+                onClick={() => setClearMediaConfirmOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </header>
+            <p>
+              App sẽ dừng và xóa toàn bộ job, ảnh scene, video và frame trung gian trong thư mục KC Auto Tool trên máy. Thao tác này không thể hoàn tác. Timeline, prompt ảnh, prompt video, Visual Bible và gán nhân vật của Phase 3 được giữ nguyên.
+            </p>
+            <footer>
+              <button
+                className="button secondary"
+                type="button"
+                disabled={clearingGeneratedMedia}
+                onClick={() => setClearMediaConfirmOpen(false)}
+              >
+                Hủy
+              </button>
+              <button
+                className="button danger"
+                type="button"
+                disabled={clearingGeneratedMedia}
+                onClick={() => void clearAllGeneratedMedia()}
+              >
+                {clearingGeneratedMedia && <LoaderCircle className="spin" size={15} />}
+                Xác nhận xóa kết quả
+              </button>
+            </footer>
+          </section>
+        </div>
       )}
 
       {resetConfirmOpen && (

@@ -942,6 +942,15 @@ input:focus-visible {
   font-size: 12px;
 }
 
+.form-success {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-left: 3px solid #167c5a;
+  background: #ecfdf3;
+  color: #116149;
+  font-size: 12px;
+}
+
 .character-list {
   display: grid;
   gap: 9px;

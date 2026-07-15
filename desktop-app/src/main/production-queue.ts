@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, readFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import type { CharacterStore } from "./character-store";
 import type { ProjectDatabase } from "./project-database";
 import { ProjectRepositories } from "./project-repositories";
@@ -10,6 +10,7 @@ import { syncTimelineSessionToProject } from "./production-session-sync";
 import {
   DEFAULT_PROJECT_ID,
   QUEUE_ERROR_CATEGORIES,
+  type ClearGeneratedMediaResult,
   type ProductionQueueSnapshot,
   type QueueErrorCategory,
   type QueueGenerateOptions,
@@ -47,6 +48,7 @@ interface QueueOptions {
   watchdogIntervalMs?: number;
   disconnectedPollMs?: number;
   extractLastFrame?: (videoPath: string, outputPath: string) => Promise<void>;
+  generatedMediaRoot?: string;
 }
 
 interface StoredQueueError {
@@ -175,6 +177,53 @@ export function classifyQueueError(error: unknown): StoredQueueError {
   };
 }
 
+function normalizedPath(path: string): string {
+  return resolve(path).replace(/[\\/]+$/, "").toLocaleLowerCase();
+}
+
+function isInsideDirectory(path: string, directory: string): boolean {
+  const candidate = normalizedPath(path);
+  const root = normalizedPath(directory);
+  return candidate === root || candidate.startsWith(`${root}${sep.toLocaleLowerCase()}`);
+}
+
+function generatedMediaRootFromPath(path: string): string | null {
+  let current = dirname(resolve(path));
+  while (dirname(current) !== current) {
+    if (basename(current).toLocaleLowerCase() === "kc auto tool") return current;
+    current = dirname(current);
+  }
+  return null;
+}
+
+function validateGeneratedMediaRoot(path: string): string {
+  const root = resolve(path);
+  if (basename(root).toLocaleLowerCase() !== "kc auto tool" || dirname(root) === root) {
+    throw new Error(`Thư mục kết quả không an toàn để xóa: ${root}`);
+  }
+  return root;
+}
+
+async function countFilesInDirectory(path: string): Promise<number> {
+  let entries;
+  try {
+    entries = await readdir(path, { withFileTypes: true });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return 0;
+    throw error;
+  }
+  let count = 0;
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      count += await countFilesInDirectory(join(path, entry.name));
+    } else {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 export class ProductionQueue {
   private readonly repositories: ProjectRepositories;
   private readonly retryBackoffMs: number[];
@@ -190,6 +239,7 @@ export class ProductionQueue {
   private readonly retryTimers = new Map<string, NodeJS.Timeout>();
   private readonly forcedErrors = new Map<string, StoredQueueError>();
   private readonly extractLastFrame: (videoPath: string, outputPath: string) => Promise<void>;
+  private readonly generatedMediaRoot: string | null;
   private stoppingActiveJob = false;
   private singleRunJobId: string | null = null;
   private stateAfterSingleRun: "paused" | "stopped" | null = null;
@@ -209,6 +259,9 @@ export class ProductionQueue {
     this.watchdogIntervalMs = options.watchdogIntervalMs || 5_000;
     this.disconnectedPollMs = options.disconnectedPollMs || 1_000;
     this.extractLastFrame = options.extractLastFrame || runFfmpegLastFrame;
+    this.generatedMediaRoot = options.generatedMediaRoot
+      ? validateGeneratedMediaRoot(options.generatedMediaRoot)
+      : null;
   }
 
   async start(): Promise<void> {
@@ -396,6 +449,120 @@ export class ProductionQueue {
     }
     this.emitChanged();
     return this.getSnapshot();
+  }
+
+  async clearGeneratedMedia(
+    projectId = DEFAULT_PROJECT_ID,
+  ): Promise<ClearGeneratedMediaResult> {
+    this.activeProjectId = projectId;
+    this.stopQueue();
+    const stopDeadline = Date.now() + 15_000;
+    while (this.activeJobId && Date.now() < stopDeadline) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+    }
+    if (this.activeJobId) {
+      throw new Error("Job hiện tại chưa dừng xong. Chưa xóa bất kỳ kết quả nào; hãy thử lại sau vài giây.");
+    }
+
+    await this.syncProject(projectId);
+    const scenes = this.repositories.scenes.listByProject(projectId);
+    const trackedPaths = [...new Set(scenes.flatMap((scene) => [
+      scene.startFrameAssetPath,
+      scene.imageAssetPath,
+      scene.videoAssetPath,
+    ]).filter((path): path is string => Boolean(path?.trim())))];
+
+    const roots = new Map<string, string>();
+    if (this.generatedMediaRoot) {
+      roots.set(normalizedPath(this.generatedMediaRoot), this.generatedMediaRoot);
+    }
+    for (const path of trackedPaths) {
+      const root = generatedMediaRootFromPath(path);
+      if (root) roots.set(normalizedPath(root), validateGeneratedMediaRoot(root));
+    }
+
+    for (const path of trackedPaths) {
+      const insideKnownRoot = [...roots.values()].some((root) => isInsideDirectory(path, root));
+      if (insideKnownRoot) continue;
+      const exists = await access(path).then(() => true, () => false);
+      if (exists) {
+        throw new Error(
+          `Không xóa vì file kết quả nằm ngoài thư mục KC Auto Tool: ${path}`,
+        );
+      }
+    }
+
+    let deletedFiles = 0;
+    let deletedDirectories = 0;
+    for (const root of roots.values()) {
+      const exists = await access(root).then(() => true, () => false);
+      if (!exists) continue;
+      deletedFiles += await countFilesInDirectory(root);
+      // root is verified above to be an absolute directory named exactly
+      // "KC Auto Tool". Never recursively remove a computed parent folder.
+      await rm(root, { recursive: true, force: true });
+      deletedDirectories += 1;
+    }
+
+    const session = await this.sessionStore.load();
+    if (!session?.scenes.length) {
+      throw new Error("Không còn kết quả Phase 3 để giữ lại.");
+    }
+    await this.sessionStore.save({
+      visualBible: session.visualBible,
+      scenes: session.scenes.map((scene) => ({
+        ...scene,
+        imageStatus: "pending" as const,
+        imageResultPath: "",
+        imageFlowAssetKey: "",
+        imageApproved: false,
+        videoStatus: "pending" as const,
+        videoResultPath: "",
+        videoApproved: false,
+      })),
+    });
+
+    const deletedRoots = [...roots.values()];
+    this.database.transaction(() => {
+      this.database.db.prepare("DELETE FROM jobs WHERE project_id = ?").run(projectId);
+      this.database.db.prepare(`
+        UPDATE scenes SET
+          start_frame_asset_path = NULL,
+          status = 'prompt_ready',
+          image_asset_path = NULL,
+          flow_image_asset_id = NULL,
+          video_asset_path = NULL,
+          approved_image = 0,
+          approved_video = 0,
+          last_error = NULL,
+          updated_at = ?
+        WHERE project_id = ?
+      `).run(now(), projectId);
+      for (const bible of this.repositories.visualBibles.listByProject(projectId)) {
+        const retainedAnchors = bible.anchorImagePaths.filter((path) =>
+          !deletedRoots.some((root) => isInsideDirectory(path, root))
+        );
+        this.repositories.visualBibles.setAnchors(bible.id, retainedAnchors, bible.locked);
+      }
+      this.repositories.projects.setApprovalPolicy(projectId, false, false);
+    });
+
+    for (const timer of this.retryTimers.values()) clearTimeout(timer);
+    this.retryTimers.clear();
+    this.forcedErrors.clear();
+    this.activeJobId = null;
+    this.singleRunJobId = null;
+    this.stateAfterSingleRun = null;
+    this.stoppingActiveJob = false;
+    this.state = "idle";
+    this.persistState();
+    this.emitChanged(projectId);
+    return {
+      snapshot: this.getSnapshot(projectId),
+      deletedFiles,
+      deletedDirectories,
+      retainedScenes: scenes.length,
+    };
   }
 
   async retryFailed(
