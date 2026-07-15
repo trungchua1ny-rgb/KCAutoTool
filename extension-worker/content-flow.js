@@ -516,6 +516,145 @@ async function confirmMediaMode(mediaType) {
     };
 }
 
+function cleanFlowOptionLabel(control) {
+  return buttonLabel(control)
+    .replace(/^(?:category|collections|dashboard|view_carousel|photo_library|crop_\d+_\d+|timer|schedule)\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function getVideoSettingsPicker() {
+  const prompt = await wakePromptBox();
+  if (!prompt) {
+    return { ok: false, code: "FLOW_UI_CHANGED", error: "Google Flow has no visible video prompt box." };
+  }
+  const picker = await waitUntil(findMediaModePickerButton, 8000);
+  return picker
+    ? { ok: true, ...centerOf(picker), label: buttonLabel(picker) }
+    : {
+      ok: false,
+      code: "FLOW_VIDEO_SETTINGS_NOT_FOUND",
+      error: "Cannot find the video settings button immediately to the left of Send.",
+    };
+}
+
+function videoModePattern(mode) {
+  return mode === "frames"
+    ? /^(?:frames?|start\s*(?:and|&)\s*end|khung\s*h\u00ecnh)$/i
+    : /^(?:ingredients?|components?|th\u00e0nh\s*ph\u1ea7n)$/i;
+}
+
+async function getVideoGenerationModeOption(mode) {
+  const normalizedMode = mode === "frames" ? "frames" : "ingredients";
+  const identitySuffixes = normalizedMode === "frames"
+    ? ["FRAME", "FRAMES"]
+    : ["INGREDIENT", "INGREDIENTS", "COMPONENT", "COMPONENTS"];
+  const option = await waitUntil(() => {
+    const tabs = [...document.querySelectorAll('button[role="tab"], [role="tab"]')].filter(isVisible);
+    const exactIdentity = tabs.find((control) => {
+      const identity = `${control.id || ""} ${control.getAttribute("aria-controls") || ""}`;
+      return identitySuffixes.some((suffix) =>
+        new RegExp(`-(?:trigger|content)-${suffix}$`, "i").test(identity)
+      );
+    });
+    if (exactIdentity) return exactIdentity;
+    return tabs.find((control) => videoModePattern(normalizedMode).test(cleanFlowOptionLabel(control))) || null;
+  }, 8000);
+  return option
+    ? { ok: true, ...centerOf(option), label: cleanFlowOptionLabel(option) }
+    : {
+      ok: false,
+      code: "FLOW_VIDEO_MODE_NOT_FOUND",
+      error: `Video settings popup has no ${normalizedMode === "frames" ? "Frames" : "Ingredients"} tab.`,
+    };
+}
+
+async function confirmVideoGenerationMode(mode) {
+  const normalizedMode = mode === "frames" ? "frames" : "ingredients";
+  const selected = await waitUntil(() => {
+    const activeTabs = [...document.querySelectorAll(
+      'button[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]',
+    )].filter(isVisible);
+    return activeTabs.find((control) => videoModePattern(normalizedMode).test(cleanFlowOptionLabel(control))) || null;
+  }, 5000);
+  return selected
+    ? { ok: true, mode: normalizedMode, label: cleanFlowOptionLabel(selected) }
+    : {
+      ok: false,
+      code: "FLOW_VIDEO_MODE_CHANGE_FAILED",
+      error: `Google Flow did not select ${normalizedMode === "frames" ? "Frames" : "Ingredients"}.`,
+    };
+}
+
+async function getVideoAspectRatioOption() {
+  const option = await waitUntil(() => {
+    const tabs = [...document.querySelectorAll('button[role="tab"], [role="tab"]')].filter(isVisible);
+    return tabs.find((control) => {
+      const identity = `${control.id || ""} ${control.getAttribute("aria-controls") || ""}`;
+      return /-(?:trigger|content)-(?:LANDSCAPE|WIDE|16_9)$/i.test(identity);
+    }) || tabs.find((control) => cleanFlowOptionLabel(control) === "16:9") || null;
+  }, 8000);
+  return option
+    ? { ok: true, ...centerOf(option), label: cleanFlowOptionLabel(option) }
+    : {
+      ok: false,
+      code: "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND",
+      error: "Video settings popup has no 16:9 option.",
+    };
+}
+
+async function confirmVideoAspectRatio() {
+  const selected = await waitUntil(() =>
+    [...document.querySelectorAll(
+      'button[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]',
+    )].filter(isVisible).find((control) => cleanFlowOptionLabel(control) === "16:9") || null, 5000);
+  return selected
+    ? { ok: true, aspectRatio: "16:9" }
+    : {
+      ok: false,
+      code: "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED",
+      error: "Google Flow did not select 16:9.",
+    };
+}
+
+async function getVideoDurationOption(durationSeconds) {
+  const seconds = [4, 6, 8].includes(Number(durationSeconds)) ? Number(durationSeconds) : 8;
+  const option = await waitUntil(() =>
+    [...document.querySelectorAll('button, [role="tab"], [role="option"], [role="radio"]')]
+      .filter(isVisible)
+      .find((control) => {
+        const label = cleanFlowOptionLabel(control);
+        if (/\d+\s*:\s*\d+/.test(label)) return false; // Never confuse 9:16 with duration.
+        return new RegExp(`^${seconds}(?:\\s*(?:s|sec|secs|seconds|gi\\u00e2y))?$`, "i").test(label);
+      }) || null, 8000);
+  return option
+    ? { ok: true, ...centerOf(option), label: cleanFlowOptionLabel(option), durationSeconds: seconds }
+    : {
+      ok: false,
+      code: "FLOW_VIDEO_DURATION_NOT_FOUND",
+      error: `Video settings popup has no ${seconds}-second option.`,
+    };
+}
+
+async function confirmVideoDuration(durationSeconds) {
+  const seconds = [4, 6, 8].includes(Number(durationSeconds)) ? Number(durationSeconds) : 8;
+  const selected = await waitUntil(() =>
+    [...document.querySelectorAll(
+      'button[aria-selected="true"], [role="tab"][data-state="active"], [role="radio"][aria-checked="true"]',
+    )].filter(isVisible).find((control) => {
+      const label = cleanFlowOptionLabel(control);
+      return !/\d+\s*:\s*\d+/.test(label) &&
+        new RegExp(`^${seconds}(?:\\s*(?:s|sec|secs|seconds|gi\\u00e2y))?$`, "i").test(label);
+    }) || null, 5000);
+  return selected
+    ? { ok: true, durationSeconds: seconds }
+    : {
+      ok: false,
+      code: "FLOW_VIDEO_DURATION_CHANGE_FAILED",
+      error: `Google Flow did not select ${seconds} seconds.`,
+    };
+}
+
 function findStartFrameButton() {
   const prompt = findPromptInput();
   const promptRect = prompt?.getBoundingClientRect();
@@ -538,6 +677,16 @@ function findStartFrameButton() {
   })[0] || null;
 }
 
+function findEndFrameButton() {
+  const pattern = /add\s*(?:an?\s*)?end\s*frame|end\s*frame|last\s*frame|khung\s*h\u00ecnh\s*(?:k\u1ebft\s*th\u00fac|cu\u1ed1i)/i;
+  return [...document.querySelectorAll('button, [role="button"], [tabindex="0"]')]
+    .filter(isVisible)
+    .find((control) => {
+      const rect = control.getBoundingClientRect();
+      return pattern.test(buttonLabel(control)) && rect.width >= 32 && rect.height >= 24;
+    }) || null;
+}
+
 async function getStartFrameButton() {
   const prompt = await wakePromptBox();
   if (!prompt) {
@@ -552,6 +701,23 @@ async function getStartFrameButton() {
     };
   }
   window.__flowx_start_frame_baseline = promptIngredientSnapshot();
+  return { ok: true, ...centerOf(button), label: buttonLabel(button) };
+}
+
+async function getEndFrameButton() {
+  const prompt = await wakePromptBox();
+  if (!prompt) {
+    return { ok: false, code: "FLOW_UI_CHANGED", error: "Google Flow has no visible video prompt box." };
+  }
+  const button = await waitUntil(findEndFrameButton, 8000);
+  if (!button) {
+    return {
+      ok: false,
+      code: "FLOW_VIDEO_MODE_NOT_FOUND",
+      error: "Cannot find the End frame slot. Select Video -> Frames.",
+    };
+  }
+  window.__flowx_end_frame_baseline = promptIngredientSnapshot();
   return { ok: true, ...centerOf(button), label: buttonLabel(button) };
 }
 
@@ -581,6 +747,23 @@ async function confirmStartFrame() {
       ok: false,
       code: "FLOW_START_FRAME_ATTACH_FAILED",
       error: "Ảnh đã tải lên nhưng chưa xuất hiện trong ô Khung hình bắt đầu.",
+    };
+}
+
+async function confirmEndFrame() {
+  const baseline = window.__flowx_end_frame_baseline || new Set();
+  const accepted = await waitUntil(() => {
+    const uploadPopupOpen = Boolean(findVisibleControl(/upload\s*media|t\u1ea3i\s*n\u1ed9i\s*dung/i));
+    if (uploadPopupOpen) return null;
+    const current = promptIngredientSnapshot();
+    return [...current].some((entry) => !baseline.has(entry));
+  }, 20000);
+  return accepted
+    ? { ok: true }
+    : {
+      ok: false,
+      code: "FLOW_END_FRAME_ATTACH_FAILED",
+      error: "The uploaded image did not appear in the End frame slot.",
     };
 }
 
@@ -1411,9 +1594,50 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
       return true;
     }
 
+    if (msg.type === "FLOWX_GET_VIDEO_SETTINGS_PICKER") {
+      getVideoSettingsPicker().then(sendResponse);
+      return true;
+    }
+
+    if (msg.type === "FLOWX_GET_VIDEO_GENERATION_MODE") {
+      getVideoGenerationModeOption(msg.mode === "frames" ? "frames" : "ingredients").then(sendResponse);
+      return true;
+    }
+
+    if (msg.type === "FLOWX_CONFIRM_VIDEO_GENERATION_MODE") {
+      confirmVideoGenerationMode(msg.mode === "frames" ? "frames" : "ingredients").then(sendResponse);
+      return true;
+    }
+
+    if (msg.type === "FLOWX_GET_VIDEO_ASPECT_RATIO") {
+      getVideoAspectRatioOption().then(sendResponse);
+      return true;
+    }
+
+    if (msg.type === "FLOWX_CONFIRM_VIDEO_ASPECT_RATIO") {
+      confirmVideoAspectRatio().then(sendResponse);
+      return true;
+    }
+
+    if (msg.type === "FLOWX_GET_VIDEO_DURATION") {
+      getVideoDurationOption(msg.durationSeconds).then(sendResponse);
+      return true;
+    }
+
+    if (msg.type === "FLOWX_CONFIRM_VIDEO_DURATION") {
+      confirmVideoDuration(msg.durationSeconds).then(sendResponse);
+      return true;
+    }
+
     if (msg.type === "FLOWX_GET_START_FRAME_BUTTON") {
       STOP = false;
       getStartFrameButton().then(sendResponse);
+      return true;
+    }
+
+    if (msg.type === "FLOWX_GET_END_FRAME_BUTTON") {
+      STOP = false;
+      getEndFrameButton().then(sendResponse);
       return true;
     }
 
@@ -1424,6 +1648,11 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
 
     if (msg.type === "FLOWX_CONFIRM_START_FRAME") {
       confirmStartFrame().then(sendResponse);
+      return true;
+    }
+
+    if (msg.type === "FLOWX_CONFIRM_END_FRAME") {
+      confirmEndFrame().then(sendResponse);
       return true;
     }
 

@@ -100,7 +100,7 @@ function supportsSceneJobs(value: string | null): boolean {
   if (!value) return false;
   const parts = value.split(".").map((part) => Number.parseInt(part, 10) || 0);
   const current = (parts[0] || 0) * 1_000_000 + (parts[1] || 0) * 1_000 + (parts[2] || 0);
-  return current >= 2_018_000;
+  return current >= 2_020_000;
 }
 
 function parseRegisterMessage(value: unknown): RegisterMessage | null {

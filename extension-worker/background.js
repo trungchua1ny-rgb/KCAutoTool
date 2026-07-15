@@ -194,7 +194,17 @@ function isTimelinePayload(payload) {
 }
 
 function isSceneJobPayload(payload) {
-  return (
+  const validVideoSettings = payload?.mediaType !== "video" || (
+    payload.videoSettings &&
+    (payload.videoSettings.mode === "ingredients" || payload.videoSettings.mode === "frames") &&
+    [4, 6, 8].includes(Number(payload.videoSettings.durationSeconds)) &&
+    (payload.videoSettings.mode !== "frames" || (
+      typeof payload.startFramePath === "string" &&
+      /^(?:[A-Za-z]:[\\/]|\/)/.test(payload.startFramePath) &&
+      /\.(?:png|jpe?g|webp)$/i.test(payload.startFramePath)
+    ))
+  );
+  return Boolean(
     payload &&
     /^scene-\d{3,4}$/.test(payload.sceneId || "") &&
     (payload.mediaType === "image" || payload.mediaType === "video") &&
@@ -204,12 +214,13 @@ function isSceneJobPayload(payload) {
       typeof payload.sourceImagePath === "string" &&
       /^(?:[A-Za-z]:[\\/]|\/)/.test(payload.sourceImagePath) &&
       /\.(?:png|jpe?g|webp)$/i.test(payload.sourceImagePath)
-    ))
+    )) &&
+    validVideoSettings
   );
 }
 
 function validReferenceImages(value) {
-  return Array.isArray(value) && value.length <= 4 && value.every((reference) =>
+  return Array.isArray(value) && value.length <= 10 && value.every((reference) =>
     reference &&
     /^@[A-Z0-9_]{1,40}$/.test(reference.token || "") &&
     typeof reference.name === "string" &&
@@ -607,7 +618,7 @@ function videoPromptFromComponent(payload) {
   const sections = [
     "USE THE ATTACHED SCENE IMAGE AS THE PRIMARY VIDEO INGREDIENT.",
     "Preserve the exact characters, proportions, clothing, colors, objects, environment, framing, and graphic style visible in the attached image. Animate this same scene; do not redesign it or introduce a new subject.",
-    "Create one continuous 8-second 16:9 shot. Follow only this motion direction:",
+    `Create one continuous ${payload.videoSettings.durationSeconds}-second 16:9 shot. Follow only this motion direction:`,
     stripConflictingRenderPhrases(payload.prompt),
     [
       "MOTION STABILITY LOCK — HIGH PRIORITY:",
@@ -626,10 +637,86 @@ function videoPromptFromComponent(payload) {
   return sections.join("\n\n");
 }
 
+function videoPromptFromFrames(payload) {
+  const stickFigureMode = isStickFigureStyle(payload.visualBible?.style);
+  return [
+    "USE THE ATTACHED START FRAME AND END FRAME AS HARD VISUAL BOUNDARIES.",
+    `Create one continuous ${payload.videoSettings.durationSeconds}-second 16:9 transition from the exact Start frame to the exact End frame. Preserve character identity, proportions, clothing, colors, line style, environment, lighting, and camera continuity. Do not replace or redesign any subject.`,
+    `MOTION DIRECTION:\n${stripConflictingRenderPhrases(payload.prompt)}`,
+    [
+      "MOTION STABILITY LOCK — HIGH PRIORITY:",
+      "Use the smallest natural movement needed to connect both frames. Keep body topology and object count fixed. No extra, missing, fused, duplicated, stretched, detached, or morphing limbs; no sudden pose or camera jump.",
+      stickFigureMode
+        ? "Every person remains one circular head, one torso line, two arms connected at the shoulders, and two legs connected at the hips. Use small joint-consistent rotations only."
+        : "Preserve anatomy and silhouettes throughout the interpolation.",
+    ].join("\n"),
+  ].join("\n\n");
+}
+
+async function configureFlowVideoSettings(tabId, payload) {
+  const mode = payload.videoSettings?.mode === "frames" ? "frames" : "ingredients";
+  const durationSeconds = [4, 6, 8].includes(Number(payload.videoSettings?.durationSeconds))
+    ? Number(payload.videoSettings.durationSeconds)
+    : 8;
+  const picker = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_SETTINGS_PICKER" });
+  if (!picker?.ok) return picker;
+  await clickAt(tabId, picker.x, picker.y);
+
+  const modeOption = await sendImageToFlowTab(tabId, {
+    type: "FLOWX_GET_VIDEO_GENERATION_MODE",
+    mode,
+  });
+  if (!modeOption?.ok) return modeOption;
+  await clickAt(tabId, modeOption.x, modeOption.y);
+  const modeConfirmed = await sendImageToFlowTab(tabId, {
+    type: "FLOWX_CONFIRM_VIDEO_GENERATION_MODE",
+    mode,
+  });
+  if (!modeConfirmed?.ok) return modeConfirmed;
+
+  let aspect = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_ASPECT_RATIO" });
+  if (!aspect?.ok) {
+    const reopened = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_SETTINGS_PICKER" });
+    if (!reopened?.ok) return aspect;
+    await clickAt(tabId, reopened.x, reopened.y);
+    aspect = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_ASPECT_RATIO" });
+  }
+  if (!aspect?.ok) return aspect;
+  await clickAt(tabId, aspect.x, aspect.y);
+  const aspectConfirmed = await sendImageToFlowTab(tabId, { type: "FLOWX_CONFIRM_VIDEO_ASPECT_RATIO" });
+  if (!aspectConfirmed?.ok) return aspectConfirmed;
+
+  let duration = await sendImageToFlowTab(tabId, {
+    type: "FLOWX_GET_VIDEO_DURATION",
+    durationSeconds,
+  });
+  if (!duration?.ok) {
+    const reopened = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_SETTINGS_PICKER" });
+    if (!reopened?.ok) return duration;
+    await clickAt(tabId, reopened.x, reopened.y);
+    duration = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_GET_VIDEO_DURATION",
+      durationSeconds,
+    });
+  }
+  if (!duration?.ok) return duration;
+  await clickAt(tabId, duration.x, duration.y);
+  return sendImageToFlowTab(tabId, {
+    type: "FLOWX_CONFIRM_VIDEO_DURATION",
+    durationSeconds,
+  });
+}
+
 async function attachStartFrameWithPicker(tabId, localPath) {
-  const startFrame = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_START_FRAME_BUTTON" });
-  if (!startFrame?.ok) return startFrame;
-  await clickAt(tabId, startFrame.x, startFrame.y);
+  return attachFrameWithPicker(tabId, localPath, "start");
+}
+
+async function attachFrameWithPicker(tabId, localPath, position) {
+  const frame = await sendImageToFlowTab(tabId, {
+    type: position === "end" ? "FLOWX_GET_END_FRAME_BUTTON" : "FLOWX_GET_START_FRAME_BUTTON",
+  });
+  if (!frame?.ok) return frame;
+  await clickAt(tabId, frame.x, frame.y);
 
   const upload = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_UPLOAD_MEDIA_BUTTON" });
   if (!upload?.ok) return upload;
@@ -643,28 +730,48 @@ async function attachStartFrameWithPicker(tabId, localPath) {
   if (apply?.ok && !apply.unavailable) {
     await clickAt(tabId, apply.x, apply.y);
   }
-  return sendImageToFlowTab(tabId, { type: "FLOWX_CONFIRM_START_FRAME" });
+  return sendImageToFlowTab(tabId, {
+    type: position === "end" ? "FLOWX_CONFIRM_END_FRAME" : "FLOWX_CONFIRM_START_FRAME",
+  });
 }
 
 async function generateFlowVideo(tabId, payload, jobId) {
   await pressEscape(tabId).catch(() => {});
   await pause(150);
-  const attached = await attachVideoIngredient(tabId, payload);
-  if (!attached?.ok) return attached;
-  sendJobProgress(
-    jobId,
-    "preparing",
-    attached.alreadyAttached
-      ? "Ảnh scene đã có sẵn trong Thành phần; tiếp tục dán prompt video"
-      : attached.reusedProjectAsset
-        ? "Đã chọn lại ảnh scene có sẵn trong project Flow"
-      : "Không tìm thấy asset cũ; đang dùng file ảnh đã tải về làm dự phòng",
-  );
+  const configured = await configureFlowVideoSettings(tabId, payload);
+  if (!configured?.ok) return configured;
+  await pressEscape(tabId).catch(() => {});
+
+  if (payload.videoSettings.mode === "frames") {
+    const startAttached = await attachStartFrameWithPicker(tabId, payload.startFramePath);
+    if (!startAttached?.ok) return startAttached;
+    const endAttached = await attachFrameWithPicker(tabId, payload.sourceImagePath, "end");
+    if (!endAttached?.ok) return endAttached;
+    sendJobProgress(jobId, "preparing", "Đã gắn frame cuối clip trước và ảnh scene hiện tại vào Start/End frame");
+  } else {
+    const attached = await attachVideoIngredient(tabId, payload);
+    if (!attached?.ok) return attached;
+    for (const reference of payload.refImages || []) {
+      const referenceAttached = await attachReferenceWithPicker(tabId, reference);
+      if (!referenceAttached?.ok) return referenceAttached;
+    }
+    sendJobProgress(
+      jobId,
+      "preparing",
+      attached.alreadyAttached
+        ? "Ảnh scene đã có sẵn trong Thành phần; tiếp tục dán prompt video"
+        : attached.reusedProjectAsset
+          ? "Đã chọn lại ảnh scene có sẵn trong project Flow"
+          : "Đã dùng file ảnh scene trên máy làm Thành phần",
+    );
+  }
 
   const submitted = await typeAndConfirmFlowPrompt(
     tabId,
     "FLOWX_PREPARE_VIDEO_PROMPT",
-    videoPromptFromComponent(payload),
+    payload.videoSettings.mode === "frames"
+      ? videoPromptFromFrames(payload)
+      : videoPromptFromComponent(payload),
   );
   if (!submitted?.ok) return submitted;
   const video = await sendImageToFlowTab(tabId, { type: "WAIT_VIDEO" });
@@ -786,7 +893,7 @@ async function handleSceneJob(message) {
     return;
   }
 
-  if (action === "GENERATE_IMAGE" && !validReferenceImages(payload.refImages)) {
+  if (!validReferenceImages(payload.refImages)) {
     sendJobError(jobId, "Danh sách ảnh tham chiếu không hợp lệ", "INVALID_JOB");
     return;
   }
@@ -834,8 +941,14 @@ async function handleSceneJob(message) {
       sendJobProgress(jobId, "generating", "Google Flow đang tạo ảnh scene");
     } else {
       sendJobProgress(jobId, "preparing", "Đã tự chuyển tab Flow sang chế độ Video");
-      sendJobProgress(jobId, "preparing", "Đang gắn ảnh scene làm Thành phần trong Flow");
-      sendJobProgress(jobId, "generating", "Google Flow đang tạo video 8 giây từ ảnh scene");
+      sendJobProgress(
+        jobId,
+        "preparing",
+        payload.videoSettings.mode === "frames"
+          ? "Đang gắn Start/End frame trong Flow"
+          : "Đang gắn ảnh scene và ảnh neo làm Thành phần trong Flow",
+      );
+      sendJobProgress(jobId, "generating", `Google Flow đang tạo video ${payload.videoSettings.durationSeconds} giây`);
     }
     const response = payload.mediaType === "image"
       ? await generateFlowImage(tab.id, payload)
@@ -847,7 +960,7 @@ async function handleSceneJob(message) {
         jobId,
         response?.error || (response?.timeout ? `Google Flow tạo ${payload.mediaType === "image" ? "ảnh" : "video"} quá thời gian` : `Google Flow không tạo được ${payload.mediaType === "image" ? "ảnh" : "video"}`),
         code,
-        ["TIMEOUT", "FLOW_UI_CHANGED", "FLOW_REF_UPLOAD_FAILED", "FLOW_REF_ATTACH_FAILED", "FLOW_START_FRAME_ATTACH_FAILED", "FLOW_VIDEO_MODE_NOT_FOUND", "FLOW_SUBMIT_FAILED"].includes(code),
+        ["TIMEOUT", "FLOW_UI_CHANGED", "FLOW_REF_UPLOAD_FAILED", "FLOW_REF_ATTACH_FAILED", "FLOW_START_FRAME_ATTACH_FAILED", "FLOW_END_FRAME_ATTACH_FAILED", "FLOW_VIDEO_MODE_NOT_FOUND", "FLOW_VIDEO_SETTINGS_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND", "FLOW_VIDEO_DURATION_NOT_FOUND", "FLOW_SUBMIT_FAILED"].includes(code),
       );
       return;
     }

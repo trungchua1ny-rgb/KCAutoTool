@@ -763,6 +763,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         },
         sourceImagePath: mediaType === "video" ? sourceScene?.imageResultPath || "" : "",
         sourceFlowAssetKey: mediaType === "video" ? sourceScene?.imageFlowAssetKey || "" : "",
+        startFramePath: "",
         videoSettings: {
           model: "veo-3.1-lite",
           mode: "ingredients",

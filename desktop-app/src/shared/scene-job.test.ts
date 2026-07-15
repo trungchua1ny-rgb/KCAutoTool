@@ -31,6 +31,7 @@ test("normalizes matching Phase 4 scene jobs", () => {
     },
     sourceImagePath: "",
     sourceFlowAssetKey: "",
+    startFramePath: "",
     videoSettings: {
       model: "veo-3.1-lite",
       mode: "ingredients",
@@ -78,6 +79,30 @@ test("rejects mismatched scene results", () => {
       input,
     ),
   );
+});
+
+test("normalizes Frames video settings and requires the extracted start frame", () => {
+  const input = normalizeSceneJobInput({
+    sceneId: "scene-002",
+    mediaType: "video",
+    prompt: "The camera continues its slow movement",
+    sourceImagePath: "C:\\FlowX\\scene-002.png",
+    startFramePath: "C:\\FlowX\\scene-001-last-frame.png",
+    videoSettings: {
+      mode: "frames",
+      durationSeconds: 4,
+    },
+  });
+  assert.equal(input.videoSettings.mode, "frames");
+  assert.equal(input.videoSettings.durationSeconds, 4);
+  assert.equal(input.startFramePath, "C:\\FlowX\\scene-001-last-frame.png");
+  assert.throws(() => normalizeSceneJobInput({
+    sceneId: "scene-002",
+    mediaType: "video",
+    prompt: "The camera continues its slow movement",
+    sourceImagePath: "C:\\FlowX\\scene-002.png",
+    videoSettings: { mode: "frames", durationSeconds: 4 },
+  }), /start frame/i);
 });
 
 test("normalizes explicit character assignments and the free Ultra image preset", () => {

@@ -52,7 +52,7 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
         type: "REGISTER",
         role: "chat-worker",
         profileTag: "isolated-test",
-      workerVersion: "2.19.0",
+      workerVersion: "2.20.0",
       }),
     );
     const ping = await pingPromise;
@@ -171,7 +171,7 @@ test("routes a Phase 5 image job with bound character references", async () => {
       type: "REGISTER",
       role: "flow-worker",
       profileTag: "phase5-test-flow",
-      workerVersion: "2.19.0",
+      workerVersion: "2.20.0",
     }));
     const registrationDeadline = Date.now() + 500;
     while (
@@ -205,6 +205,7 @@ test("routes a Phase 5 image job with bound character references", async () => {
         },
         sourceImagePath: "",
         sourceFlowAssetKey: "",
+        startFramePath: "",
         videoSettings: {
           model: "veo-3.1-lite",
           mode: "ingredients",
@@ -245,6 +246,7 @@ test("routes a Phase 5 image job with bound character references", async () => {
       },
       sourceImagePath: "",
       sourceFlowAssetKey: "",
+      startFramePath: "",
       videoSettings: {
         model: "veo-3.1-lite",
         mode: "ingredients",
@@ -308,6 +310,7 @@ test("routes a Phase 5 image job with bound character references", async () => {
       },
       sourceImagePath: "C:\\FlowX\\scene-007.png",
       sourceFlowAssetKey: "path:https://flow.google/assets/scene-007",
+      startFramePath: "",
       videoSettings: {
         model: "veo-3.1-lite",
         mode: "ingredients",

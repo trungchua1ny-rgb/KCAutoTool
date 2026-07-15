@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -60,8 +60,11 @@ function statuses(connected: boolean) {
 
 class FakeQueueWorker {
   readonly calls: string[] = [];
+  readonly inputs: BoundSceneJobInput[] = [];
   failFirstSceneOnce = false;
   connected = true;
+  resultDirectory = "C:\\FlowX";
+  persistResults = false;
 
   getStatuses() {
     return statuses(this.connected);
@@ -76,6 +79,7 @@ class FakeQueueWorker {
     onProgress: (progress: SceneJobProgress) => void = () => {},
   ) {
     this.calls.push(`${input.sceneId}:${input.mediaType}`);
+    this.inputs.push(input);
     onProgress({
       jobId: `fake-${this.calls.length}`,
       sceneId: input.sceneId,
@@ -89,10 +93,12 @@ class FakeQueueWorker {
     ) {
       throw new WorkerJobError("Flow DOM element not found", "FLOW_UI_CHANGED", true);
     }
+    const resultPath = join(this.resultDirectory, `${input.sceneId}.${input.mediaType === "image" ? "png" : "mp4"}`);
+    if (this.persistResults) await writeFile(resultPath, `fake-${input.mediaType}`);
     return {
       sceneId: input.sceneId,
       mediaType: input.mediaType,
-      resultPath: `C:\\FlowX\\${input.sceneId}.${input.mediaType === "image" ? "png" : "mp4"}`,
+      resultPath,
       flowAssetKey: input.mediaType === "image" ? `asset:${input.sceneId}` : "",
     };
   }
@@ -175,6 +181,74 @@ test("syncs Beat & Chain planning metadata from the saved timeline into SQLite",
       { durationSeconds: 4, chainId: "walk-cycle", chainRole: "continue", timeStart: "00:00:06,000", timeEnd: "00:00:10,000" },
     ]);
   } finally {
+    context.database.close();
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
+test("runs a continuation chain through video, last-frame extraction, and Frames mode", async () => {
+  const context = await fixture();
+  const worker = new FakeQueueWorker();
+  worker.resultDirectory = context.directory;
+  worker.persistResults = true;
+  const original = await context.sessionStore.load();
+  assert.ok(original);
+  await context.sessionStore.save({
+    ...original,
+    scenes: original.scenes.map((scene, index) => ({
+      ...scene,
+      timeStart: index === 0 ? "00:00:00,000" : "00:00:06,000",
+      timeEnd: index === 0 ? "00:00:06,000" : "00:00:10,000",
+      chainId: "chain-a",
+      chainRole: index === 0 ? "start" as const : "continue" as const,
+      durationSeconds: index === 0 ? 6 as const : 4 as const,
+    })),
+  });
+  const queue = new ProductionQueue(
+    context.database,
+    worker,
+    context.characterStore,
+    context.sessionStore,
+    () => {},
+    {
+      retryBackoffMs: [5],
+      extractLastFrame: async (_videoPath, outputPath) => {
+        await writeFile(outputPath, "fake-png-frame");
+      },
+    },
+  );
+  try {
+    await queue.start();
+    queue.setApprovalPolicy(true, false, DEFAULT_PROJECT_ID);
+    await queue.generateAllImages(DEFAULT_PROJECT_ID);
+    await waitFor(() => queue.getSnapshot().state === "idle");
+
+    assert.deepEqual(worker.calls, [
+      "scene-001:image",
+      "scene-001:video",
+      "scene-002:image",
+      "scene-002:video",
+    ]);
+    const firstVideo = worker.inputs.find((input) =>
+      input.sceneId === "scene-001" && input.mediaType === "video");
+    const continuedImage = worker.inputs.find((input) =>
+      input.sceneId === "scene-002" && input.mediaType === "image");
+    const continuedVideo = worker.inputs.find((input) =>
+      input.sceneId === "scene-002" && input.mediaType === "video");
+    assert.equal(firstVideo?.videoSettings.mode, "ingredients");
+    assert.equal(firstVideo?.videoSettings.durationSeconds, 6);
+    assert.ok(continuedImage?.refImages.some((reference) => reference.token === "@CHAIN_START_FRAME"));
+    assert.ok(continuedImage?.refImages.some((reference) => reference.token === "@STYLE_ANCHOR_1"));
+    assert.equal(continuedVideo?.videoSettings.mode, "frames");
+    assert.equal(continuedVideo?.videoSettings.durationSeconds, 4);
+    assert.match(continuedVideo?.startFramePath || "", /-last-frame\.png$/);
+
+    const extractJob = context.database.db.prepare(
+      "SELECT status FROM jobs WHERE job_type = 'extract_last_frame'",
+    ).get() as { status: string };
+    assert.equal(extractJob.status, "succeeded");
+  } finally {
+    queue.shutdown();
     context.database.close();
     await rm(context.directory, { recursive: true, force: true });
   }

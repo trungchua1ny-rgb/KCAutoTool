@@ -215,6 +215,13 @@ export class VisualBibleRepository {
       "SELECT * FROM visual_bibles WHERE project_id = ? ORDER BY version",
     ).all(projectId) as Row[]).map(mapVisualBible);
   }
+
+  setAnchors(id: string, paths: string[], locked = true): VisualBibleRecord {
+    this.database.db.prepare(
+      "UPDATE visual_bibles SET anchor_image_paths = ?, locked = ? WHERE id = ?",
+    ).run(JSON.stringify([...new Set(paths)].slice(0, 5)), locked ? 1 : 0, id);
+    return this.get(id)!;
+  }
 }
 
 export class SceneRepository {
@@ -259,6 +266,13 @@ export class SceneRepository {
     this.database.db.prepare(
       "UPDATE scenes SET image_prompt = ?, video_prompt = ?, updated_at = ? WHERE id = ?",
     ).run(imagePrompt, videoPrompt, now(), id);
+    return this.get(id)!;
+  }
+
+  setStartFrameAssetPath(id: string, path: string | null): SceneRecord {
+    this.database.db.prepare(
+      "UPDATE scenes SET start_frame_asset_path = ?, updated_at = ? WHERE id = ?",
+    ).run(path, now(), id);
     return this.get(id)!;
   }
 

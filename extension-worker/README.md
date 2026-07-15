@@ -23,7 +23,7 @@ For `GENERATE_TIMELINE`, keep a logged-in ChatGPT conversation open in the
 Chat worker profile. The worker processes one timeline at a time and supports
 the protocol `STOP` message.
 
-Version `2.19.0` adds Phase 3a Beat & Chain Planning before prompt generation, with locked 4/6/8-second boundaries and editable chain metadata. It also powers KC Auto Tool with production-queue heartbeats, reusable local graphic-style presets, completeness-checked scene prompts, stick-figure motion locks, user-seeded Visual Bible generation, automatic Image/Video mode switching in one Flow tab, project-asset reuse, and the Phase
+Version `2.20.0` adds Chapter 4 continuity chains: project anchor images, last-frame extraction, Ingredients/Frames selection, and exact 4/6/8-second video settings. It retains Phase 3a Beat & Chain Planning with editable chain metadata and also powers KC Auto Tool with production-queue heartbeats, reusable local graphic-style presets, completeness-checked scene prompts, stick-figure motion locks, automatic Image/Video mode switching in one Flow tab, project-asset reuse, and the Phase
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from
@@ -35,8 +35,7 @@ sequence: prompt `+`, **Upload media**, intercepted local file selection,
 uploaded thumbnail selection, and **Add to prompt**. It only enters the Visual
 Bible and scene prompt after every selected ingredient thumbnail is visible,
 then saves the result under `Downloads/KC Auto Tool`. `GENERATE_VIDEO` routes to the
-same Flow tab after switching it to Video, reselects the completed scene image from the project as an ingredient,
-submits the motion prompt, waits for the 8-second clip, and downloads it.
+same Flow tab after switching it to Video. Start/single scenes use Ingredients; continuation scenes use the extracted prior last frame and current scene image as Frames. The worker selects the planned 4/6/8-second duration, submits the motion prompt, waits for the clip, and downloads it.
 If the asset cannot be matched (for example, an older session or another Flow
 project), the worker falls back to uploading the downloaded image file.
 

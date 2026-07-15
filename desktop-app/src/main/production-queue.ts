@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import { access, mkdir, readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { basename, dirname, extname, join } from "node:path";
 import type { CharacterStore } from "./character-store";
 import type { ProjectDatabase } from "./project-database";
 import { ProjectRepositories } from "./project-repositories";
@@ -25,6 +28,7 @@ import { WorkerJobError, type WorkerServer } from "./worker-server";
 
 const IMAGE_JOB = "image_generation";
 const VIDEO_JOB = "video_generation";
+const EXTRACT_FRAME_JOB = "extract_last_frame";
 const QUEUE_STATE_METADATA_KEY = "production_queue_runtime_state";
 
 interface QueueWorker {
@@ -42,6 +46,7 @@ interface QueueOptions {
   heartbeatTimeoutMs?: number;
   watchdogIntervalMs?: number;
   disconnectedPollMs?: number;
+  extractLastFrame?: (videoPath: string, outputPath: string) => Promise<void>;
 }
 
 interface StoredQueueError {
@@ -75,6 +80,43 @@ function jobMediaType(jobType: string): SceneMediaType | null {
   if (jobType === IMAGE_JOB) return "image";
   if (jobType === VIDEO_JOB) return "video";
   return null;
+}
+
+async function runFfmpegLastFrame(videoPath: string, outputPath: string): Promise<void> {
+  await mkdir(dirname(outputPath), { recursive: true });
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("ffmpeg", [
+      "-hide_banner", "-loglevel", "error", "-sseof", "-0.08", "-i", videoPath,
+      "-frames:v", "1", "-y", outputPath,
+    ], { windowsHide: true });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.once("error", reject);
+    child.once("close", (code) => code === 0
+      ? resolve()
+      : reject(new Error(`ffmpeg extract_last_frame failed (${code}): ${stderr.slice(-500)}`)));
+  });
+  await access(outputPath);
+}
+
+async function referenceFromPath(
+  path: string,
+  token: string,
+  name: string,
+) {
+  const extension = extname(path).toLowerCase();
+  const mimeType = extension === ".png"
+    ? "image/png" as const
+    : extension === ".webp"
+      ? "image/webp" as const
+      : "image/jpeg" as const;
+  return {
+    token,
+    name,
+    mimeType,
+    imageBase64: (await readFile(path)).toString("base64"),
+    localPath: path,
+  };
 }
 
 function serializeError(error: StoredQueueError): string {
@@ -147,6 +189,7 @@ export class ProductionQueue {
   private watchdogTimer: NodeJS.Timeout | null = null;
   private readonly retryTimers = new Map<string, NodeJS.Timeout>();
   private readonly forcedErrors = new Map<string, StoredQueueError>();
+  private readonly extractLastFrame: (videoPath: string, outputPath: string) => Promise<void>;
   private stoppingActiveJob = false;
   private singleRunJobId: string | null = null;
   private stateAfterSingleRun: "paused" | "stopped" | null = null;
@@ -165,6 +208,7 @@ export class ProductionQueue {
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs || 45_000;
     this.watchdogIntervalMs = options.watchdogIntervalMs || 5_000;
     this.disconnectedPollMs = options.disconnectedPollMs || 1_000;
+    this.extractLastFrame = options.extractLastFrame || runFfmpegLastFrame;
   }
 
   async start(): Promise<void> {
@@ -284,6 +328,9 @@ export class ProductionQueue {
     const statuses = new Set<SceneState>(options.onlyStatuses || ["prompt_ready", "image_failed"]);
     for (const scene of this.repositories.scenes.listByProject(projectId)) {
       if (scene.orderIndex < (options.fromSceneIndex || 0) || !statuses.has(scene.status)) continue;
+      // A continuation image must be generated only after the previous clip has
+      // produced its last frame. executeExtractLastFrame queues it when ready.
+      if (scene.chainRole === "continue" && !scene.startFrameAssetPath) continue;
       this.enqueueScene(scene, "image");
     }
     return this.run(projectId);
@@ -476,6 +523,12 @@ export class ProductionQueue {
     videos: boolean,
     projectId = DEFAULT_PROJECT_ID,
   ): ProductionQueueSnapshot {
+    if (!this.repositories.projects.get(projectId)) {
+      this.repositories.projects.create({
+        id: projectId,
+        name: "Dự án KC Auto Tool hiện tại",
+      });
+    }
     this.repositories.projects.setApprovalPolicy(projectId, images, videos);
     this.emitChanged(projectId);
     return this.getSnapshot(projectId);
@@ -509,6 +562,9 @@ export class ProductionQueue {
     mediaType: SceneMediaType,
     dependsOn: string | null = null,
   ): JobRecord {
+    if (mediaType === "video" && scene.chainRole === "continue") {
+      dependsOn = this.ensureExtractFrameJob(scene)?.id || dependsOn;
+    }
     const jobType = mediaType === "image" ? IMAGE_JOB : VIDEO_JOB;
     const existing = this.repositories.jobs.findActive(scene.id, jobType);
     const queuedState = mediaType === "image" ? "image_queued" : "video_queued";
@@ -531,6 +587,49 @@ export class ProductionQueue {
       dependsOn,
     });
     return transitioned.job;
+  }
+
+  private ensureExtractFrameJob(scene: SceneRecord): JobRecord | null {
+    if (scene.chainRole !== "continue" || !scene.chainId) {
+      return null;
+    }
+    const previous = this.repositories.scenes.listByProject(scene.projectId)
+      .find((candidate) => candidate.orderIndex === scene.orderIndex - 1);
+    if (!previous || previous.chainId !== scene.chainId) {
+      throw new Error(`Scene ${publicSceneId(scene.projectId, scene.id)} không có clip trước cùng chain`);
+    }
+    const existing = this.repositories.jobs.findActive(scene.id, EXTRACT_FRAME_JOB);
+    if (existing) return existing;
+    const completed = this.repositories.jobs.listByScene(scene.id)
+      .filter((job) => job.jobType === EXTRACT_FRAME_JOB && job.status === "succeeded")
+      .at(-1) || null;
+    if (scene.startFrameAssetPath) return completed;
+    const previousVideoJob = this.repositories.jobs.listByScene(previous.id)
+      .filter((job) => job.jobType === VIDEO_JOB)
+      .at(-1) || null;
+    if (!previous.videoAssetPath && !previousVideoJob) {
+      throw new Error(`Clip trước của ${publicSceneId(scene.projectId, scene.id)} chưa được xếp hàng`);
+    }
+    const timestamp = now();
+    return this.repositories.jobs.create({
+      id: `extract-frame-${randomUUID()}`,
+      projectId: scene.projectId,
+      sceneId: scene.id,
+      jobType: EXTRACT_FRAME_JOB,
+      status: "queued",
+      dependsOn: previousVideoJob?.id || null,
+      attempts: 0,
+      maxAttempts: this.maxAttempts,
+      lastHeartbeatAt: null,
+      lastError: null,
+      payloadHash: createHash("sha256").update(JSON.stringify({
+        sourceScene: previous.id,
+        sourceVideo: previous.videoAssetPath,
+        targetScene: scene.id,
+      })).digest("hex"),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
   }
 
   private schedulePump(delay: number): void {
@@ -585,6 +684,10 @@ export class ProductionQueue {
   }
 
   private async execute(job: JobRecord): Promise<void> {
+    if (job.jobType === EXTRACT_FRAME_JOB) {
+      await this.executeExtractLastFrame(job);
+      return;
+    }
     const mediaType = jobMediaType(job.jobType);
     if (!job.sceneId || !mediaType) {
       const error = serializeError({
@@ -634,6 +737,21 @@ export class ProductionQueue {
           error: null,
         });
       });
+      if (mediaType === "image" && scene.visualBibleId) {
+        const bible = this.repositories.visualBibles.get(scene.visualBibleId);
+        if (bible && bible.anchorImagePaths.length < 5) {
+          await access(result.resultPath).then(() => {
+            const anchors = [...new Set([...bible.anchorImagePaths, result.resultPath])].slice(0, 5);
+            this.repositories.visualBibles.setAnchors(
+              bible.id,
+              anchors,
+              bible.locked || anchors.length >= 3,
+            );
+          }).catch(() => {
+            // A mocked/remote-only result cannot serve as a local anchor.
+          });
+        }
+      }
       const project = this.repositories.projects.get(job.projectId);
       if (mediaType === "image" && project?.autoApproveImages) {
         const approved = this.repositories.scenes.updateState({
@@ -651,6 +769,13 @@ export class ProductionQueue {
           approvedVideo: true,
           error: null,
         });
+      }
+      if (mediaType === "video") {
+        const next = this.repositories.scenes.listByProject(scene.projectId)
+          .find((candidate) => candidate.orderIndex === scene.orderIndex + 1);
+        if (next?.chainRole === "continue" && next.chainId && next.chainId === scene.chainId) {
+          this.ensureExtractFrameJob(next);
+        }
       }
     } catch (caught) {
       const forced = this.forcedErrors.get(job.id);
@@ -690,6 +815,64 @@ export class ProductionQueue {
     }
   }
 
+  private async executeExtractLastFrame(job: JobRecord): Promise<void> {
+    if (!job.sceneId) return;
+    const target = this.repositories.scenes.get(job.sceneId);
+    if (!target) return;
+    const previous = this.repositories.scenes.listByProject(job.projectId)
+      .find((scene) => scene.orderIndex === target.orderIndex - 1);
+    this.activeJobId = job.id;
+    const attempt = job.attempts + 1;
+    this.repositories.jobs.updateStatus(job.id, "running", {
+      attempts: attempt,
+      heartbeatAt: now(),
+      error: null,
+    });
+    try {
+      if (!previous?.videoAssetPath) {
+        throw new Error("Clip trước chưa có để trích khung hình cuối");
+      }
+      const outputPath = join(
+        dirname(previous.videoAssetPath),
+        ".kc-frames",
+        `${basename(previous.videoAssetPath, extname(previous.videoAssetPath))}-last-frame.png`,
+      );
+      await mkdir(dirname(outputPath), { recursive: true });
+      await this.extractLastFrame(previous.videoAssetPath, outputPath);
+      this.database.transaction(() => {
+        this.repositories.scenes.setStartFrameAssetPath(target.id, outputPath);
+        this.repositories.jobs.updateStatus(job.id, "succeeded", {
+          heartbeatAt: now(),
+          error: null,
+        });
+      });
+      const project = this.repositories.projects.get(job.projectId);
+      const refreshed = this.repositories.scenes.get(target.id);
+      if (
+        project?.autoApproveImages &&
+        refreshed &&
+        (refreshed.status === "prompt_ready" || refreshed.status === "image_failed")
+      ) {
+        this.enqueueScene(refreshed, "image", job.id);
+      }
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      const classified = classifyQueueError(
+        new WorkerJobError(message, "EXTRACT_FRAME_FAILED", true),
+      );
+      const failed = this.repositories.jobs.updateStatus(job.id, "failed", {
+        heartbeatAt: now(),
+        error: serializeError(classified),
+      });
+      if (classified.retryable && failed.attempts < failed.maxAttempts) {
+        this.scheduleRetry(failed, job.projectId, false);
+      }
+    } finally {
+      this.activeJobId = null;
+      this.emitChanged(job.projectId);
+    }
+  }
+
   private async buildWorkerInput(
     scene: SceneRecord,
     mediaType: SceneMediaType,
@@ -703,9 +886,31 @@ export class ProductionQueue {
     } catch {
       visualBible = normalizeVisualBible({});
     }
-    const refImages = mediaType === "image"
-      ? await this.characterStore.resolveReferences(scene.usedCharacterTokens)
+    const videoMode = scene.chainRole === "continue" ? "frames" as const : "ingredients" as const;
+    const characterRefs = videoMode === "frames" && mediaType === "video"
+      ? []
+      : await this.characterStore.resolveReferences(scene.usedCharacterTokens);
+    const anchorPaths = (bibleRecord?.anchorImagePaths || [])
+      .filter((path) => mediaType !== "video" || path !== scene.imageAssetPath)
+      .slice(0, 5);
+    const anchorRefs: BoundSceneJobInput["refImages"] = [];
+    if (!(videoMode === "frames" && mediaType === "video")) {
+      for (const [index, path] of anchorPaths.entries()) {
+        try {
+          anchorRefs.push(await referenceFromPath(
+            path,
+            `@STYLE_ANCHOR_${index + 1}`,
+            `Visual Bible anchor ${index + 1}`,
+          ));
+        } catch {
+          // Ignore a deleted anchor; subsequent successful images replenish it.
+        }
+      }
+    }
+    const chainFrameRefs = mediaType === "image" && scene.chainRole === "continue" && scene.startFrameAssetPath
+      ? [await referenceFromPath(scene.startFrameAssetPath, "@CHAIN_START_FRAME", "Previous clip final frame")]
       : [];
+    const refImages = [...characterRefs, ...anchorRefs, ...chainFrameRefs];
     return {
       sceneId: publicSceneId(scene.projectId, scene.id),
       mediaType,
@@ -720,11 +925,14 @@ export class ProductionQueue {
       },
       sourceImagePath: mediaType === "video" ? scene.imageAssetPath || "" : "",
       sourceFlowAssetKey: mediaType === "video" ? scene.flowImageAssetId || "" : "",
+      startFramePath: mediaType === "video" && videoMode === "frames"
+        ? scene.startFrameAssetPath || ""
+        : "",
       videoSettings: {
         model: "veo-3.1-lite",
-        mode: "ingredients",
+        mode: videoMode,
         aspectRatio: "16:9",
-        durationSeconds: 8,
+        durationSeconds: scene.durationSeconds,
         outputCount: 1,
         expectedCredits: 0,
       },

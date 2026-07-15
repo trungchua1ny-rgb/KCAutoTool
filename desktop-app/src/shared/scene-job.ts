@@ -2,6 +2,7 @@ import type { JobProgressStatus } from "./timeline";
 import {
   normalizeVisualBible,
   type ProjectAspectRatio,
+  type SceneDurationSeconds,
   type VisualBible,
 } from "./timeline";
 import { normalizeCharacterToken } from "./character";
@@ -21,6 +22,7 @@ export interface SceneJobInput {
   imageSettings: ImageGenerationSettings;
   sourceImagePath: string;
   sourceFlowAssetKey: string;
+  startFramePath: string;
   videoSettings: VideoGenerationSettings;
 }
 
@@ -33,9 +35,9 @@ export interface ImageGenerationSettings {
 
 export interface VideoGenerationSettings {
   model: "veo-3.1-lite";
-  mode: "ingredients";
+  mode: "ingredients" | "frames";
   aspectRatio: ProjectAspectRatio;
-  durationSeconds: 8;
+  durationSeconds: SceneDurationSeconds;
   outputCount: 1;
   expectedCredits: 0;
 }
@@ -115,15 +117,31 @@ export function normalizeSceneJobInput(value: unknown): SceneJobInput {
   }
   const videoSettings: VideoGenerationSettings = {
     model: "veo-3.1-lite",
-    mode: "ingredients",
+    mode: input.videoSettings && typeof input.videoSettings === "object" &&
+      (input.videoSettings as Record<string, unknown>).mode === "frames"
+      ? "frames"
+      : "ingredients",
     aspectRatio: "16:9",
-    durationSeconds: 8,
+    durationSeconds: input.videoSettings && typeof input.videoSettings === "object" &&
+      [4, 6, 8].includes(Number((input.videoSettings as Record<string, unknown>).durationSeconds))
+      ? Number((input.videoSettings as Record<string, unknown>).durationSeconds) as SceneDurationSeconds
+      : 8,
     outputCount: 1,
     expectedCredits: 0,
   };
   const sourceFlowAssetKey = typeof input.sourceFlowAssetKey === "string"
     ? input.sourceFlowAssetKey.trim().slice(0, 4_096)
     : "";
+  const startFramePath = typeof input.startFramePath === "string"
+    ? input.startFramePath.trim()
+    : "";
+  if (
+    input.mediaType === "video" &&
+    videoSettings.mode === "frames" &&
+    (!/^(?:[A-Za-z]:[\\/]|\/)/.test(startFramePath) || !/\.(?:png|jpe?g|webp)$/i.test(startFramePath))
+  ) {
+    throw new Error("Frames video requires an extracted start frame");
+  }
   return {
     sceneId,
     mediaType: input.mediaType as SceneMediaType,
@@ -133,6 +151,7 @@ export function normalizeSceneJobInput(value: unknown): SceneJobInput {
     imageSettings,
     sourceImagePath: input.mediaType === "video" ? sourceImagePath : "",
     sourceFlowAssetKey: input.mediaType === "video" ? sourceFlowAssetKey : "",
+    startFramePath: input.mediaType === "video" ? startFramePath : "",
     videoSettings,
   };
 }
