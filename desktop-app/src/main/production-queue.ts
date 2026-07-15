@@ -325,6 +325,8 @@ export class ProductionQueue {
     options: QueueGenerateOptions = {},
   ): Promise<ProductionQueueSnapshot> {
     await this.syncProject(projectId);
+    const automaticPipeline = Boolean(this.repositories.projects.get(projectId)?.autoApproveImages);
+    if (automaticPipeline) await this.resetPendingAutomaticPipeline(projectId);
     const statuses = new Set<SceneState>(options.onlyStatuses || ["prompt_ready", "image_failed"]);
     for (const scene of this.repositories.scenes.listByProject(projectId)) {
       if (scene.orderIndex < (options.fromSceneIndex || 0) || !statuses.has(scene.status)) continue;
@@ -332,6 +334,22 @@ export class ProductionQueue {
       // produced its last frame. executeExtractLastFrame queues it when ready.
       if (scene.chainRole === "continue" && !scene.startFrameAssetPath) continue;
       this.enqueueScene(scene, "image");
+    }
+    if (automaticPipeline) {
+      for (const scene of this.repositories.scenes.listByProject(projectId)) {
+        if (scene.orderIndex < (options.fromSceneIndex || 0) || !scene.imageAssetPath) continue;
+        if (scene.status === "image_done") {
+          const approved = this.repositories.scenes.updateState({
+            sceneId: scene.id,
+            to: "image_approved",
+            approvedImage: true,
+            error: null,
+          });
+          this.enqueueScene(approved, "video");
+        } else if (scene.status === "image_approved") {
+          this.enqueueScene(scene, "video");
+        }
+      }
     }
     return this.run(projectId);
   }
@@ -372,8 +390,9 @@ export class ProductionQueue {
     this.stateAfterSingleRun = null;
     this.persistState();
     if (this.activeJobId) {
-      this.stoppingActiveJob = true;
-      this.worker.stopActiveJob("flow-worker");
+      const active = this.repositories.jobs.get(this.activeJobId);
+      this.stoppingActiveJob = Boolean(active && jobMediaType(active.jobType));
+      if (this.stoppingActiveJob) this.worker.stopActiveJob("flow-worker");
     }
     this.emitChanged();
     return this.getSnapshot();
@@ -555,6 +574,27 @@ export class ProductionQueue {
     this.emitChanged(projectId);
     this.schedulePump(0);
     return this.getSnapshot(projectId);
+  }
+
+  private async resetPendingAutomaticPipeline(projectId: string): Promise<void> {
+    if (this.activeJobId) {
+      this.stopQueue();
+      const deadline = Date.now() + 10_000;
+      while (this.activeJobId && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (this.activeJobId) {
+        throw new Error("Job hiện tại chưa dừng xong; hãy chờ vài giây rồi chạy tự động lại");
+      }
+    }
+    const pending = this.repositories.jobs.listByProject(projectId)
+      .filter((job) => job.status === "queued" || job.status === "failed");
+    for (const job of pending) this.cancelRetry(job.id);
+    this.database.transaction(() => {
+      const removed = this.repositories.jobs.removePendingByProject(projectId);
+      const sceneIds = [...new Set(removed.flatMap((job) => job.sceneId ? [job.sceneId] : []))];
+      for (const sceneId of sceneIds) this.repositories.scenes.resetPendingQueueState(sceneId);
+    });
   }
 
   private enqueueScene(

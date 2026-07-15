@@ -254,6 +254,61 @@ test("runs a continuation chain through video, last-frame extraction, and Frames
   }
 });
 
+test("rebuilds a clean automatic pipeline after an older image-only queue was stopped", async () => {
+  const context = await fixture();
+  const worker = new FakeQueueWorker();
+  syncTimelineSessionToProject(context.database, (await context.sessionStore.load())!, []);
+  const repositories = new ProjectRepositories(context.database);
+  const [first, second] = repositories.scenes.listByProject(DEFAULT_PROJECT_ID);
+  const firstQueued = repositories.scenes.transition({
+    sceneId: first.id,
+    to: "image_queued",
+    jobType: "image_generation",
+    payloadHash: "old-first-image",
+  });
+  repositories.jobs.updateStatus(firstQueued.job.id, "running", { attempts: 1 });
+  repositories.scenes.updateState({ sceneId: first.id, to: "image_generating" });
+  repositories.jobs.updateStatus(firstQueued.job.id, "succeeded");
+  repositories.scenes.updateState({
+    sceneId: first.id,
+    to: "image_done",
+    imageAssetPath: "C:\\FlowX\\scene-001.png",
+    flowImageAssetId: "asset:scene-001",
+  });
+  const staleSecond = repositories.scenes.transition({
+    sceneId: second.id,
+    to: "image_queued",
+    jobType: "image_generation",
+    payloadHash: "stale-second-image",
+  });
+  const queue = new ProductionQueue(
+    context.database,
+    worker,
+    context.characterStore,
+    context.sessionStore,
+    () => {},
+    { retryBackoffMs: [5] },
+  );
+  try {
+    queue.setApprovalPolicy(true, false, DEFAULT_PROJECT_ID);
+    await queue.generateAllImages(DEFAULT_PROJECT_ID);
+    await waitFor(() => queue.getSnapshot().state === "idle");
+
+    assert.equal(repositories.jobs.get(staleSecond.job.id), null);
+    assert.deepEqual(worker.calls, [
+      "scene-001:image",
+      "scene-001:video",
+      "scene-002:image",
+      "scene-002:video",
+    ]);
+    assert.equal(queue.getSnapshot().queuedJobs, 0);
+  } finally {
+    queue.shutdown();
+    context.database.close();
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
 test("runs scenes sequentially, retries with backoff, and auto-enqueues approved videos", async () => {
   const context = await fixture();
   const worker = new FakeQueueWorker();

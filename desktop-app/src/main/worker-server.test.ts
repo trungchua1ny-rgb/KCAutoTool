@@ -52,7 +52,7 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
         type: "REGISTER",
         role: "chat-worker",
         profileTag: "isolated-test",
-      workerVersion: "2.20.0",
+      workerVersion: "2.20.1",
       }),
     );
     const ping = await pingPromise;
@@ -171,7 +171,7 @@ test("routes a Phase 5 image job with bound character references", async () => {
       type: "REGISTER",
       role: "flow-worker",
       profileTag: "phase5-test-flow",
-      workerVersion: "2.20.0",
+      workerVersion: "2.20.1",
     }));
     const registrationDeadline = Date.now() + 500;
     while (

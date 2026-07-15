@@ -23,7 +23,7 @@ For `GENERATE_TIMELINE`, keep a logged-in ChatGPT conversation open in the
 Chat worker profile. The worker processes one timeline at a time and supports
 the protocol `STOP` message.
 
-Version `2.20.0` adds Chapter 4 continuity chains: project anchor images, last-frame extraction, Ingredients/Frames selection, and exact 4/6/8-second video settings. It retains Phase 3a Beat & Chain Planning with editable chain metadata and also powers KC Auto Tool with production-queue heartbeats, reusable local graphic-style presets, completeness-checked scene prompts, stick-figure motion locks, automatic Image/Video mode switching in one Flow tab, project-asset reuse, and the Phase
+Version `2.20.1` adds Chapter 4 continuity chains and treats Ingredients/Thành phần as Flow's default rather than a required popup tab. It includes project anchor images, last-frame extraction, explicit Frames selection, and exact 4/6/8-second video settings. It retains Phase 3a Beat & Chain Planning with editable chain metadata and also powers KC Auto Tool with production-queue heartbeats, reusable local graphic-style presets, completeness-checked scene prompts, stick-figure motion locks, automatic Image/Video mode switching in one Flow tab, project-asset reuse, and the Phase
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from

@@ -276,6 +276,24 @@ export class SceneRepository {
     return this.get(id)!;
   }
 
+  resetPendingQueueState(id: string): SceneRecord {
+    const current = this.get(id);
+    if (!current) throw new Error(`Scene ${id} does not exist`);
+    const imagePending = current.status === "image_queued" || current.status === "image_failed";
+    const videoPending = current.status === "video_queued" || current.status === "video_failed";
+    if (!imagePending && !videoPending) return current;
+    const status: SceneState = imagePending
+      ? "prompt_ready"
+      : current.imageAssetPath
+        ? "image_approved"
+        : "prompt_ready";
+    this.database.db.prepare(`
+      UPDATE scenes SET status = ?, approved_image = ?, approved_video = 0,
+        last_error = NULL, updated_at = ? WHERE id = ?
+    `).run(status, status === "image_approved" ? 1 : 0, now(), id);
+    return this.get(id)!;
+  }
+
   updateState(input: {
     sceneId: string;
     to: SceneState;
@@ -444,6 +462,17 @@ export class JobRepository {
       WHERE project_id = ? AND status = 'failed' AND attempts < max_attempts
       ORDER BY updated_at, id
     `).all(projectId) as Row[]).map(mapJob);
+  }
+
+  removePendingByProject(projectId: string): JobRecord[] {
+    const pending = (this.database.db.prepare(`
+      SELECT * FROM jobs WHERE project_id = ? AND status IN ('queued', 'failed')
+      ORDER BY created_at, id
+    `).all(projectId) as Row[]).map(mapJob);
+    this.database.db.prepare(
+      "DELETE FROM jobs WHERE project_id = ? AND status IN ('queued', 'failed')",
+    ).run(projectId);
+    return pending;
   }
 
   recoverRunning(projectId?: string): JobRecord[] {

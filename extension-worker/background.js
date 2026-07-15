@@ -662,17 +662,23 @@ async function configureFlowVideoSettings(tabId, payload) {
   if (!picker?.ok) return picker;
   await clickAt(tabId, picker.x, picker.y);
 
-  const modeOption = await sendImageToFlowTab(tabId, {
-    type: "FLOWX_GET_VIDEO_GENERATION_MODE",
-    mode,
-  });
-  if (!modeOption?.ok) return modeOption;
-  await clickAt(tabId, modeOption.x, modeOption.y);
-  const modeConfirmed = await sendImageToFlowTab(tabId, {
-    type: "FLOWX_CONFIRM_VIDEO_GENERATION_MODE",
-    mode,
-  });
-  if (!modeConfirmed?.ok) return modeConfirmed;
+  // In the current Flow UI, Ingredients/Thành phần is the default video
+  // composition mode and is not exposed as a selectable tab. Requiring that
+  // tab caused valid start/single jobs to fail before the prompt was attached.
+  // Frames remains explicit because continuation clips need two frame slots.
+  if (mode === "frames") {
+    const modeOption = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_GET_VIDEO_GENERATION_MODE",
+      mode,
+    });
+    if (!modeOption?.ok) return modeOption;
+    await clickAt(tabId, modeOption.x, modeOption.y);
+    const modeConfirmed = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_CONFIRM_VIDEO_GENERATION_MODE",
+      mode,
+    });
+    if (!modeConfirmed?.ok) return modeConfirmed;
+  }
 
   let aspect = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_ASPECT_RATIO" });
   if (!aspect?.ok) {
