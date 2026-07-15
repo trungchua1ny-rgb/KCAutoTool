@@ -495,28 +495,41 @@ async function characterAssetCacheIdentity(tabId, reference) {
 }
 
 async function cachedCharacterAsset(tabId, reference) {
-  if (!reusableCharacterReference(reference)) return { identity: "", assetKey: "" };
+  if (!reusableCharacterReference(reference)) return { identity: "", assetLocator: null };
   const identity = await characterAssetCacheIdentity(tabId, reference);
   const stored = await chrome.storage.local.get(CHARACTER_ASSET_CACHE_KEY);
   const cache = stored[CHARACTER_ASSET_CACHE_KEY];
+  const cached = cache && typeof cache === "object" ? cache[identity] : null;
   return {
     identity,
-    assetKey: cache && typeof cache === "object" && typeof cache[identity] === "string"
-      ? cache[identity]
-      : "",
+    assetLocator: typeof cached === "string"
+      ? { assetKey: cached, rawSrc: "", hints: [] }
+      : cached && typeof cached === "object"
+        ? cached
+        : null,
   };
 }
 
-async function rememberCharacterAsset(identity, assetKey) {
-  if (!identity || !assetKey) return;
+async function rememberCharacterAsset(identity, assetLocator) {
+  if (!identity || !assetLocator || typeof assetLocator !== "object") return;
+  const hasLocator = Boolean(
+    String(assetLocator.assetKey || "").trim() ||
+    String(assetLocator.rawSrc || "").trim() ||
+    (Array.isArray(assetLocator.hints) && assetLocator.hints.length > 0),
+  );
+  if (!hasLocator) return;
   const stored = await chrome.storage.local.get(CHARACTER_ASSET_CACHE_KEY);
   const cache = stored[CHARACTER_ASSET_CACHE_KEY] && typeof stored[CHARACTER_ASSET_CACHE_KEY] === "object"
     ? { ...stored[CHARACTER_ASSET_CACHE_KEY] }
     : {};
-  cache[identity] = assetKey;
+  cache[identity] = assetLocator;
   const entries = Object.entries(cache);
   const compact = entries.length > 200 ? Object.fromEntries(entries.slice(-200)) : cache;
   await chrome.storage.local.set({ [CHARACTER_ASSET_CACHE_KEY]: compact });
+}
+
+function localFileName(localPath) {
+  return String(localPath || "").split(/[\\/]/).filter(Boolean).at(-1) || "";
 }
 
 async function addSelectedAssetToPrompt(tabId) {
@@ -531,10 +544,12 @@ async function addSelectedAssetToPrompt(tabId) {
 
 async function attachReferenceWithPicker(tabId, reference) {
   const cached = await cachedCharacterAsset(tabId, reference);
-  if (cached.assetKey) {
+  const filenameHint = localFileName(reference.localPath);
+  if (cached.assetLocator) {
     const attached = await sendImageToFlowTab(tabId, {
       type: "FLOWX_GET_ATTACHED_PROMPT_INGREDIENT",
-      assetKey: cached.assetKey,
+      assetLocator: cached.assetLocator,
+      filenameHint,
     });
     if (attached?.ok && attached.found) {
       return { ok: true, reusedProjectAsset: true, alreadyAttached: true };
@@ -545,14 +560,18 @@ async function attachReferenceWithPicker(tabId, reference) {
   if (!add?.ok) return add;
   await clickAt(tabId, add.x, add.y);
 
-  if (cached.assetKey) {
+  if (cached.assetLocator) {
     const existing = await sendImageToFlowTab(tabId, {
       type: "FLOWX_GET_EXISTING_PROJECT_ASSET",
-      assetKey: cached.assetKey,
+      assetLocator: cached.assetLocator,
+      filenameHint,
     });
     if (existing?.ok && existing.found) {
       await clickAt(tabId, existing.x, existing.y);
       const confirmed = await addSelectedAssetToPrompt(tabId);
+      if (confirmed?.ok && existing.assetLocator) {
+        await rememberCharacterAsset(cached.identity, existing.assetLocator);
+      }
       return confirmed?.ok ? { ...confirmed, reusedProjectAsset: true } : confirmed;
     }
   }
@@ -567,11 +586,16 @@ async function attachReferenceWithPicker(tabId, reference) {
 
   const confirmed = await addSelectedAssetToPrompt(tabId);
   if (!confirmed?.ok) return confirmed;
-  const latest = asset.assetKey
-    ? { assetKey: asset.assetKey }
+  const latest = asset.assetLocator
+    ? { assetLocator: asset.assetLocator }
     : await sendImageToFlowTab(tabId, { type: "FLOWX_GET_LATEST_PROMPT_ASSET_KEY" });
-  await rememberCharacterAsset(cached.identity, latest?.assetKey || "");
-  return { ...confirmed, reusedProjectAsset: false, cachedAssetKey: latest?.assetKey || "" };
+  await rememberCharacterAsset(cached.identity, latest?.assetLocator || null);
+  return {
+    ...confirmed,
+    reusedProjectAsset: false,
+    cachedAssetKey: latest?.assetLocator?.assetKey || "",
+    cachedAssetLocator: Boolean(latest?.assetLocator),
+  };
 }
 
 async function attachVideoIngredient(tabId, payload) {
@@ -693,6 +717,15 @@ async function generateFlowImage(tabId, payload, jobId) {
   for (const reference of payload.refImages) {
     const attached = await attachReferenceWithPicker(tabId, reference);
     if (!attached?.ok) return attached;
+    sendJobProgress(
+      jobId,
+      "preparing",
+      attached.alreadyAttached
+        ? `${reference.token}: ảnh nhân vật đã có trong prompt`
+        : attached.reusedProjectAsset
+          ? `${reference.token}: đã chọn lại ảnh nhân vật có sẵn trong thư viện Flow`
+          : `${reference.token}: đã upload ảnh nhân vật lần đầu và lưu vị trí để tái sử dụng`,
+    );
   }
 
   const submitted = await typeAndConfirmFlowPrompt(
@@ -914,10 +947,6 @@ async function generateFlowVideo(tabId, payload, jobId) {
   } else {
     const attached = await attachVideoIngredient(tabId, payload);
     if (!attached?.ok) return attached;
-    for (const reference of payload.refImages || []) {
-      const referenceAttached = await attachReferenceWithPicker(tabId, reference);
-      if (!referenceAttached?.ok) return referenceAttached;
-    }
     sendJobProgress(
       jobId,
       "preparing",
@@ -927,6 +956,13 @@ async function generateFlowVideo(tabId, payload, jobId) {
           ? "Đã chọn lại ảnh scene có sẵn trong project Flow"
           : "Đã dùng file ảnh scene trên máy làm Thành phần",
     );
+    if ((payload.refImages || []).length > 0) {
+      sendJobProgress(
+        jobId,
+        "preparing",
+        "Video chỉ dùng ảnh scene đã duyệt; không gắn lại ảnh nhân vật vì nhân vật đã nằm trong scene",
+      );
+    }
   }
 
   const submitted = await typeAndConfirmFlowPrompt(

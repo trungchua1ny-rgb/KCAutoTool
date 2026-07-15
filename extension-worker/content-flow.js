@@ -288,7 +288,12 @@ async function getFreshUploadedAsset() {
     return fresh.at(-1) || null;
   }, 30000);
   return asset
-    ? { ok: true, ...centerOf(asset), assetKey: flowAssetKeyForElement(asset) }
+    ? {
+      ok: true,
+      ...centerOf(asset),
+      assetKey: flowAssetKeyForElement(asset),
+      assetLocator: flowAssetLocatorForElement(asset),
+    }
     : { ok: false, code: "FLOW_REF_UPLOAD_FAILED", error: "Không thấy thumbnail ảnh nhân vật mới trong popup sau khi chọn file." };
 }
 
@@ -953,26 +958,28 @@ async function confirmIngredientDrop(expectedCount) {
   return { ok: true, ...accepted };
 }
 
-async function getAttachedPromptIngredient(assetKey) {
+async function getAttachedPromptIngredient(locator, filenameHint = "") {
   await wakePromptBox();
-  const key = String(assetKey || "").trim();
   const elements = promptIngredientElements();
-  const matched = key
-    ? elements.find((element) => flowAssetKeyForElement(element) === key)
-    : null;
+  const matched = elements.find((element) => assetMatchesLocator(element, locator, filenameHint)) || null;
   return matched
-    ? { ok: true, found: true, assetKey: key, ingredientCount: elements.length }
+    ? {
+      ok: true,
+      found: true,
+      assetLocator: flowAssetLocatorForElement(matched),
+      ingredientCount: elements.length,
+    }
     : { ok: true, found: false, ingredientCount: elements.length };
 }
 
-async function getLatestPromptAssetKey() {
+async function getLatestPromptAssetLocator() {
   await wakePromptBox();
   const baselineElements = window.__flowx_ingredient_baseline_elements || new Set();
   const fresh = promptIngredientElements().filter((element) => !baselineElements.has(element));
-  const assetKey = fresh.map(flowAssetKeyForElement).filter(Boolean).at(-1) || "";
-  return assetKey
-    ? { ok: true, assetKey }
-    : { ok: true, assetKey: "", unavailable: true };
+  const element = fresh.at(-1) || null;
+  return element
+    ? { ok: true, assetLocator: flowAssetLocatorForElement(element) }
+    : { ok: true, assetLocator: null, unavailable: true };
 }
 
 async function prepareReferenceInput(targetId) {
@@ -1109,6 +1116,65 @@ function flowAssetKeyForElement(element) {
   return canonicalAssetUrl(srcKey(element));
 }
 
+function normalizedAssetHint(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+}
+
+function meaningfulAssetHint(value) {
+  const hint = normalizedAssetHint(value);
+  return hint.length >= 6 &&
+    !/^(?:image|media|asset|thumbnail|project|add to prompt|thêm vào câu lệnh)$/i.test(hint) &&
+    !/upload|tải nội dung|add to prompt|thêm vào câu lệnh/i.test(hint);
+}
+
+function assetTextHintsForElement(element) {
+  const hints = new Set();
+  let current = element;
+  for (let depth = 0; current && depth < 6; depth += 1, current = current.parentElement) {
+    for (const value of [
+      current.getAttribute?.("alt"),
+      current.getAttribute?.("aria-label"),
+      current.getAttribute?.("title"),
+    ]) {
+      const hint = normalizedAssetHint(value);
+      if (hint && hint.length <= 180) hints.add(hint);
+    }
+    const text = normalizedAssetHint(current.textContent);
+    if (text && text.length <= 180) hints.add(text);
+  }
+  return [...hints];
+}
+
+function flowAssetLocatorForElement(element) {
+  const rawSrc = srcKey(element);
+  return {
+    assetKey: flowAssetKeyForElement(element),
+    rawSrc: /^(?:https?:|blob:)/i.test(rawSrc) && rawSrc.length <= 2048 ? rawSrc : "",
+    hints: assetTextHintsForElement(element),
+  };
+}
+
+function assetMatchesLocator(element, locator, filenameHint = "") {
+  const normalized = typeof locator === "string"
+    ? { assetKey: locator, rawSrc: "", hints: [] }
+    : locator && typeof locator === "object"
+      ? locator
+      : { assetKey: "", rawSrc: "", hints: [] };
+  const assetKey = String(normalized.assetKey || "").trim();
+  if (assetKey && flowAssetKeyForElement(element) === assetKey) return true;
+  const rawSrc = String(normalized.rawSrc || "").trim();
+  if (rawSrc && srcKey(element) === rawSrc) return true;
+
+  const candidateHints = assetTextHintsForElement(element);
+  const wantedHints = Array.isArray(normalized.hints)
+    ? normalized.hints.map(normalizedAssetHint).filter(meaningfulAssetHint)
+    : [];
+  if (wantedHints.some((hint) => candidateHints.filter(meaningfulAssetHint).includes(hint))) return true;
+
+  const filename = normalizedAssetHint(filenameHint).split(/[\\/]/).at(-1) || "";
+  return filename.length >= 4 && candidateHints.some((hint) => hint.includes(filename));
+}
+
 function findMediaPickerRoot() {
   const upload = findVisibleControl(/tải\s*nội\s*dung\s*nghe\s*nhìn|upload\s*media/i);
   if (!upload) return null;
@@ -1125,23 +1191,83 @@ function findMediaPickerRoot() {
   return null;
 }
 
-async function getExistingProjectAsset(assetKey) {
-  const key = String(assetKey || "").trim();
-  if (!key) return { ok: true, found: false, reason: "missing-asset-key" };
-  const asset = await waitUntil(() => {
-    const root = findMediaPickerRoot();
-    if (!root) return null;
-    return [...root.querySelectorAll("img, [role='img']")]
-      .filter(isVisible)
-      .filter((element) => {
-        const rect = element.getBoundingClientRect();
-        return rect.width >= 48 && rect.height >= 48;
-      })
-      .find((element) => flowAssetKeyForElement(element) === key) || null;
-  }, 8000);
-  return asset
-    ? { ok: true, found: true, ...centerOf(asset), assetKey: key }
-    : { ok: true, found: false, reason: "asset-not-visible-in-project" };
+function visiblePickerAssets(root) {
+  return [...root.querySelectorAll("img, [role='img']")]
+    .filter(isVisible)
+    .filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.width >= 48 && rect.height >= 48;
+    });
+}
+
+function findPickerScrollContainer(root) {
+  return [root, ...root.querySelectorAll("*")]
+    .filter((element) => element.scrollHeight > element.clientHeight + 24 && element.clientHeight >= 120)
+    .sort((left, right) =>
+      (right.scrollHeight - right.clientHeight) - (left.scrollHeight - left.clientHeight)
+    )[0] || null;
+}
+
+async function getExistingProjectAsset(locator, filenameHint = "") {
+  const normalized = typeof locator === "string"
+    ? { assetKey: locator, rawSrc: "", hints: [] }
+    : locator && typeof locator === "object"
+      ? locator
+      : { assetKey: "", rawSrc: "", hints: [] };
+  const hasLocator = Boolean(
+    String(normalized.assetKey || "").trim() ||
+    String(normalized.rawSrc || "").trim() ||
+    (Array.isArray(normalized.hints) && normalized.hints.length > 0) ||
+    String(filenameHint || "").trim(),
+  );
+  if (!hasLocator) return { ok: true, found: false, reason: "missing-asset-locator" };
+
+  const root = await waitUntil(findMediaPickerRoot, 8000);
+  if (!root) return { ok: true, found: false, reason: "media-picker-not-found" };
+  const scrollContainer = findPickerScrollContainer(root);
+  const originalScrollTop = scrollContainer?.scrollTop || 0;
+  const maxScrollTop = scrollContainer
+    ? Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight)
+    : 0;
+  const step = scrollContainer ? Math.max(160, Math.floor(scrollContainer.clientHeight * 0.75)) : 1;
+  const positions = [...new Set([
+    originalScrollTop,
+    0,
+    ...Array.from({ length: Math.min(30, Math.ceil(maxScrollTop / step) + 1) }, (_, index) =>
+      Math.min(maxScrollTop, index * step)
+    ),
+    maxScrollTop,
+  ])];
+
+  for (const position of positions) {
+    if (scrollContainer) {
+      scrollContainer.scrollTop = position;
+      scrollContainer.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await sleep(280);
+    }
+    const asset = visiblePickerAssets(root)
+      .find((element) => assetMatchesLocator(element, normalized, filenameHint));
+    if (asset) {
+      return {
+        ok: true,
+        found: true,
+        ...centerOf(asset),
+        assetLocator: flowAssetLocatorForElement(asset),
+        searchedScrollPositions: positions.indexOf(position) + 1,
+      };
+    }
+  }
+
+  if (scrollContainer) {
+    scrollContainer.scrollTop = originalScrollTop;
+    scrollContainer.dispatchEvent(new Event("scroll", { bubbles: true }));
+  }
+  return {
+    ok: true,
+    found: false,
+    reason: "asset-not-found-after-scanning-project",
+    searchedScrollPositions: positions.length,
+  };
 }
 
 // ---------- 1. Tìm ô nhập prompt ----------
@@ -1608,6 +1734,7 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
   window.__H2DEV_FLOW_LISTENER__ = true;
 
   window.__FLOWX_FLOW_INTERNALS__ = {
+    assetMatchesLocator,
     cleanFlowOptionLabel,
     confirmVideoAspectRatio,
     confirmVideoDuration,
@@ -1765,17 +1892,17 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     }
 
     if (msg.type === "FLOWX_GET_EXISTING_PROJECT_ASSET") {
-      getExistingProjectAsset(msg.assetKey).then(sendResponse);
+      getExistingProjectAsset(msg.assetLocator || msg.assetKey, msg.filenameHint).then(sendResponse);
       return true;
     }
 
     if (msg.type === "FLOWX_GET_ATTACHED_PROMPT_INGREDIENT") {
-      getAttachedPromptIngredient(msg.assetKey).then(sendResponse);
+      getAttachedPromptIngredient(msg.assetLocator || msg.assetKey, msg.filenameHint).then(sendResponse);
       return true;
     }
 
     if (msg.type === "FLOWX_GET_LATEST_PROMPT_ASSET_KEY") {
-      getLatestPromptAssetKey().then(sendResponse);
+      getLatestPromptAssetLocator().then(sendResponse);
       return true;
     }
 

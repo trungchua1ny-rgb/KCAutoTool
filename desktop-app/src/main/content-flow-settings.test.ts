@@ -53,21 +53,34 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   vm.runInNewContext(source, context);
 
   const internals = windowValue.__FLOWX_FLOW_INTERNALS__ as {
+    assetMatchesLocator: (
+      control: FakeControl,
+      locator: Record<string, unknown>,
+      filenameHint: string,
+    ) => boolean;
     cleanFlowOptionLabel: (control: FakeControl) => string;
     confirmVideoAspectRatio: () => Promise<Record<string, unknown>>;
     confirmVideoDuration: (seconds: number) => Promise<Record<string, unknown>>;
   };
 
   const landscape = new FakeControl(
-    "radix-:test:-trigger-LANDSCAPE",
-    "crop_landscape16:9",
+    "radix-:r1cq:-trigger-LANDSCAPE",
+    "crop_16_9 16:9",
     {
-      "aria-controls": "radix-:test:-content-LANDSCAPE",
+      "aria-controls": "radix-:r1cq:-content-LANDSCAPE",
       "aria-selected": "true",
       "data-state": "active",
     },
   );
-  controls.push(landscape);
+  controls.push(new FakeControl(
+    "radix-:r1lo:-trigger-PORTRAIT",
+    "crop_9_16 9:16",
+    {
+      "aria-controls": "radix-:r1lo:-content-PORTRAIT",
+      "aria-selected": "false",
+      "data-state": "inactive",
+    },
+  ), landscape);
   assert.equal(internals.cleanFlowOptionLabel(landscape), "16:9");
   assert.deepEqual(
     { ...(await internals.confirmVideoAspectRatio()) },
@@ -75,7 +88,7 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
       ok: true,
       aspectRatio: "16:9",
       label: "16:9",
-      identity: "radix-:test:-trigger-LANDSCAPE radix-:test:-content-LANDSCAPE",
+      identity: "radix-:r1cq:-trigger-LANDSCAPE radix-:r1cq:-content-LANDSCAPE",
     },
   );
 
@@ -97,5 +110,15 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
       label: "8s",
       identity: "radix-:test:-trigger-8 radix-:test:-content-8",
     },
+  );
+
+  const gullitAsset = new FakeControl("asset-card", "", { alt: "Gullit.png" });
+  assert.equal(
+    internals.assetMatchesLocator(
+      gullitAsset,
+      { assetKey: "", rawSrc: "", hints: [] },
+      "D:\\characters\\Gullit.png",
+    ),
+    true,
   );
 });
