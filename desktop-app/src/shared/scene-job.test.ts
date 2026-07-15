@@ -1,0 +1,138 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  normalizeSceneJobInput,
+  normalizeSceneJobResult,
+} from "./scene-job";
+
+test("normalizes matching Phase 4 scene jobs", () => {
+  const input = normalizeSceneJobInput({
+    sceneId: "scene-104",
+    mediaType: "image",
+    prompt: "  A revised visible scene  ",
+  });
+  assert.deepEqual(input, {
+    sceneId: "scene-104",
+    mediaType: "image",
+    prompt: "A revised visible scene",
+    characterTokens: [],
+    visualBible: {
+      style: "",
+      palette: "",
+      lighting: "",
+      continuityNotes: "",
+      aspectRatio: "16:9",
+    },
+    imageSettings: {
+      model: "nano-banana-pro",
+      aspectRatio: "16:9",
+      outputCount: 1,
+      expectedCredits: 0,
+    },
+    sourceImagePath: "",
+    sourceFlowAssetKey: "",
+    videoSettings: {
+      model: "veo-3.1-lite",
+      mode: "ingredients",
+      aspectRatio: "16:9",
+      durationSeconds: 8,
+      outputCount: 1,
+      expectedCredits: 0,
+    },
+  });
+  assert.deepEqual(
+    normalizeSceneJobResult(
+      {
+        sceneId: "scene-104",
+        mediaType: "image",
+        resultPath: "mock://phase4/image/scene-104/result",
+        flowAssetKey: "path:https://flow.google/assets/scene-104",
+      },
+      input,
+    ),
+    {
+      sceneId: "scene-104",
+      mediaType: "image",
+      resultPath: "mock://phase4/image/scene-104/result",
+      flowAssetKey: "path:https://flow.google/assets/scene-104",
+    },
+  );
+});
+
+test("rejects mismatched scene results", () => {
+  const input = normalizeSceneJobInput({
+    sceneId: "scene-001",
+    mediaType: "video",
+    prompt: "Camera tracks forward",
+    sourceImagePath: "C:\\FlowX\\scene-001.png",
+    sourceFlowAssetKey: "path:https://flow.google/assets/scene-001",
+  });
+  assert.throws(() =>
+    normalizeSceneJobResult(
+      {
+        sceneId: "scene-002",
+        mediaType: "video",
+        resultPath: "mock://wrong",
+        flowAssetKey: "",
+      },
+      input,
+    ),
+  );
+});
+
+test("normalizes explicit character assignments and the free Ultra image preset", () => {
+  const input = normalizeSceneJobInput({
+    sceneId: "scene-012",
+    mediaType: "image",
+    prompt: "Gulit waits by the window",
+    characterTokens: ["gulit", "@GULIT"],
+    visualBible: {
+      style: " cinematic 3D ",
+      palette: " teal and gold ",
+      lighting: " soft sunset ",
+      continuityNotes: " keep the blue coat ",
+      aspectRatio: "9:16",
+    },
+    imageSettings: { aspectRatio: "9:16" },
+  });
+
+  assert.deepEqual(input.characterTokens, ["@GULIT"]);
+  assert.equal(input.visualBible.style, "cinematic 3D");
+  assert.equal(input.visualBible.aspectRatio, "16:9");
+  assert.deepEqual(input.imageSettings, {
+    model: "nano-banana-pro",
+    aspectRatio: "16:9",
+    outputCount: 1,
+    expectedCredits: 0,
+  });
+  assert.equal(input.sourceImagePath, "");
+  assert.equal(input.sourceFlowAssetKey, "");
+  assert.equal(input.videoSettings.model, "veo-3.1-lite");
+});
+
+test("requires a completed scene image for Ingredients to Video", () => {
+  assert.throws(() => normalizeSceneJobInput({
+    sceneId: "scene-002",
+    mediaType: "video",
+    prompt: "The character turns while the camera tracks right",
+    sourceImagePath: "",
+  }), /completed image/);
+
+  const input = normalizeSceneJobInput({
+    sceneId: "scene-002",
+    mediaType: "video",
+    prompt: "The character turns while the camera tracks right",
+    sourceImagePath: "C:\\Users\\FlowX\\scene-002.webp",
+    sourceFlowAssetKey: "path:https://flow.google/assets/scene-002",
+  });
+  assert.equal(input.sourceImagePath, "C:\\Users\\FlowX\\scene-002.webp");
+  assert.equal(input.sourceFlowAssetKey, "path:https://flow.google/assets/scene-002");
+  assert.deepEqual(input.videoSettings, {
+    model: "veo-3.1-lite",
+    mode: "ingredients",
+    aspectRatio: "16:9",
+    durationSeconds: 8,
+    outputCount: 1,
+    expectedCredits: 0,
+  });
+});

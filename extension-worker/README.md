@@ -1,0 +1,47 @@
+# KC Dev
+
+Manifest V3 browser worker installed from the same directory in both Chrome
+profiles. It contains:
+
+- `background.js`: migrated Chrome debugger input support from v1.
+- `content-flow.js`: migrated Google Flow DOM automation from v1.
+- `content-chat.js`: submits timeline prompts to ChatGPT, waits for the assistant
+  response, and extracts structured scene JSON.
+- `worker-connection.js`: WebSocket registration, heartbeat response, and
+  reconnect behavior.
+
+Load this directory through `chrome://extensions` using **Load unpacked**.
+Both the legacy `labs.google/fx` URL and the current `flow.google` URL are
+supported.
+
+The worker detects its role from open tabs. A profile with ChatGPT registers as
+`chat-worker`; a profile with Google Flow registers as `flow-worker`. The action
+badge reads `ON` after it connects to the desktop app at
+`ws://127.0.0.1:17890`.
+
+For `GENERATE_TIMELINE`, keep a logged-in ChatGPT conversation open in the
+Chat worker profile. The worker processes one timeline at a time and supports
+the protocol `STOP` message.
+
+Version `2.18.1` powers KC Auto Tool with production-queue heartbeats, reusable local graphic-style presets, completeness-checked scene prompts, stick-figure motion locks, user-seeded Visual Bible generation, automatic Image/Video mode switching in one Flow tab, project-asset reuse, and the Phase
+5.1 image preflight. The image preflight accepts an account preset when Flow
+does not expose the zero-credit label in the DOM, but still stops on an explicit
+non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from
+the complete script before writing the first scene batch, then preserves it in
+every later batch. The Flow worker opens the model
+picker and requires **Nano Banana Pro** to show zero credits before continuing.
+`GENERATE_IMAGE` then uses Chrome Debugger to reproduce the Flow popup
+sequence: prompt `+`, **Upload media**, intercepted local file selection,
+uploaded thumbnail selection, and **Add to prompt**. It only enters the Visual
+Bible and scene prompt after every selected ingredient thumbnail is visible,
+then saves the result under `Downloads/KC Auto Tool`. `GENERATE_VIDEO` routes to the
+same Flow tab after switching it to Video, reselects the completed scene image from the project as an ingredient,
+submits the motion prompt, waits for the 8-second clip, and downloads it.
+If the asset cannot be matched (for example, an older session or another Flow
+project), the worker falls back to uploading the downloaded image file.
+
+The Flow content worker first uses accessible labels to find **Add reference**,
+the image file input, prompt editor, and Generate button. If Google changes the
+page, set `addReferenceSelector`, `referenceInputSelector`,
+`referenceTokenSelector`, `promptSelector`, and `generateSelector` in the
+`CONFIG` block at the top of `content-flow.js`.

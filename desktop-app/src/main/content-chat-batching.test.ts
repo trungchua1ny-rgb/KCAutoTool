@@ -1,0 +1,147 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import test from "node:test";
+import vm from "node:vm";
+
+interface Boundary {
+  startMs: number;
+  endMs: number;
+}
+
+interface TimelineBatch {
+  boundaries: Boundary[];
+  srtText: string;
+}
+
+test("splits a long SRT into batches of six 8-second scenes", async () => {
+  const source = await readFile(
+    resolve(process.cwd(), "../extension-worker/content-chat.js"),
+    "utf8",
+  );
+  const windowValue: Record<string, unknown> = {};
+  const context = {
+    window: windowValue,
+    chrome: {
+      runtime: {
+        onMessage: { addListener: () => {} },
+        sendMessage: () => Promise.resolve(),
+      },
+    },
+    console,
+    setTimeout,
+    clearTimeout,
+    AbortController,
+    HTMLElement: class {},
+    HTMLTextAreaElement: class {},
+    Event: class {},
+    InputEvent: class {},
+  };
+  vm.runInNewContext(source, context);
+
+  const internals = windowValue.__FLOWX_CHAT_INTERNALS__ as {
+    createTimelineBatches: (srtText: string) => TimelineBatch[];
+    buildTimelinePrompt: (
+      batch: TimelineBatch & { index: number },
+      batchCount: number,
+      scriptText: string,
+      visualBible?: {
+        style: string;
+        palette: string;
+        lighting: string;
+        continuityNotes: string;
+        aspectRatio: "16:9";
+      },
+    ) => string;
+    validateBatchResult: (
+      result: { scenes: Array<Record<string, unknown>>; visualBible?: unknown },
+      batch: TimelineBatch & { index: number },
+    ) => void;
+  };
+  const batches = internals.createTimelineBatches(`1
+00:00:00,000 --> 00:00:04,000
+Opening
+
+2
+00:03:20,000 --> 00:03:21,000
+Ending`);
+
+  assert.deepEqual(
+    Array.from(batches, (batch) => batch.boundaries.length),
+    [6, 6, 6, 6, 2],
+  );
+  assert.equal(batches[0].boundaries[0].startMs, 0);
+  const finalEnd = batches[4].boundaries.at(-1)?.endMs;
+  assert.equal(finalEnd, 208_000);
+  assert.equal(finalEnd! - 201_000, 7_000);
+  assert.match(batches[0].srtText, /Opening/);
+  assert.match(batches[4].srtText, /Ending/);
+
+  const firstPrompt = internals.buildTimelinePrompt(
+    batches[0] as TimelineBatch & { index: number },
+    batches.length,
+    "A complete cinematic story with a recurring blue-coated hero.",
+  );
+  assert.match(firstPrompt, /PROJECT VISUAL BIBLE — REQUIRED/);
+  assert.match(firstPrompt, /"visualBible"/);
+  assert.match(firstPrompt, /complete supporting script/i);
+  assert.match(firstPrompt, /aspectRatio must always be exactly "16:9"/);
+  assert.match(firstPrompt, /Never invent a character/);
+  assert.doesNotMatch(firstPrompt, /Stickman, flat 2D illustration/);
+
+  const lockedStylePrompt = internals.buildTimelinePrompt(
+    batches[0] as TimelineBatch & { index: number },
+    batches.length,
+    "A complete story.",
+    {
+      style: "Stickman, flat 2D illustration, white background",
+      palette: "black, white, red accents",
+      lighting: "",
+      continuityNotes: "",
+      aspectRatio: "16:9",
+    },
+  );
+  assert.match(lockedStylePrompt, /Non-empty user fields are locked/);
+  assert.match(lockedStylePrompt, /generate values for these blank fields: lighting, continuityNotes/);
+  assert.match(lockedStylePrompt, /Stickman, flat 2D illustration, white background/);
+  assert.match(lockedStylePrompt, /Do NOT repeat global graphic style, palette, default lighting/);
+  assert.match(lockedStylePrompt, /facial expression, head angle, posture, gesture/);
+  assert.match(lockedStylePrompt, /foreground element, one middle-ground subject\/object, and one background element/);
+  assert.match(lockedStylePrompt, /one continuous, physically possible 8-second shot/);
+  assert.match(lockedStylePrompt, /SETTING AND BACKGROUND:/);
+  assert.match(lockedStylePrompt, /Avoid fast gestures, crossed or overlapping limbs/);
+
+  const filler = Array.from({ length: 72 }, (_, index) => `visible${index}`).join(" ");
+  const detailedImagePrompt = `SUBJECT AND ACTION: a figure opens a door. EMOTION AND BODY LANGUAGE: worried eyes and tense shoulders. SETTING AND BACKGROUND: an old farmhouse at night. DEPTH LAYERS: fence foreground, figure middle-ground, forest background. CAMERA AND COMPOSITION: medium eye-level shot. ${filler}`;
+  const detailedVideoPrompt = `STARTING STATE: the figure holds the door. PRIMARY MOTION: one arm slowly pulls it open. REACTION: the face changes from worry to alarm. ENVIRONMENTAL MOTION: a curtain moves gently. CAMERA MOTION: one slow push forward. END FRAME: the figure pauses beside the open doorway. ${filler}`;
+  const validationBatch = batches[1] as TimelineBatch & { index: number };
+  const validationScenes = validationBatch.boundaries.map((boundary) => ({
+    timeStart: String((boundary as unknown as { start?: string }).start || ""),
+    timeEnd: String((boundary as unknown as { end?: string }).end || ""),
+    imagePrompt: detailedImagePrompt,
+    videoPrompt: detailedVideoPrompt,
+  }));
+  assert.doesNotThrow(() => internals.validateBatchResult(
+    { scenes: validationScenes },
+    validationBatch,
+  ));
+  validationScenes[0].imagePrompt = "too short";
+  assert.throws(
+    () => internals.validateBatchResult({ scenes: validationScenes }, validationBatch),
+    /required 80-150/,
+  );
+  validationScenes[0].imagePrompt = detailedImagePrompt.replace("SETTING AND BACKGROUND:", "SETTING:");
+  validationScenes[0].videoPrompt = detailedVideoPrompt;
+  assert.throws(
+    () => internals.validateBatchResult({ scenes: validationScenes }, validationBatch),
+    /missing required visual sections/,
+  );
+
+  const laterPrompt = internals.buildTimelinePrompt(
+    batches[1] as TimelineBatch & { index: number },
+    batches.length,
+    "This must not be repeated in later batches.",
+  );
+  assert.match(laterPrompt, /Reuse the exact Visual Bible established in batch 1/);
+  assert.doesNotMatch(laterPrompt, /"visualBible":/);
+});
