@@ -159,7 +159,7 @@ one scene. Right-click a scene row for the resume/regenerate commands.
 Jobs run sequentially through the Flow worker, respect `depends_on`, and retry
 retryable failures with 2s/8s/20s backoff (three attempts by default). The
 Error Center groups DOM, response, timeout, quota, and extension-connection
-failures. Extension version `2.28.0` recognizes the current video frame-input tab as `IMAGE` / **Hình ảnh** (and older `FRAME` / **Khung hình** variants), prefers the tab group beside **Thành phần**, retries and visibly pauses each setting step, and reports the identities of every visible tab when selection fails. It retains clean-composer handling, stable generated-asset reuse, duration-aware pacing for 4/6/8-second clips, current `Bắt đầu`/`Kết thúc` controls, bounded continuation references, and Start-frame-only video generation; reload
+failures. Extension version `2.29.0` selects `VIDEO_FRAMES` / **Khung hình** or `VIDEO_REFERENCES` / **Thành phần** by exact identity and configures mode, 16:9, and duration in one popup opening. It rejects the top-level `IMAGE` tab and ambiguous nearby buttons, preventing later settings steps from switching the workspace back to image generation. It retains visible selector diagnostics, clean-composer handling, stable generated-asset reuse, duration-aware pacing for 4/6/8-second clips, current `Bắt đầu`/`Kết thúc` controls, bounded continuation references, and Start-frame-only video generation; reload
 the unpacked extension before using the production queue.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without

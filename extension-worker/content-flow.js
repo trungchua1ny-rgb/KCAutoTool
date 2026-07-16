@@ -587,7 +587,7 @@ async function confirmMediaMode(mediaType) {
 
 function cleanFlowOptionLabel(control) {
   return buttonLabel(control)
-    .replace(/^(?:category|collections|dashboard|view_carousel|photo_library|aspect_ratio|crop_(?:\d+_\d+|landscape|portrait)|timer|schedule)\s*/i, "")
+    .replace(/^(?:category|chrome_extension|collections|dashboard|view_carousel|photo_library|aspect_ratio|crop_free|crop_(?:\d+_\d+|landscape|portrait)|timer|schedule)\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -628,28 +628,48 @@ async function getVideoSettingsPicker() {
   if (!prompt) {
     return { ok: false, code: "FLOW_UI_CHANGED", error: "Google Flow has no visible video prompt box." };
   }
-  const picker = await waitUntil(findMediaModePickerButton, 8000);
+  const picker = await waitUntil(() => {
+    const send = findPromptSendControl(prompt);
+    const sendRect = send?.getBoundingClientRect();
+    const candidates = nearbyPromptButtons(prompt)
+      .filter((control) => control !== send)
+      .filter((control) => control.getAttribute("role") !== "tab")
+      .filter((control) => !control.hasAttribute("data-flowx-mode-option"))
+      .filter((control) => /\bvideo\b|\bveo\b|play_circle/i.test(buttonLabel(control)))
+      .filter((control) => !/khung\s*hình|thành\s*phần|bắt\s*đầu|kết\s*thúc/i.test(buttonLabel(control)));
+    return candidates.sort((left, right) => {
+      const leftRect = left.getBoundingClientRect();
+      const rightRect = right.getBoundingClientRect();
+      if (sendRect) {
+        return Math.abs(sendRect.left - leftRect.right) - Math.abs(sendRect.left - rightRect.right);
+      }
+      return rightRect.right - leftRect.right;
+    })[0] || null;
+  }, 8000);
   return picker
-    ? { ok: true, ...centerOf(picker), label: buttonLabel(picker) }
+    ? {
+      ok: true,
+      ...centerOf(picker),
+      label: buttonLabel(picker),
+      identity: flowControlIdentity(picker),
+    }
     : {
       ok: false,
       code: "FLOW_VIDEO_SETTINGS_NOT_FOUND",
-      error: "Cannot find the video settings button immediately to the left of Send.",
+      error: "Không tìm thấy nút cấu hình Video/Veo ở bên trái nút Gửi; đã từ chối bấm nút không rõ chức năng để tránh chuyển nhầm về tạo ảnh.",
     };
 }
 
 function videoModePattern(mode) {
   return mode === "frames"
-    // Current Vietnamese Flow labels its frame-input mode "Hình ảnh" and
-    // identifies the Radix tab as IMAGE. Older layouts used Frames/Khung hình.
-    ? /^(?:image\s+)?(?:frames?|images?|start\s*(?:and|&)\s*end|khung\s*h\u00ecnh|h\u00ecnh\s*\u1ea3nh)$/i
-    : /^(?:ingredients?|components?|th\u00e0nh\s*ph\u1ea7n)$/i;
+    ? /^(?:crop_free\s*)?(?:(?:video\s*)?frames?|start\s*(?:and|&)\s*end|khung\s*h\u00ecnh)$/i
+    : /^(?:chrome_extension\s*)?(?:ingredients?|components?|th\u00e0nh\s*ph\u1ea7n)$/i;
 }
 
 function videoModeIdentityMatches(control, mode) {
   const suffixes = mode === "frames"
-    ? ["FRAME", "FRAMES", "IMAGE"]
-    : ["INGREDIENT", "INGREDIENTS", "COMPONENT", "COMPONENTS"];
+    ? ["VIDEO_FRAME", "VIDEO_FRAMES", "FRAME", "FRAMES"]
+    : ["VIDEO_REFERENCE", "VIDEO_REFERENCES", "INGREDIENT", "INGREDIENTS", "COMPONENT", "COMPONENTS"];
   const identity = flowControlIdentity(control);
   return suffixes.some((suffix) =>
     new RegExp(`-(?:trigger|content)-${suffix}$`, "i").test(identity)

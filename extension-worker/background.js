@@ -853,7 +853,11 @@ async function openFlowVideoSettingsPopup(tabId) {
   // Keep the popup visible long enough for Radix to finish rendering and for
   // the operator to see which control is about to be selected.
   await pause(1100);
-  return { ok: true, pickerLabel: picker.label || "" };
+  return {
+    ok: true,
+    pickerLabel: picker.label || "",
+    identity: picker.identity || "",
+  };
 }
 
 async function configureFlowVideoSettings(tabId, payload, jobId) {
@@ -861,141 +865,123 @@ async function configureFlowVideoSettings(tabId, payload, jobId) {
   const durationSeconds = [4, 6, 8].includes(Number(payload.videoSettings?.durationSeconds))
     ? Number(payload.videoSettings.durationSeconds)
     : 8;
+  let lastResult = null;
+  let failedStep = "mở popup";
 
-  // First-frame generation uses Flow's Frames workspace but fills only Start.
-  // Legacy two-frame jobs still fill both slots.
-  if (mode === "frames") {
-    let modeConfirmed = null;
-    let lastModeResult = null;
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      sendJobProgress(jobId, "preparing", `Cấu hình video 1/3: chọn Hình ảnh/Khung hình (lần ${attempt}/2)`);
-      const opened = await openFlowVideoSettingsPopup(tabId);
-      if (!opened?.ok) {
-        lastModeResult = opened;
-        continue;
-      }
-      const modeOption = await sendImageToFlowTab(tabId, {
-        type: "FLOWX_GET_VIDEO_GENERATION_MODE",
-        mode,
-      });
-      if (!modeOption?.ok) {
-        lastModeResult = modeOption;
-        // Leave the failed popup on screen briefly so its real controls can be
-        // inspected before the retry closes it.
-        await pause(3000);
-        continue;
-      }
-      sendJobProgress(
-        jobId,
-        "preparing",
-        `Đã tìm thấy tab Khung hình: ${modeOption.label || "Hình ảnh"} [${modeOption.identity || "không có id"}]`,
-      );
-      if (!modeOption.alreadySelected) {
-        await clickAt(tabId, modeOption.x, modeOption.y);
-        await pause(900);
-      }
-      modeConfirmed = await sendImageToFlowTab(tabId, {
-        type: "FLOWX_CONFIRM_VIDEO_GENERATION_MODE",
-        mode,
-      });
-      if (modeConfirmed?.ok) break;
-      lastModeResult = modeConfirmed;
-      await pause(3000);
-    }
-    if (!modeConfirmed?.ok) {
-      return {
-        ...(lastModeResult || {}),
-        ok: false,
-        code: lastModeResult?.code || "FLOW_VIDEO_MODE_CHANGE_FAILED",
-        error: `Bước chọn Hình ảnh/Khung hình thất bại sau 2 lần. ${lastModeResult?.error || "Flow không trả về trạng thái đã chọn."}`,
-      };
+  // Mode, ratio, and duration are tabs inside one Flow popup. Configure all
+  // three during the same opening so a later coordinate lookup cannot hit the
+  // top-level IMAGE tab after the prompt layout changes to Frames.
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    sendJobProgress(jobId, "preparing", `Cấu hình video: mở popup duy nhất (lần ${attempt}/2)`);
+    const opened = await openFlowVideoSettingsPopup(tabId);
+    if (!opened?.ok) {
+      lastResult = opened;
+      failedStep = "mở popup Video";
+      continue;
     }
     sendJobProgress(
       jobId,
       "preparing",
-      `Cấu hình video 1/3: đã xác nhận Hình ảnh/Khung hình [${modeConfirmed.identity || "IMAGE"}]`,
+      `Đã mở popup Video [${opened.identity || opened.pickerLabel || "Video"}]`,
     );
-  } else {
-    sendJobProgress(jobId, "preparing", "Cấu hình video 1/3: dùng Thành phần mặc định");
-  }
 
-  let aspectConfirmed = null;
-  let lastAspectResult = null;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    sendJobProgress(jobId, "preparing", `Cấu hình video 2/3: chọn 16:9 (lần ${attempt}/2)`);
-    const opened = await openFlowVideoSettingsPopup(tabId);
-    if (!opened?.ok) {
-      lastAspectResult = opened;
+    const modeName = mode === "frames" ? "Khung hình" : "Thành phần";
+    sendJobProgress(jobId, "preparing", `Cấu hình video 1/3: chọn ${modeName}`);
+    const modeOption = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_GET_VIDEO_GENERATION_MODE",
+      mode,
+    });
+    if (!modeOption?.ok) {
+      lastResult = modeOption;
+      failedStep = `chọn ${modeName}`;
+      await pause(3000);
       continue;
     }
+    sendJobProgress(
+      jobId,
+      "preparing",
+      `Đã tìm thấy ${modeName}: ${modeOption.label || modeName} [${modeOption.identity || "không có id"}]`,
+    );
+    if (!modeOption.alreadySelected) {
+      await clickAt(tabId, modeOption.x, modeOption.y);
+      await pause(900);
+    }
+    const modeConfirmed = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_CONFIRM_VIDEO_GENERATION_MODE",
+      mode,
+    });
+    if (!modeConfirmed?.ok) {
+      lastResult = modeConfirmed;
+      failedStep = `xác nhận ${modeName}`;
+      await pause(3000);
+      continue;
+    }
+
+    sendJobProgress(jobId, "preparing", "Cấu hình video 2/3: chọn 16:9 trong cùng popup");
     const aspect = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_ASPECT_RATIO" });
     if (!aspect?.ok) {
-      lastAspectResult = aspect;
+      lastResult = aspect;
+      failedStep = "tìm tỷ lệ 16:9";
+      await pause(3000);
       continue;
     }
     sendJobProgress(
       jobId,
       "preparing",
-      `Đã tìm thấy nút 16:9: ${aspect.label || "16:9"} [${aspect.identity || "không có id"}]`,
+      `Đã tìm thấy 16:9 [${aspect.identity || aspect.label || "LANDSCAPE"}]`,
     );
-    if (!aspect.alreadySelected) {
-      await clickAt(tabId, aspect.x, aspect.y);
-    }
-    aspectConfirmed = await sendImageToFlowTab(tabId, { type: "FLOWX_CONFIRM_VIDEO_ASPECT_RATIO" });
-    if (aspectConfirmed?.ok) break;
-    lastAspectResult = aspectConfirmed;
-  }
-  if (!aspectConfirmed?.ok) {
-    return {
-      ...(lastAspectResult || {}),
-      ok: false,
-      code: lastAspectResult?.code || "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED",
-      error: `Bước chọn tỷ lệ 16:9 thất bại sau 2 lần. ${lastAspectResult?.error || "Flow không trả về trạng thái đã chọn."}`,
-    };
-  }
-  sendJobProgress(
-    jobId,
-    "preparing",
-    `Cấu hình video 2/3: đã xác nhận 16:9 [${aspectConfirmed.identity || "LANDSCAPE"}]`,
-  );
-
-  let durationConfirmed = null;
-  let lastDurationResult = null;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    sendJobProgress(jobId, "preparing", `Cấu hình video 3/3: chọn ${durationSeconds}s (lần ${attempt}/2)`);
-    const opened = await openFlowVideoSettingsPopup(tabId);
-    if (!opened?.ok) {
-      lastDurationResult = opened;
+    if (!aspect.alreadySelected) await clickAt(tabId, aspect.x, aspect.y);
+    const aspectConfirmed = await sendImageToFlowTab(tabId, { type: "FLOWX_CONFIRM_VIDEO_ASPECT_RATIO" });
+    if (!aspectConfirmed?.ok) {
+      lastResult = aspectConfirmed;
+      failedStep = "xác nhận tỷ lệ 16:9";
+      await pause(3000);
       continue;
     }
+
+    sendJobProgress(jobId, "preparing", `Cấu hình video 3/3: chọn ${durationSeconds}s trong cùng popup`);
     const duration = await sendImageToFlowTab(tabId, {
       type: "FLOWX_GET_VIDEO_DURATION",
       durationSeconds,
     });
     if (!duration?.ok) {
-      lastDurationResult = duration;
+      lastResult = duration;
+      failedStep = `tìm thời lượng ${durationSeconds}s`;
+      await pause(3000);
       continue;
     }
-    if (!duration.alreadySelected) {
-      await clickAt(tabId, duration.x, duration.y);
-    }
-    durationConfirmed = await sendImageToFlowTab(tabId, {
+    sendJobProgress(
+      jobId,
+      "preparing",
+      `Đã tìm thấy ${durationSeconds}s [${duration.identity || duration.label || `${durationSeconds}s`}]`,
+    );
+    if (!duration.alreadySelected) await clickAt(tabId, duration.x, duration.y);
+    const durationConfirmed = await sendImageToFlowTab(tabId, {
       type: "FLOWX_CONFIRM_VIDEO_DURATION",
       durationSeconds,
     });
-    if (durationConfirmed?.ok) break;
-    lastDurationResult = durationConfirmed;
+    if (!durationConfirmed?.ok) {
+      lastResult = durationConfirmed;
+      failedStep = `xác nhận thời lượng ${durationSeconds}s`;
+      await pause(3000);
+      continue;
+    }
+
+    await pressEscape(tabId).catch(() => {});
+    sendJobProgress(
+      jobId,
+      "preparing",
+      `Đã khóa Video: ${modeName} · 16:9 · ${durationSeconds}s chỉ trong một lần mở popup`,
+    );
+    return { ok: true, mode, aspectRatio: "16:9", durationSeconds };
   }
-  if (!durationConfirmed?.ok) {
-    return {
-      ...(lastDurationResult || {}),
-      ok: false,
-      code: lastDurationResult?.code || "FLOW_VIDEO_DURATION_CHANGE_FAILED",
-      error: `Bước chọn thời lượng ${durationSeconds}s thất bại sau 2 lần. ${lastDurationResult?.error || "Flow không trả về trạng thái đã chọn."}`,
-    };
-  }
-  sendJobProgress(jobId, "preparing", `Cấu hình video 3/3: đã xác nhận ${durationSeconds}s`);
-  return { ok: true, mode, aspectRatio: "16:9", durationSeconds };
+
+  return {
+    ...(lastResult || {}),
+    ok: false,
+    code: lastResult?.code || "FLOW_VIDEO_SETTINGS_FAILED",
+    error: `Cấu hình Video thất bại ở bước ${failedStep} sau 2 lần. ${lastResult?.error || "Flow không trả về phần tử hoặc trạng thái cần chọn."}`,
+  };
 }
 
 async function attachStartFrameWithPicker(tabId, localPath, assetKey = "") {

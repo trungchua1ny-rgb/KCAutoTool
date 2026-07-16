@@ -170,22 +170,22 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   );
   new FakeGroup([workspaceImageMode, workspaceVideoMode]);
   const currentFrameMode = new FakeControl(
-    "radix-:current:-trigger-IMAGE",
-    "image Hình ảnh",
+    "radix-:r1bk:-trigger-VIDEO_FRAMES",
+    "crop_free Khung hình",
     {
-      "aria-controls": "radix-:current:-content-IMAGE",
-      "aria-selected": "true",
-      "data-state": "active",
+      "aria-controls": "radix-:r1bk:-content-VIDEO_FRAMES",
+      "aria-selected": "false",
+      "data-state": "inactive",
       role: "tab",
     },
   );
   const ingredientMode = new FakeControl(
-    "radix-:current:-trigger-INGREDIENTS",
-    "category Thành phần",
+    "radix-:r1bk:-trigger-VIDEO_REFERENCES",
+    "chrome_extension Thành phần",
     {
-      "aria-controls": "radix-:current:-content-INGREDIENTS",
-      "aria-selected": "false",
-      "data-state": "inactive",
+      "aria-controls": "radix-:r1bk:-content-VIDEO_REFERENCES",
+      "aria-selected": "true",
+      "data-state": "active",
       role: "tab",
     },
   );
@@ -198,18 +198,26 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
       ok: true,
       x: 70,
       y: 30,
-      label: "image Hình ảnh",
-      identity: "radix-:current:-trigger-IMAGE radix-:current:-content-IMAGE",
-      alreadySelected: true,
+      label: "Khung hình",
+      identity: "radix-:r1bk:-trigger-VIDEO_FRAMES radix-:r1bk:-content-VIDEO_FRAMES",
+      alreadySelected: false,
     },
   );
+  const ingredientModeResult = await internals.getVideoGenerationModeOption("ingredients");
+  assert.equal(ingredientModeResult.identity, "radix-:r1bk:-trigger-VIDEO_REFERENCES radix-:r1bk:-content-VIDEO_REFERENCES");
+  assert.equal(ingredientModeResult.alreadySelected, true);
+
+  currentFrameMode.setAttribute("aria-selected", "true");
+  currentFrameMode.setAttribute("data-state", "active");
+  ingredientMode.setAttribute("aria-selected", "false");
+  ingredientMode.setAttribute("data-state", "inactive");
   assert.deepEqual(
     { ...(await internals.confirmVideoGenerationMode("frames")) },
     {
       ok: true,
       mode: "frames",
-      label: "image Hình ảnh",
-      identity: "radix-:current:-trigger-IMAGE radix-:current:-content-IMAGE",
+      label: "Khung hình",
+      identity: "radix-:r1bk:-trigger-VIDEO_FRAMES radix-:r1bk:-content-VIDEO_FRAMES",
     },
   );
 
