@@ -91,25 +91,26 @@ function isWorkerRole(value: unknown): value is WorkerRole {
   return WORKER_ROLES.includes(value as WorkerRole);
 }
 
-function supportsTimelineWorker(value: string | null): boolean {
-  if (!value) return false;
+function workerVersionNumber(value: string | null): number {
+  if (!value) return 0;
   const parts = value.split(".").map((part) => Number.parseInt(part, 10) || 0);
-  const current = (parts[0] || 0) * 1_000_000 + (parts[1] || 0) * 1_000 + (parts[2] || 0);
-  return current >= 2_021_000;
+  return (parts[0] || 0) * 1_000_000 + (parts[1] || 0) * 1_000 + (parts[2] || 0);
+}
+
+function supportsTimelineWorker(value: string | null): boolean {
+  return workerVersionNumber(value) >= 2_021_000;
 }
 
 function supportsSceneJobs(value: string | null): boolean {
-  if (!value) return false;
-  const parts = value.split(".").map((part) => Number.parseInt(part, 10) || 0);
-  const current = (parts[0] || 0) * 1_000_000 + (parts[1] || 0) * 1_000 + (parts[2] || 0);
-  return current >= 2_021_000;
+  return workerVersionNumber(value) >= 2_021_000;
 }
 
 function supportsPolicyPromptRewrite(value: string | null): boolean {
-  if (!value) return false;
-  const parts = value.split(".").map((part) => Number.parseInt(part, 10) || 0);
-  const current = (parts[0] || 0) * 1_000_000 + (parts[1] || 0) * 1_000 + (parts[2] || 0);
-  return current >= 2_032_000;
+  return workerVersionNumber(value) >= 2_032_000;
+}
+
+function supportsSingleNativeVideoDownload(value: string | null): boolean {
+  return workerVersionNumber(value) >= 2_042_000;
 }
 
 function normalizePolicyPromptRewriteResult(
@@ -359,6 +360,25 @@ export class WorkerServer {
     clearTimeout(client.registrationTimer);
 
     const previous = this.clientsByRole.get(registration.role);
+    if (previous && previous !== client) {
+      const activeJob = this.activeJobsByRole.get(registration.role);
+      const incomingVersion = workerVersionNumber(registration.workerVersion);
+      const currentVersion = workerVersionNumber(previous.workerVersion);
+      const duplicateProfile = previous.profileTag !== registration.profileTag;
+      if (
+        activeJob?.client === previous ||
+        incomingVersion < currentVersion ||
+        (incomingVersion === currentVersion && duplicateProfile)
+      ) {
+        client.socket.close(
+          4002,
+          activeJob?.client === previous
+            ? "Worker role is busy"
+            : "Older or duplicate worker profile rejected",
+        );
+        return;
+      }
+    }
     client.role = registration.role;
     client.profileTag = registration.profileTag;
     client.workerVersion = registration.workerVersion;
@@ -366,7 +386,13 @@ export class WorkerServer {
     this.clientsByRole.set(registration.role, client);
 
     if (previous && previous !== client) {
-      previous.socket.close(4001, "Replaced by newer worker");
+      if (previous.socket.readyState === WebSocket.OPEN) {
+        previous.socket.send(JSON.stringify({ type: "STOP" }), () => {
+          previous.socket.close(4001, "Replaced by newer worker");
+        });
+      } else {
+        previous.socket.close(4001, "Replaced by newer worker");
+      }
     }
 
     // A browser service worker can outlive the desktop process. After an app
@@ -599,6 +625,14 @@ export class WorkerServer {
       return Promise.reject(
         new WorkerJobError(
           `KC Dev ${client.workerVersion || "cũ"} chưa hỗ trợ heartbeat cho hàng đợi tự động. Hãy Reload extension.`,
+          "INVALID_JOB",
+        ),
+      );
+    }
+    if (input.mediaType === "video" && !supportsSingleNativeVideoDownload(client.workerVersion)) {
+      return Promise.reject(
+        new WorkerJobError(
+          `KC Dev ${client.workerVersion || "cũ"} vẫn có thể tải trùng video. Hãy Reload extension 2.42.0 trở lên trước khi chạy Video.`,
           "INVALID_JOB",
         ),
       );

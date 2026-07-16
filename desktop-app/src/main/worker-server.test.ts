@@ -209,7 +209,7 @@ test("routes a Phase 5 image job with bound character references", async () => {
       type: "REGISTER",
       role: "flow-worker",
       profileTag: "phase5-test-flow",
-      workerVersion: "2.21.0",
+      workerVersion: "2.42.0",
     }));
     const registrationDeadline = Date.now() + 500;
     while (

@@ -165,6 +165,7 @@ the unpacked extension before using the production queue.
 Extension version `2.41.0` prevents duplicate native video files by polling only the disabled state of the viewer's download button. It clicks the button exactly once when enabled, waits for Chrome to register and finish that same download, and only then closes the viewer.
 
 Extension version `2.42.0` uses only the native Google Flow download for video. Once that route begins, KC Dev observes and renames the same Chrome download but never starts the former direct-URL fallback, preventing one Flow transfer plus one app transfer for the same scene.
+KC Auto Tool also refuses to dispatch video jobs to KC Dev older than `2.42.0`, rejects an older duplicate worker when a newer profile is connected, and sends `STOP` before replacing a worker from the same profile.
 
 Extension version `2.32.0` also adds **Sửa chính sách** beside a failed image or video prompt. The action stops both direct Flow work and the production queue, asks ChatGPT for one policy-safe replacement without evasion, validates and saves it, resets the failed scene, then resumes production from that exact prompt. If rewriting or validation fails, the original prompt remains and the queue stays stopped.
 
