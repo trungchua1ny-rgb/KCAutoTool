@@ -23,7 +23,7 @@ For `GENERATE_TIMELINE`, keep a logged-in ChatGPT conversation open in the
 Chat worker profile. The worker processes one timeline at a time and supports
 the protocol `STOP` message.
 
-Version `2.30.0` replaces the fragile ten-minute `tabs.sendMessage` used while Flow renders video with short two-second background polls. Each poll carries the scene's complete video baseline, survives content-script reinjection, and requires the same new result twice before download. Hidden prior videos and stable poster/media IDs are included in the baseline, and the newest fresh DOM result is selected, preventing remounted old clips from being downloaded for a later scene. Download errors now identify the video stage explicitly. It retains 2.29.0's single-popup video configuration and exact `VIDEO_FRAMES` / `VIDEO_REFERENCES` selectors.
+Version `2.31.0` starts video downloads directly from Flow's signed HTTPS media URL when the player exposes one. It prefers that URL over `currentSrc=blob:`, avoiding the previous full-video fetch, Base64 conversion, extension-message transfer, and second browser write before a download could begin. Blob conversion remains as a compatibility fallback. It retains 2.30.0's recoverable video polling, full baseline, stable-result confirmation, and old-result rejection.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from

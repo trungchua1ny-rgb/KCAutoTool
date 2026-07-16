@@ -1761,28 +1761,38 @@ async function waitForNewImage(baselineSet) {
 function getCompletedVideos() {
   return [...document.querySelectorAll("video")].filter((video) => {
     if (!isVisible(video)) return false;
-    const src = srcKey(video) || video.querySelector("source")?.src || "";
+    const src = videoSrcKey(video);
     const rect = video.getBoundingClientRect();
     return /^(?:https?:|blob:)/.test(src) && rect.width >= 240 && rect.height >= 120;
   });
 }
 
-function videoSrcKey(video) {
-  return srcKey(video) || video.querySelector("source")?.src || "";
-}
-
-function videoIdentityKeys(video) {
-  const values = [
+function videoSourceCandidates(video) {
+  return [
     video.currentSrc,
     video.src,
     video.getAttribute("src"),
-    video.poster,
-    video.getAttribute("poster"),
     ...[...video.querySelectorAll("source")].flatMap((source) => [
       source.currentSrc,
       source.src,
       source.getAttribute("src"),
     ]),
+  ].filter((value) => typeof value === "string" && /^(?:https?:|blob:)/i.test(value.trim()));
+}
+
+function videoSrcKey(video) {
+  const candidates = videoSourceCandidates(video);
+  // A Flow player can expose currentSrc as blob: while retaining the original
+  // signed HTTPS media URL in src/source. Prefer HTTPS so Chrome can start the
+  // download immediately without fetching and Base64-encoding the whole clip.
+  return candidates.find((value) => /^https?:/i.test(value)) || candidates[0] || "";
+}
+
+function videoIdentityKeys(video) {
+  const values = [
+    ...videoSourceCandidates(video),
+    video.poster,
+    video.getAttribute("poster"),
   ].filter((value) => typeof value === "string" && value.trim());
   const keys = new Set();
   for (const value of values) {

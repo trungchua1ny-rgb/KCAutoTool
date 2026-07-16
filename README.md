@@ -159,7 +159,7 @@ one scene. Right-click a scene row for the resume/regenerate commands.
 Jobs run sequentially through the Flow worker, respect `depends_on`, and retry
 retryable failures with 2s/8s/20s backoff (three attempts by default). The
 Error Center groups DOM, response, timeout, quota, and extension-connection
-failures. Extension version `2.30.0` waits for generated videos with short recoverable polls instead of one fragile ten-minute message channel. It carries a full hidden/visible video baseline, requires a new result to remain stable across two polls, and selects the newest fresh result so a remounted old Flow clip cannot be downloaded for a later scene. It retains the single-popup `VIDEO_FRAMES` / `VIDEO_REFERENCES` configuration, visible selector diagnostics, clean-composer handling, stable generated-asset reuse, duration-aware pacing, current `Bắt đầu`/`Kết thúc` controls, bounded continuation references, and Start-frame-only video generation; reload
+failures. Extension version `2.31.0` prefers Flow's signed HTTPS video source and hands it directly to Chrome downloads, avoiding a full clip fetch and Base64 round trip before saving. Blob conversion remains only as a fallback. It retains short recoverable video polling, a full hidden/visible baseline, stable new-result confirmation, single-popup `VIDEO_FRAMES` / `VIDEO_REFERENCES` configuration, clean-composer handling, duration-aware pacing, current `Bắt đầu`/`Kết thúc` controls, bounded continuation references, and Start-frame-only video generation; reload
 the unpacked extension before using the production queue.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without

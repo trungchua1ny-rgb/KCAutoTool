@@ -300,11 +300,12 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     "blob:https://flow.google/new-video",
     "https://flow.google/media?name=new-media-id",
   );
+  newVideo.src = "https://flow.google/generated/new-video.mp4?token=signed";
   videos.push(newVideo);
   const newVideoResult = internals.checkForNewVideo(videoBaseline);
   assert.equal(newVideoResult.ok, true);
   assert.equal(newVideoResult.found, true);
-  assert.equal(newVideoResult.src, "blob:https://flow.google/new-video");
+  assert.equal(newVideoResult.src, "https://flow.google/generated/new-video.mp4?token=signed");
 
   const gullitAsset = new FakeControl("asset-card", "", { alt: "Gullit.png" });
   assert.equal(

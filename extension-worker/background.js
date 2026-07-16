@@ -1175,19 +1175,25 @@ async function generateFlowVideo(tabId, payload, jobId) {
   const video = await waitForFlowVideo(tabId, submitted.videoBaseline, jobId);
   if (!video?.ok) return video;
 
-  sendJobProgress(jobId, "downloading", "Đã nhận diện đúng video mới; đang lấy dữ liệu để tải về");
-  const converted = await sendImageToFlowTab(tabId, { type: "TODATAURL", src: video.src });
-  if (converted?.error) {
-    return {
-      ok: false,
-      code: "FLOW_VIDEO_READ_FAILED",
-      error: `Đã thấy video mới nhưng không đọc được dữ liệu tải về: ${converted.error}`,
-    };
+  let dataUrl = null;
+  if (/^https?:/i.test(video.src)) {
+    sendJobProgress(jobId, "downloading", "Đã nhận diện video mới; chuyển URL trực tiếp cho Chrome tải về");
+  } else {
+    sendJobProgress(jobId, "downloading", "Video chỉ có URL blob; đang chuyển dữ liệu một lần trước khi tải");
+    const converted = await sendImageToFlowTab(tabId, { type: "TODATAURL", src: video.src });
+    if (converted?.error) {
+      return {
+        ok: false,
+        code: "FLOW_VIDEO_READ_FAILED",
+        error: `Đã thấy video mới nhưng không đọc được dữ liệu tải về: ${converted.error}`,
+      };
+    }
+    dataUrl = typeof converted?.dataUrl === "string" ? converted.dataUrl : null;
   }
   return {
     ok: true,
     src: video.src,
-    dataUrl: typeof converted?.dataUrl === "string" ? converted.dataUrl : null,
+    dataUrl,
   };
 }
 
