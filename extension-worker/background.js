@@ -850,6 +850,9 @@ async function openFlowVideoSettingsPopup(tabId) {
   const picker = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_SETTINGS_PICKER" });
   if (!picker?.ok) return picker;
   await clickAt(tabId, picker.x, picker.y);
+  // Keep the popup visible long enough for Radix to finish rendering and for
+  // the operator to see which control is about to be selected.
+  await pause(1100);
   return { ok: true, pickerLabel: picker.label || "" };
 }
 
@@ -862,21 +865,56 @@ async function configureFlowVideoSettings(tabId, payload, jobId) {
   // First-frame generation uses Flow's Frames workspace but fills only Start.
   // Legacy two-frame jobs still fill both slots.
   if (mode === "frames") {
-    sendJobProgress(jobId, "preparing", "Cấu hình video 1/3: đang mở lựa chọn Khung hình");
-    const opened = await openFlowVideoSettingsPopup(tabId);
-    if (!opened?.ok) return opened;
-    const modeOption = await sendImageToFlowTab(tabId, {
-      type: "FLOWX_GET_VIDEO_GENERATION_MODE",
-      mode,
-    });
-    if (!modeOption?.ok) return modeOption;
-    await clickAt(tabId, modeOption.x, modeOption.y);
-    const modeConfirmed = await sendImageToFlowTab(tabId, {
-      type: "FLOWX_CONFIRM_VIDEO_GENERATION_MODE",
-      mode,
-    });
-    if (!modeConfirmed?.ok) return modeConfirmed;
-    sendJobProgress(jobId, "preparing", "Cấu hình video 1/3: đã chọn Khung hình");
+    let modeConfirmed = null;
+    let lastModeResult = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      sendJobProgress(jobId, "preparing", `Cấu hình video 1/3: chọn Hình ảnh/Khung hình (lần ${attempt}/2)`);
+      const opened = await openFlowVideoSettingsPopup(tabId);
+      if (!opened?.ok) {
+        lastModeResult = opened;
+        continue;
+      }
+      const modeOption = await sendImageToFlowTab(tabId, {
+        type: "FLOWX_GET_VIDEO_GENERATION_MODE",
+        mode,
+      });
+      if (!modeOption?.ok) {
+        lastModeResult = modeOption;
+        // Leave the failed popup on screen briefly so its real controls can be
+        // inspected before the retry closes it.
+        await pause(3000);
+        continue;
+      }
+      sendJobProgress(
+        jobId,
+        "preparing",
+        `Đã tìm thấy tab Khung hình: ${modeOption.label || "Hình ảnh"} [${modeOption.identity || "không có id"}]`,
+      );
+      if (!modeOption.alreadySelected) {
+        await clickAt(tabId, modeOption.x, modeOption.y);
+        await pause(900);
+      }
+      modeConfirmed = await sendImageToFlowTab(tabId, {
+        type: "FLOWX_CONFIRM_VIDEO_GENERATION_MODE",
+        mode,
+      });
+      if (modeConfirmed?.ok) break;
+      lastModeResult = modeConfirmed;
+      await pause(3000);
+    }
+    if (!modeConfirmed?.ok) {
+      return {
+        ...(lastModeResult || {}),
+        ok: false,
+        code: lastModeResult?.code || "FLOW_VIDEO_MODE_CHANGE_FAILED",
+        error: `Bước chọn Hình ảnh/Khung hình thất bại sau 2 lần. ${lastModeResult?.error || "Flow không trả về trạng thái đã chọn."}`,
+      };
+    }
+    sendJobProgress(
+      jobId,
+      "preparing",
+      `Cấu hình video 1/3: đã xác nhận Hình ảnh/Khung hình [${modeConfirmed.identity || "IMAGE"}]`,
+    );
   } else {
     sendJobProgress(jobId, "preparing", "Cấu hình video 1/3: dùng Thành phần mặc định");
   }

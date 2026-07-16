@@ -10,6 +10,7 @@ class FakeControl {
   title = "";
   currentSrc = "";
   src = "";
+  parentElement: FakeGroup | null = null;
   private readonly attributes: Record<string, string>;
 
   constructor(id: string, textContent: string, attributes: Record<string, string>) {
@@ -36,6 +37,18 @@ class FakeControl {
 
   getBoundingClientRect(): Record<string, number> {
     return { left: 10, top: 10, right: 130, bottom: 50, width: 120, height: 40 };
+  }
+}
+
+class FakeGroup {
+  parentElement: FakeGroup | null = null;
+
+  constructor(private readonly controls: FakeControl[]) {
+    for (const control of controls) control.parentElement = this;
+  }
+
+  querySelectorAll(): FakeControl[] {
+    return this.controls;
   }
 }
 
@@ -85,6 +98,8 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     findEndFrameButton: () => FakeControl | null;
     findStartFrameButton: () => FakeControl | null;
     getMediaModeOption: (mediaType: "image" | "video") => Promise<Record<string, unknown>>;
+    getVideoGenerationModeOption: (mode: "frames" | "ingredients") => Promise<Record<string, unknown>>;
+    confirmVideoGenerationMode: (mode: "frames" | "ingredients") => Promise<Record<string, unknown>>;
   };
 
   const landscape = new FakeControl(
@@ -131,6 +146,72 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   const imageModeResult = await internals.getMediaModeOption("image");
   assert.equal(imageModeResult.ok, true);
   assert.match(String(imageModeResult.label), /Hình ảnh/);
+
+  controls.length = 0;
+  const workspaceImageMode = new FakeControl(
+    "radix-:workspace:-trigger-IMAGE",
+    "image Hình ảnh",
+    {
+      "aria-controls": "radix-:workspace:-content-IMAGE",
+      "aria-selected": "false",
+      "data-state": "inactive",
+      role: "tab",
+    },
+  );
+  const workspaceVideoMode = new FakeControl(
+    "radix-:workspace:-trigger-VIDEO",
+    "play_circle Video",
+    {
+      "aria-controls": "radix-:workspace:-content-VIDEO",
+      "aria-selected": "true",
+      "data-state": "active",
+      role: "tab",
+    },
+  );
+  new FakeGroup([workspaceImageMode, workspaceVideoMode]);
+  const currentFrameMode = new FakeControl(
+    "radix-:current:-trigger-IMAGE",
+    "image Hình ảnh",
+    {
+      "aria-controls": "radix-:current:-content-IMAGE",
+      "aria-selected": "true",
+      "data-state": "active",
+      role: "tab",
+    },
+  );
+  const ingredientMode = new FakeControl(
+    "radix-:current:-trigger-INGREDIENTS",
+    "category Thành phần",
+    {
+      "aria-controls": "radix-:current:-content-INGREDIENTS",
+      "aria-selected": "false",
+      "data-state": "inactive",
+      role: "tab",
+    },
+  );
+  new FakeGroup([currentFrameMode, ingredientMode]);
+  controls.push(workspaceImageMode, workspaceVideoMode, currentFrameMode, ingredientMode);
+  const frameModeResult = await internals.getVideoGenerationModeOption("frames");
+  assert.deepEqual(
+    { ...frameModeResult },
+    {
+      ok: true,
+      x: 70,
+      y: 30,
+      label: "image Hình ảnh",
+      identity: "radix-:current:-trigger-IMAGE radix-:current:-content-IMAGE",
+      alreadySelected: true,
+    },
+  );
+  assert.deepEqual(
+    { ...(await internals.confirmVideoGenerationMode("frames")) },
+    {
+      ok: true,
+      mode: "frames",
+      label: "image Hình ảnh",
+      identity: "radix-:current:-trigger-IMAGE radix-:current:-content-IMAGE",
+    },
+  );
 
   controls.length = 0;
   const startFrame = new FakeControl("", "Bắt đầu", {

@@ -159,7 +159,7 @@ one scene. Right-click a scene row for the resume/regenerate commands.
 Jobs run sequentially through the Flow worker, respect `depends_on`, and retry
 retryable failures with 2s/8s/20s backoff (three attempts by default). The
 Error Center groups DOM, response, timeout, quota, and extension-connection
-failures. Extension version `2.27.0` clears stale composer attachments before every image/video job and identifies generated Flow assets by the UUID in their media URL, preventing an independent scene from inheriting earlier images and avoiding unnecessary re-upload when the exact library asset exists. It retains duration-aware pacing for 4/6/8-second clips, current `IMAGE`/`Bắt đầu`/`Kết thúc` control support, bounded continuation references, and Start-frame-only video generation; reload
+failures. Extension version `2.28.0` recognizes the current video frame-input tab as `IMAGE` / **Hình ảnh** (and older `FRAME` / **Khung hình** variants), prefers the tab group beside **Thành phần**, retries and visibly pauses each setting step, and reports the identities of every visible tab when selection fails. It retains clean-composer handling, stable generated-asset reuse, duration-aware pacing for 4/6/8-second clips, current `Bắt đầu`/`Kết thúc` controls, bounded continuation references, and Start-frame-only video generation; reload
 the unpacked extension before using the production queue.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without

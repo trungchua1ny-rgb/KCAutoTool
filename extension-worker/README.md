@@ -23,7 +23,7 @@ For `GENERATE_TIMELINE`, keep a logged-in ChatGPT conversation open in the
 Chat worker profile. The worker processes one timeline at a time and supports
 the protocol `STOP` message.
 
-Version `2.27.0` separates the Flow project library from active prompt attachments. Before every image or video job, the worker removes only media chips that expose a nearby Remove/Close control; generated result thumbnails are ignored. Independent scenes therefore start with a clean composer. Generated-media redirect URLs now use their `name` UUID as a stable asset identity, so the just-created scene image can be selected from the Flow library as the video's Start frame instead of being uploaded again. Old ambiguous locators still fall back safely to the local file. Continuation images remain bounded to their assigned characters plus exactly one immediately preceding final frame—never the entire history or two arbitrary previous scenes. It retains 2.26.0's duration-aware pacing Part A and current Flow control support.
+Version `2.28.0` recognizes the current Flow frame-input tab as `IMAGE` / **Hình ảnh**, while retaining compatibility with older `FRAME` / **Khung hình** labels. It prefers the matching tab group beside **Thành phần**, confirms the selected state by stable Radix identity, retries the setting twice, keeps each popup visible for inspection, and includes all visible tab identities in selector errors. It retains 2.27.0's clean-composer and stable generated-asset reuse behavior.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from

@@ -615,11 +615,12 @@ function videoSettingsDiagnosticSummary() {
     return `${label} {${identity}; selected=${selectedFlowTab(control)}; visible=${isVisible(control)}}`;
   };
   const active = controls.filter(selectedFlowTab).slice(0, 12).map(describe);
+  const visible = controls.filter(isVisible).slice(0, 20).map(describe);
   const ratios = controls.filter((control) => /\d+\s*:\s*\d+/.test(cleanFlowOptionLabel(control)) ||
     /LANDSCAPE|PORTRAIT|WIDE|16_9|9_16/i.test(flowControlIdentity(control)))
     .slice(0, 12)
     .map(describe);
-  return `Active tabs: ${active.join(" | ") || "none"}. Ratio candidates: ${ratios.join(" | ") || "none"}.`;
+  return `Visible tabs: ${visible.join(" | ") || "none"}. Active tabs: ${active.join(" | ") || "none"}. Ratio candidates: ${ratios.join(" | ") || "none"}.`;
 }
 
 async function getVideoSettingsPicker() {
@@ -639,56 +640,90 @@ async function getVideoSettingsPicker() {
 
 function videoModePattern(mode) {
   return mode === "frames"
-    ? /^(?:frames?|start\s*(?:and|&)\s*end|khung\s*h\u00ecnh)$/i
+    // Current Vietnamese Flow labels its frame-input mode "Hình ảnh" and
+    // identifies the Radix tab as IMAGE. Older layouts used Frames/Khung hình.
+    ? /^(?:image\s+)?(?:frames?|images?|start\s*(?:and|&)\s*end|khung\s*h\u00ecnh|h\u00ecnh\s*\u1ea3nh)$/i
     : /^(?:ingredients?|components?|th\u00e0nh\s*ph\u1ea7n)$/i;
+}
+
+function videoModeIdentityMatches(control, mode) {
+  const suffixes = mode === "frames"
+    ? ["FRAME", "FRAMES", "IMAGE"]
+    : ["INGREDIENT", "INGREDIENTS", "COMPONENT", "COMPONENTS"];
+  const identity = flowControlIdentity(control);
+  return suffixes.some((suffix) =>
+    new RegExp(`-(?:trigger|content)-${suffix}$`, "i").test(identity)
+  );
+}
+
+function videoModePeerScore(control, mode) {
+  // The settings popup can contain another IMAGE/VIDEO tab list. Prefer the
+  // IMAGE control whose nearby tab group also contains Thành phần/Ingredients.
+  let parent = control?.parentElement || null;
+  for (let depth = 0; parent && depth < 5; depth += 1, parent = parent.parentElement) {
+    const peers = [...(parent.querySelectorAll?.('button[role="tab"], [role="tab"]') || [])];
+    const hasCounterpart = peers.some((peer) => peer !== control && (
+      mode === "frames"
+        ? videoModeIdentityMatches(peer, "ingredients") || videoModePattern("ingredients").test(cleanFlowOptionLabel(peer))
+        : videoModeIdentityMatches(peer, "frames") || videoModePattern("frames").test(cleanFlowOptionLabel(peer))
+    ));
+    if (hasCounterpart) return 100 - depth * 10;
+  }
+  return 0;
 }
 
 async function getVideoGenerationModeOption(mode) {
   const normalizedMode = mode === "frames" ? "frames" : "ingredients";
-  const identitySuffixes = normalizedMode === "frames"
-    ? ["FRAME", "FRAMES"]
-    : ["INGREDIENT", "INGREDIENTS", "COMPONENT", "COMPONENTS"];
   const option = await waitUntil(() => {
     const tabs = [...document.querySelectorAll('button[role="tab"], [role="tab"]')].filter(isVisible);
-    const exactIdentity = tabs.find((control) => {
-      const identity = `${control.id || ""} ${control.getAttribute("aria-controls") || ""}`;
-      return identitySuffixes.some((suffix) =>
-        new RegExp(`-(?:trigger|content)-${suffix}$`, "i").test(identity)
-      );
-    });
-    if (exactIdentity) return exactIdentity;
-    return tabs.find((control) => videoModePattern(normalizedMode).test(cleanFlowOptionLabel(control))) || null;
+    return tabs
+      .filter((control) =>
+        videoModeIdentityMatches(control, normalizedMode) ||
+        videoModePattern(normalizedMode).test(cleanFlowOptionLabel(control))
+      )
+      .sort((left, right) => {
+        const score = (control) =>
+          videoModePeerScore(control, normalizedMode) +
+          (videoModeIdentityMatches(control, normalizedMode) ? 20 : 0);
+        return score(right) - score(left);
+      })[0] || null;
   }, 8000);
   return option
-    ? { ok: true, ...centerOf(option), label: cleanFlowOptionLabel(option) }
+    ? {
+      ok: true,
+      ...centerOf(option),
+      label: cleanFlowOptionLabel(option),
+      identity: flowControlIdentity(option),
+      alreadySelected: selectedFlowTab(option),
+    }
     : {
       ok: false,
       code: "FLOW_VIDEO_MODE_NOT_FOUND",
-      error: `Video settings popup has no ${normalizedMode === "frames" ? "Frames" : "Ingredients"} tab.`,
+      error: `Popup cấu hình Video không có tab ${normalizedMode === "frames" ? "Hình ảnh/Khung hình" : "Thành phần"}. ${videoSettingsDiagnosticSummary()}`,
     };
 }
 
 async function confirmVideoGenerationMode(mode) {
   const normalizedMode = mode === "frames" ? "frames" : "ingredients";
-  const identitySuffixes = normalizedMode === "frames"
-    ? ["FRAME", "FRAMES"]
-    : ["INGREDIENT", "INGREDIENTS", "COMPONENT", "COMPONENTS"];
   const selected = await waitUntil(() => {
     const tabs = [...document.querySelectorAll('button[role="tab"], [role="tab"]')];
     return tabs.find((control) => {
       if (!selectedFlowTab(control)) return false;
-      const identity = flowControlIdentity(control);
-      return identitySuffixes.some((suffix) =>
-        new RegExp(`-(?:trigger|content)-${suffix}$`, "i").test(identity)
-      ) || videoModePattern(normalizedMode).test(cleanFlowOptionLabel(control));
+      return videoModeIdentityMatches(control, normalizedMode) ||
+        videoModePattern(normalizedMode).test(cleanFlowOptionLabel(control));
     }) || null;
   }, 7000);
   return selected
-    ? { ok: true, mode: normalizedMode, label: cleanFlowOptionLabel(selected) }
+    ? {
+      ok: true,
+      mode: normalizedMode,
+      label: cleanFlowOptionLabel(selected),
+      identity: flowControlIdentity(selected),
+    }
     : {
       ok: false,
       code: "FLOW_VIDEO_MODE_CHANGE_FAILED",
-      error: `Google Flow did not select ${normalizedMode === "frames" ? "Frames" : "Ingredients"}.`,
+      error: `Google Flow chưa chọn ${normalizedMode === "frames" ? "Hình ảnh/Khung hình" : "Thành phần"}. ${videoSettingsDiagnosticSummary()}`,
     };
 }
 
@@ -1814,6 +1849,8 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     findEndFrameButton,
     findStartFrameButton,
     getMediaModeOption,
+    getVideoGenerationModeOption,
+    confirmVideoGenerationMode,
     isDurationControl,
     isLandscapeAspectControl,
     selectedFlowTab,
