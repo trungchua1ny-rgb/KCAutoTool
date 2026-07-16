@@ -532,6 +532,32 @@ function localFileName(localPath) {
   return String(localPath || "").split(/[\\/]/).filter(Boolean).at(-1) || "";
 }
 
+function storedFlowAssetLocator(value) {
+  const stored = String(value || "").trim();
+  if (!stored) return null;
+  if (stored.startsWith("locator:")) {
+    try {
+      const locator = JSON.parse(stored.slice("locator:".length));
+      return locator && typeof locator === "object" ? locator : null;
+    } catch {
+      return null;
+    }
+  }
+  // This redirect path is shared by many Flow thumbnails and can select the
+  // wrong scene. Old sessions using it must safely fall back to local import.
+  if (/media\.getMediaUrlRedirect\/?$/i.test(stored)) return null;
+  return { assetKey: stored, rawSrc: "", hints: [] };
+}
+
+function storedFlowAssetIdentity(imageResult) {
+  const locator = imageResult?.flowAssetLocator;
+  if (locator && typeof locator === "object") {
+    const encoded = `locator:${JSON.stringify(locator)}`;
+    if (encoded.length <= 4_096) return encoded;
+  }
+  return String(imageResult?.flowAssetKey || "").slice(0, 4_096);
+}
+
 async function addSelectedAssetToPrompt(tabId) {
   const addToPrompt = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_ADD_TO_PROMPT_BUTTON" });
   if (!addToPrompt?.ok) return addToPrompt;
@@ -599,9 +625,10 @@ async function attachReferenceWithPicker(tabId, reference) {
 }
 
 async function attachVideoIngredient(tabId, payload) {
+  const sourceLocator = storedFlowAssetLocator(payload.sourceFlowAssetKey);
   const alreadyAttached = await sendImageToFlowTab(tabId, {
     type: "FLOWX_GET_ATTACHED_PROMPT_INGREDIENT",
-    assetKey: payload.sourceFlowAssetKey || "",
+    assetLocator: sourceLocator,
   });
   if (alreadyAttached?.ok && alreadyAttached.found) {
     return {
@@ -618,7 +645,7 @@ async function attachVideoIngredient(tabId, payload) {
 
   const existing = await sendImageToFlowTab(tabId, {
     type: "FLOWX_GET_EXISTING_PROJECT_ASSET",
-    assetKey: payload.sourceFlowAssetKey || "",
+    assetLocator: sourceLocator,
   });
   if (existing?.ok && existing.found) {
     await clickAt(tabId, existing.x, existing.y);
@@ -743,7 +770,7 @@ async function generateFlowImage(tabId, payload, jobId) {
     ok: true,
     src: image.src,
     dataUrl: typeof converted?.dataUrl === "string" ? converted.dataUrl : null,
-    flowAssetKey: typeof image.flowAssetKey === "string" ? image.flowAssetKey : "",
+    flowAssetKey: storedFlowAssetIdentity(image),
   };
 }
 
@@ -926,16 +953,36 @@ async function configureFlowVideoSettings(tabId, payload, jobId) {
   return { ok: true, mode, aspectRatio: "16:9", durationSeconds };
 }
 
-async function attachStartFrameWithPicker(tabId, localPath) {
-  return attachFrameWithPicker(tabId, localPath, "start");
+async function attachStartFrameWithPicker(tabId, localPath, assetKey = "") {
+  return attachFrameWithPicker(tabId, localPath, "start", assetKey);
 }
 
-async function attachFrameWithPicker(tabId, localPath, position) {
+async function attachFrameWithPicker(tabId, localPath, position, assetKey = "") {
   const frame = await sendImageToFlowTab(tabId, {
     type: position === "end" ? "FLOWX_GET_END_FRAME_BUTTON" : "FLOWX_GET_START_FRAME_BUTTON",
   });
   if (!frame?.ok) return frame;
   await clickAt(tabId, frame.x, frame.y);
+
+  const assetLocator = storedFlowAssetLocator(assetKey);
+  if (assetLocator) {
+    const existing = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_GET_EXISTING_PROJECT_ASSET",
+      assetLocator,
+      filenameHint: localFileName(localPath),
+    });
+    if (existing?.ok && existing.found) {
+      await clickAt(tabId, existing.x, existing.y);
+      const apply = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_FRAME_APPLY_BUTTON" });
+      if (apply?.ok && !apply.unavailable) {
+        await clickAt(tabId, apply.x, apply.y);
+      }
+      const confirmed = await sendImageToFlowTab(tabId, {
+        type: position === "end" ? "FLOWX_CONFIRM_END_FRAME" : "FLOWX_CONFIRM_START_FRAME",
+      });
+      return confirmed?.ok ? { ...confirmed, reusedProjectAsset: true } : confirmed;
+    }
+  }
 
   const upload = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_UPLOAD_MEDIA_BUTTON" });
   if (!upload?.ok) return upload;
@@ -949,9 +996,10 @@ async function attachFrameWithPicker(tabId, localPath, position) {
   if (apply?.ok && !apply.unavailable) {
     await clickAt(tabId, apply.x, apply.y);
   }
-  return sendImageToFlowTab(tabId, {
+  const confirmed = await sendImageToFlowTab(tabId, {
     type: position === "end" ? "FLOWX_CONFIRM_END_FRAME" : "FLOWX_CONFIRM_START_FRAME",
   });
+  return confirmed?.ok ? { ...confirmed, reusedProjectAsset: false } : confirmed;
 }
 
 async function generateFlowVideo(tabId, payload, jobId) {
@@ -962,9 +1010,19 @@ async function generateFlowVideo(tabId, payload, jobId) {
   await pressEscape(tabId).catch(() => {});
 
   if (payload.videoSettings.mode === "first-frame") {
-    const startAttached = await attachStartFrameWithPicker(tabId, payload.sourceImagePath);
+    const startAttached = await attachStartFrameWithPicker(
+      tabId,
+      payload.sourceImagePath,
+      payload.sourceFlowAssetKey,
+    );
     if (!startAttached?.ok) return startAttached;
-    sendJobProgress(jobId, "preparing", "Đã gắn ảnh scene hiện tại vào Start frame; không dùng End frame hoặc ảnh cộng dồn");
+    sendJobProgress(
+      jobId,
+      "preparing",
+      startAttached.reusedProjectAsset
+        ? "Đã chọn ảnh scene có sẵn trong thư viện Flow làm Start frame; không dùng End frame"
+        : "Không tìm thấy ảnh scene trong thư viện Flow nên đã import từ máy làm Start frame; không dùng End frame",
+    );
   } else if (payload.videoSettings.mode === "frames") {
     const startAttached = await attachStartFrameWithPicker(tabId, payload.startFramePath);
     if (!startAttached?.ok) return startAttached;

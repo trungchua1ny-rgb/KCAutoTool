@@ -734,12 +734,15 @@ function findStartFrameButton() {
   const promptRect = prompt?.getBoundingClientRect();
   const pattern = /add\s*(?:a\s*)?start\s*frame|start\s*frame|thêm\s*khung\s*hình\s*bắt\s*đầu|khung\s*hình\s*bắt\s*đầu/i;
   const endPattern = /end\s*frame|last\s*frame|khung\s*hình\s*(?:kết\s*thúc|cuối)/i;
-  const candidates = [...document.querySelectorAll('button, [role="button"], [tabindex="0"]')]
+  const candidates = [...document.querySelectorAll('button, [role="button"], [tabindex="0"], [type="button"][aria-haspopup="dialog"]')]
     .filter(isVisible)
     .filter((control) => {
-      const label = buttonLabel(control);
+      const label = buttonLabel(control).replace(/\s+/g, " ").trim();
       const rect = control.getBoundingClientRect();
-      return pattern.test(label) && !endPattern.test(label) && rect.width >= 32 && rect.height >= 24;
+      const bareDialogLabel = control.getAttribute("aria-haspopup") === "dialog" &&
+        /^(?:start|bắt\s*đầu)$/i.test(label);
+      return (pattern.test(label) || bareDialogLabel) && !endPattern.test(label) &&
+        rect.width >= 32 && rect.height >= 24;
     });
   if (!promptRect || candidates.length < 2) return candidates[0] || null;
   return candidates.sort((left, right) => {
@@ -753,11 +756,14 @@ function findStartFrameButton() {
 
 function findEndFrameButton() {
   const pattern = /add\s*(?:an?\s*)?end\s*frame|end\s*frame|last\s*frame|khung\s*h\u00ecnh\s*(?:k\u1ebft\s*th\u00fac|cu\u1ed1i)/i;
-  return [...document.querySelectorAll('button, [role="button"], [tabindex="0"]')]
+  return [...document.querySelectorAll('button, [role="button"], [tabindex="0"], [type="button"][aria-haspopup="dialog"]')]
     .filter(isVisible)
     .find((control) => {
       const rect = control.getBoundingClientRect();
-      return pattern.test(buttonLabel(control)) && rect.width >= 32 && rect.height >= 24;
+      const label = buttonLabel(control).replace(/\s+/g, " ").trim();
+      const bareDialogLabel = control.getAttribute("aria-haspopup") === "dialog" &&
+        /^(?:end|kết\s*thúc)$/i.test(label);
+      return (pattern.test(label) || bareDialogLabel) && rect.width >= 32 && rect.height >= 24;
     }) || null;
 }
 
@@ -1616,6 +1622,7 @@ async function waitForNewImage(baselineSet) {
         img: newest,
         src: srcKey(newest),
         flowAssetKey: flowAssetKeyForElement(newest),
+        flowAssetLocator: flowAssetLocatorForElement(newest),
       };
     }
     const elapsed = Math.round((Date.now() - start) / 1000);
@@ -1738,6 +1745,9 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     cleanFlowOptionLabel,
     confirmVideoAspectRatio,
     confirmVideoDuration,
+    findEndFrameButton,
+    findStartFrameButton,
+    getMediaModeOption,
     isDurationControl,
     isLandscapeAspectControl,
     selectedFlowTab,
@@ -2003,7 +2013,12 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
       waitForNewImage(baseline).then((res) => {
         if (res.stopped) sendResponse({ ok: false, stopped: true });
         else if (res.timeout) sendResponse({ ok: false, timeout: true });
-        else sendResponse({ ok: true, src: res.src, flowAssetKey: res.flowAssetKey || "" });
+        else sendResponse({
+          ok: true,
+          src: res.src,
+          flowAssetKey: res.flowAssetKey || "",
+          flowAssetLocator: res.flowAssetLocator || null,
+        });
       });
       return true;
     }

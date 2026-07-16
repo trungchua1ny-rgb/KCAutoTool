@@ -19,6 +19,22 @@ class FakeControl {
   getAttribute(name: string): string | null {
     return this.attributes[name] ?? null;
   }
+
+  setAttribute(name: string, value: string): void {
+    this.attributes[name] = value;
+  }
+
+  removeAttribute(name: string): void {
+    delete this.attributes[name];
+  }
+
+  hasAttribute(name: string): boolean {
+    return name in this.attributes;
+  }
+
+  getBoundingClientRect(): Record<string, number> {
+    return { left: 10, top: 10, right: 130, bottom: 50, width: 120, height: 40 };
+  }
 }
 
 test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () => {
@@ -43,6 +59,7 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     console,
     setTimeout,
     clearTimeout,
+    getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
     Event: class {},
     InputEvent: class {},
     DataTransfer: class {},
@@ -61,6 +78,9 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     cleanFlowOptionLabel: (control: FakeControl) => string;
     confirmVideoAspectRatio: () => Promise<Record<string, unknown>>;
     confirmVideoDuration: (seconds: number) => Promise<Record<string, unknown>>;
+    findEndFrameButton: () => FakeControl | null;
+    findStartFrameButton: () => FakeControl | null;
+    getMediaModeOption: (mediaType: "image" | "video") => Promise<Record<string, unknown>>;
   };
 
   const landscape = new FakeControl(
@@ -91,6 +111,37 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
       identity: "radix-:r1cq:-trigger-LANDSCAPE radix-:r1cq:-content-LANDSCAPE",
     },
   );
+
+  controls.length = 0;
+  const imageMode = new FakeControl(
+    "radix-:r15f:-trigger-IMAGE",
+    "image Hình ảnh",
+    {
+      "aria-controls": "radix-:r15f:-content-IMAGE",
+      "aria-selected": "false",
+      "data-state": "inactive",
+      role: "tab",
+    },
+  );
+  controls.push(imageMode);
+  const imageModeResult = await internals.getMediaModeOption("image");
+  assert.equal(imageModeResult.ok, true);
+  assert.match(String(imageModeResult.label), /Hình ảnh/);
+
+  controls.length = 0;
+  const startFrame = new FakeControl("", "Bắt đầu", {
+    type: "button",
+    "aria-haspopup": "dialog",
+    "aria-expanded": "false",
+  });
+  const endFrame = new FakeControl("", "Kết thúc", {
+    type: "button",
+    "aria-haspopup": "dialog",
+    "aria-expanded": "false",
+  });
+  controls.push(startFrame, endFrame);
+  assert.equal(internals.findStartFrameButton(), startFrame);
+  assert.equal(internals.findEndFrameButton(), endFrame);
 
   controls.length = 0;
   controls.push(new FakeControl(
