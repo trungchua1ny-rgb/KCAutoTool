@@ -438,23 +438,6 @@ async function downloadFlowImage(response, payload) {
   return waitForDownload(downloadId, 120000, "ảnh");
 }
 
-async function downloadFlowVideo(response, payload) {
-  const url = typeof response.dataUrl === "string" && response.dataUrl.startsWith("data:video/")
-    ? response.dataUrl
-    : response.src;
-  if (typeof url !== "string" || !/^(data:video\/|https?:|blob:)/i.test(url)) {
-    throw new Error("Google Flow không trả về URL video hợp lệ");
-  }
-  const mimeType = response.dataUrl?.match(/^data:(video\/(?:mp4|webm));/)?.[1] || "video/mp4";
-  const downloadId = await chrome.downloads.download({
-    url,
-    filename: safeVideoFileName(payload.sceneId, mimeType),
-    conflictAction: "uniquify",
-    saveAs: false,
-  });
-  return waitForDownload(downloadId, 300000, "video");
-}
-
 function stripConflictingRenderPhrases(prompt) {
   return String(prompt || "")
     .replace(/\b(?:photorealistic|hyperrealistic|realistic rendering)\b/gi, "")
@@ -1342,56 +1325,17 @@ async function generateFlowVideo(tabId, payload, jobId) {
       );
       return { ok: true, resultPath };
     } catch (error) {
-      sendJobProgress(
-        jobId,
-        "downloading",
-        `Vòng lặp tải trong viewer chưa thành công; chuyển sang URL dự phòng: ${String(error?.message || error)}`,
-      );
-    }
-  } else if (viewerOpened?.stopped) {
-    return viewerOpened;
-  }
-  await sendImageToFlowTab(tabId, { type: "FLOWX_CLOSE_VIDEO_VIEWER" }).catch(() => {});
-  if (viewerOpened?.timeout) return viewerOpened;
-
-  const video = await waitForFlowVideo(tabId, submitted.videoBaseline, jobId);
-  if (!video?.ok) return video;
-
-  try {
-    const resultPath = await downloadNewestVideoThroughFlow(
-      tabId,
-      submitted.videoBaseline,
-      payload,
-      jobId,
-    );
-    return { ok: true, resultPath };
-  } catch (error) {
-    sendJobProgress(
-      jobId,
-      "downloading",
-      `Nút tải gốc Flow chưa dùng được; chuyển sang URL dự phòng: ${String(error?.message || error)}`,
-    );
-  }
-
-  let dataUrl = null;
-  if (/^https?:/i.test(video.src)) {
-    sendJobProgress(jobId, "downloading", "Đã nhận diện video mới; chuyển URL trực tiếp cho Chrome tải về");
-  } else {
-    sendJobProgress(jobId, "downloading", "Video chỉ có URL blob; đang chuyển dữ liệu một lần trước khi tải");
-    const converted = await sendImageToFlowTab(tabId, { type: "TODATAURL", src: video.src });
-    if (converted?.error) {
       return {
         ok: false,
-        code: "FLOW_VIDEO_READ_FAILED",
-        error: `Đã thấy video mới nhưng không đọc được dữ liệu tải về: ${converted.error}`,
+        code: "FLOW_NATIVE_DOWNLOAD_FAILED",
+        error: `Flow đã được yêu cầu tải video nhưng Chrome chưa xác nhận file: ${String(error?.message || error)}. App không tải lại bằng URL để tránh tạo hai bản video.`,
       };
     }
-    dataUrl = typeof converted?.dataUrl === "string" ? converted.dataUrl : null;
   }
-  return {
-    ok: true,
-    src: video.src,
-    dataUrl,
+  return viewerOpened || {
+    ok: false,
+    code: "FLOW_VIDEO_VIEWER_FAILED",
+    error: "Không mở được viewer video Google Flow.",
   };
 }
 
@@ -1580,9 +1524,16 @@ async function handleSceneJob(message) {
       return;
     }
     sendJobProgress(jobId, "downloading", `Đang lưu ${payload.mediaType === "image" ? "ảnh" : "video"} vào Downloads/KC Auto Tool`);
-    const resultPath = response.resultPath || (payload.mediaType === "image"
-      ? await downloadFlowImage(response, payload)
-      : await downloadFlowVideo(response, payload));
+    if (payload.mediaType === "video" && !response.resultPath) {
+      sendJobError(
+        jobId,
+        "Video không có đường dẫn từ lượt tải gốc Google Flow; app sẽ không tải URL lần hai.",
+        "FLOW_NATIVE_DOWNLOAD_REQUIRED",
+        false,
+      );
+      return;
+    }
+    const resultPath = response.resultPath || await downloadFlowImage(response, payload);
     if (activeJob !== job || job.stopping) return;
     connection.send({
       type: "JOB_DONE",
