@@ -23,7 +23,7 @@ For `GENERATE_TIMELINE`, keep a logged-in ChatGPT conversation open in the
 Chat worker profile. The worker processes one timeline at a time and supports
 the protocol `STOP` message.
 
-Version `2.38.0` no longer waits to identify a newly-created render card. Ten seconds after submitting a video prompt it clicks the final media card in Flow's grid every two seconds until the viewer opens. It waits five seconds, then clicks native `Tải xuống` every two seconds until Chrome creates the video download, waits for the file to finish, and clicks `Xong`. Direct HTTPS and blob reads remain fallbacks.
+Version `2.39.0` targets Flow's in-progress video placeholder semantically: an `a > div` card containing the `play_circle` icon and a numeric percentage such as `11%`. Ten seconds after submit it locks that anchor and clicks it every two seconds; when React replaces the placeholder with the completed video, the same anchor remains the target instead of an older card. After the viewer opens it waits five seconds, retries native `Tải xuống` every two seconds, waits for the file, and clicks `Xong`.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from

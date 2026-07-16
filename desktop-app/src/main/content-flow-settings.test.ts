@@ -67,13 +67,48 @@ class FakeGroup {
   }
 }
 
-class FakeVideoCard {
-  video: FakeVideo | null = null;
+class FakeRenderAnchor {
+  isConnected = true;
+  href = "https://labs.google/fx/tools/flow/project/test/render-active";
+  completedTrigger: FakeControl | null = null;
+  firstElementChild: FakeRenderTarget | null = null;
 
-  constructor(public id: string, private readonly trigger: FakeControl) {}
+  getAttribute(name: string): string | null {
+    return name === "href" ? this.href : null;
+  }
 
-  querySelector(selector: string): FakeControl | FakeVideo | null {
-    return selector === "video" ? this.video : this.trigger;
+  querySelector(selector: string): FakeControl | null {
+    return selector === "button" ? this.completedTrigger : null;
+  }
+}
+
+class FakeRenderTarget {
+  clickCount = 0;
+
+  constructor(private readonly anchor: FakeRenderAnchor, private readonly progress: number) {
+    anchor.firstElementChild = this;
+  }
+
+  getBoundingClientRect(): Record<string, number> {
+    return { left: 10, top: 10, right: 330, bottom: 190, width: 320, height: 180 };
+  }
+
+  querySelectorAll(selector: string): Array<{ textContent: string }> {
+    if (selector === "div") return [{ textContent: `${this.progress}%` }];
+    if (selector === "i") return [{ textContent: "play_circle" }];
+    return [];
+  }
+
+  closest(selector: string): FakeRenderAnchor | null {
+    return selector === "a" ? this.anchor : null;
+  }
+
+  dispatchEvent(): boolean {
+    return true;
+  }
+
+  click(): void {
+    this.clickCount += 1;
   }
 }
 
@@ -130,15 +165,18 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   );
   const controls: FakeControl[] = [];
   const videos: FakeVideo[] = [];
-  const videoCards: FakeVideoCard[] = [];
+  const renderTargets: FakeRenderTarget[] = [];
+  const renderAnchors: FakeRenderAnchor[] = [];
   const windowValue: Record<string, unknown> = {};
   const context = {
     window: windowValue,
     document: {
       querySelectorAll: (selector: string) => selector === "video"
         ? videos
-        : selector === '[id^="fe_id_"]'
-          ? videoCards
+        : selector === "a > div"
+          ? renderTargets
+          : selector === "a"
+            ? renderAnchors
           : controls,
       querySelector: () => null,
     },
@@ -180,7 +218,7 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     checkForNewVideo: (baseline: string[]) => Record<string, unknown>;
     videoBaselineSnapshot: () => Set<string>;
     startNativeVideoDownload: (baseline: string[]) => Promise<Record<string, unknown>>;
-    clickLatestVideoRenderCard: () => Promise<Record<string, unknown>>;
+    clickActiveRenderingVideoCard: () => Promise<Record<string, unknown>>;
     videoViewerState: () => Record<string, unknown>;
     clickViewerDownload: () => Promise<Record<string, unknown>>;
   };
@@ -378,16 +416,21 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   assert.equal(nativeDownload.clickCount > 0, true);
   assert.equal(done.clickCount > 0, true);
 
-  const oldRenderTrigger = new FakeControl("old-render", "", {});
-  videoCards.push(new FakeVideoCard("fe_id_old", oldRenderTrigger));
-  const newRenderTrigger = new FakeControl("new-render", "", {});
-  const newRenderCard = new FakeVideoCard("fe_id_new", newRenderTrigger);
-  videoCards.push(newRenderCard);
-  const clickedRenderCard = await internals.clickLatestVideoRenderCard();
+  const renderAnchor = new FakeRenderAnchor();
+  const renderingTarget = new FakeRenderTarget(renderAnchor, 11);
+  renderAnchors.push(renderAnchor);
+  renderTargets.push(renderingTarget);
+  const clickedRenderCard = await internals.clickActiveRenderingVideoCard();
   assert.equal(clickedRenderCard.ok, true);
-  assert.equal(clickedRenderCard.cardKey, "fe_id_new");
-  assert.equal(oldRenderTrigger.clickCount, 0);
-  assert.equal(newRenderTrigger.clickCount > 0, true);
+  assert.equal(clickedRenderCard.progress, 11);
+  assert.equal(renderingTarget.clickCount > 0, true);
+  const completedRenderTrigger = new FakeControl("completed-render", "", {});
+  renderAnchor.completedTrigger = completedRenderTrigger;
+  renderTargets.length = 0;
+  const clickedCompletedCard = await internals.clickActiveRenderingVideoCard();
+  assert.equal(clickedCompletedCard.ok, true);
+  assert.equal(clickedCompletedCard.progress, 100);
+  assert.equal(completedRenderTrigger.clickCount > 0, true);
   assert.equal(internals.videoViewerState().downloadReady, true);
   nativeDownload.setAttribute("disabled", "");
   const disabledDownloadAttempt = await internals.clickViewerDownload();

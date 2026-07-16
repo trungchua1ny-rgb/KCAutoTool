@@ -1163,6 +1163,9 @@ async function prepareVideoPromptForDebugger() {
   }
   const rect = input.getBoundingClientRect();
   const videoBaseline = videoBaselineSnapshot();
+  window.__flowx_active_render_anchor = null;
+  window.__flowx_active_render_parent = null;
+  window.__flowx_active_render_href = "";
   window.__flowx_video_baseline = videoBaseline;
   return {
     ok: true,
@@ -1841,12 +1844,59 @@ function videoRenderCards() {
   });
 }
 
-async function clickLatestVideoRenderCard() {
-  const entry = videoRenderCards().at(-1);
-  if (!entry) return { ok: false, cardFound: false, error: "Không tìm thấy card media cuối cùng trên lưới Flow." };
-  clickFully(entry.trigger);
+function renderingProgressCards() {
+  return [...document.querySelectorAll("a > div")].flatMap((target) => {
+    if (!isVisible(target)) return [];
+    const progressElement = [...target.querySelectorAll("div")]
+      .find((element) => /^\s*\d{1,3}%\s*$/.test(element.textContent || ""));
+    const hasVideoIcon = [...target.querySelectorAll("i")]
+      .some((element) => /play_circle/i.test(element.textContent || ""));
+    const anchor = target.closest("a");
+    if (!progressElement || !hasVideoIcon || !anchor) return [];
+    return [{
+      target,
+      anchor,
+      progress: Number.parseInt(progressElement.textContent || "0", 10) || 0,
+      area: area(target),
+    }];
+  }).sort((left, right) => right.progress - left.progress || right.area - left.area);
+}
+
+function activeRenderAnchor() {
+  const stored = window.__flowx_active_render_anchor;
+  if (stored?.isConnected) return stored;
+  const parent = window.__flowx_active_render_parent;
+  const replacement = parent?.isConnected ? parent.querySelector("a") : null;
+  if (replacement) return replacement;
+  const href = String(window.__flowx_active_render_href || "");
+  if (!href) return null;
+  return [...document.querySelectorAll("a")].find((anchor) =>
+    String(anchor.href || anchor.getAttribute("href") || "") === href
+  ) || null;
+}
+
+async function clickActiveRenderingVideoCard() {
+  const rendering = renderingProgressCards()[0] || null;
+  if (rendering) {
+    window.__flowx_active_render_anchor = rendering.anchor;
+    window.__flowx_active_render_parent = rendering.anchor.parentElement;
+    window.__flowx_active_render_href = String(
+      rendering.anchor.href || rendering.anchor.getAttribute("href") || "",
+    );
+  }
+  const anchor = rendering?.anchor || activeRenderAnchor();
+  const target = rendering?.target || anchor?.querySelector("button") || anchor?.firstElementChild || anchor;
+  if (!target) {
+    return { ok: false, cardFound: false, error: "Chưa tìm thấy ô video có phần trăm đang render." };
+  }
+  clickFully(target);
   await sleep(250);
-  return { ok: true, cardFound: true, cardKey: entry.key };
+  return {
+    ok: true,
+    cardFound: true,
+    progress: rendering?.progress ?? 100,
+    trackingLocked: Boolean(anchor),
+  };
 }
 
 function freshCompletedVideos(baselineValues) {
@@ -2098,7 +2148,7 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     checkForNewVideo,
     videoBaselineSnapshot,
     startNativeVideoDownload,
-    clickLatestVideoRenderCard,
+    clickActiveRenderingVideoCard,
     videoViewerState,
     clickViewerDownload,
     clickViewerDownloadAndClose,
@@ -2406,8 +2456,8 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
       return true;
     }
 
-    if (msg.type === "FLOWX_CLICK_LATEST_VIDEO_CARD") {
-      clickLatestVideoRenderCard()
+    if (msg.type === "FLOWX_CLICK_ACTIVE_RENDER_VIDEO") {
+      clickActiveRenderingVideoCard()
         .then((result) => sendResponse(result))
         .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true;

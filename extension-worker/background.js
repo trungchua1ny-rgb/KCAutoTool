@@ -827,13 +827,13 @@ async function openLatestViewerWithRetries(tabId, jobId) {
       const before = await sendImageToFlowTab(tabId, { type: "FLOWX_CHECK_VIDEO_VIEWER" });
       if (before?.viewerOpen) return { ok: true, attempts: attempt - 1 };
       const clicked = await sendImageToFlowTab(tabId, {
-        type: "FLOWX_CLICK_LATEST_VIDEO_CARD",
+        type: "FLOWX_CLICK_ACTIVE_RENDER_VIDEO",
       });
       const after = await sendImageToFlowTab(tabId, { type: "FLOWX_CHECK_VIDEO_VIEWER" });
       sendJobProgress(
         jobId,
         "generating",
-        `Đang thử mở card media cuối cùng · lần ${attempt}${clicked?.cardFound === false ? " · chưa thấy card" : ""}`,
+        `Đang thử mở đúng ô video render · lần ${attempt}${clicked?.cardFound === false ? " · chưa thấy ô %" : ` · ${Number(clicked?.progress) || 0}%`}`,
       );
       if (after?.viewerOpen) return { ok: true, attempts: attempt };
     } catch (error) {
