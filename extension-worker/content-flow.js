@@ -1847,7 +1847,7 @@ function videoRenderCardSnapshot() {
   return new Set(videoRenderCards().map((entry) => entry.key));
 }
 
-async function openNewRenderingVideoCard(baselineValues) {
+async function findNewRenderingVideoCard(baselineValues) {
   const baseline = new Set(Array.isArray(baselineValues) ? baselineValues : []);
   const entry = await waitUntil(() => {
     const fresh = videoRenderCards().filter((candidate) => !baseline.has(candidate.key));
@@ -1856,9 +1856,39 @@ async function openNewRenderingVideoCard(baselineValues) {
   if (!entry) {
     return { ok: false, error: "Không tìm thấy card video đang render mới sau khi gửi prompt." };
   }
+  return { ok: true, cardKey: entry.key };
+}
+
+function renderingVideoCardState(cardKey) {
+  const entry = videoRenderCards().find((candidate) => candidate.key === cardKey);
+  if (!entry) {
+    return { ok: false, cardFound: false, ready: false, error: "Card video đang render không còn trên trang." };
+  }
+  const video = entry.card.querySelector("video");
+  const src = video ? videoSrcKey(video) : "";
+  const disabled = Boolean(
+    entry.trigger.disabled ||
+    entry.trigger.getAttribute("aria-disabled") === "true" ||
+    entry.trigger.hasAttribute("disabled"),
+  );
+  return {
+    ok: true,
+    cardFound: true,
+    ready: Boolean(video && /^(?:https?:|blob:)/i.test(src) && !disabled),
+    src,
+  };
+}
+
+async function openRenderedVideoCard(cardKey) {
+  const state = renderingVideoCardState(cardKey);
+  if (!state.ready) {
+    return { ok: false, error: state.error || "Card video chưa render xong nên chưa thể mở." };
+  }
+  const entry = videoRenderCards().find((candidate) => candidate.key === cardKey);
+  if (!entry) return { ok: false, error: "Không còn tìm thấy card video vừa render xong." };
   clickFully(entry.trigger);
   await sleep(350);
-  return { ok: true, cardKey: entry.key };
+  return { ok: true, cardKey };
 }
 
 function freshCompletedVideos(baselineValues) {
@@ -2087,7 +2117,9 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     videoBaselineSnapshot,
     startNativeVideoDownload,
     videoRenderCardSnapshot,
-    openNewRenderingVideoCard,
+    findNewRenderingVideoCard,
+    renderingVideoCardState,
+    openRenderedVideoCard,
     videoViewerState,
     clickViewerDownloadAndClose,
     isDurationControl,
@@ -2394,8 +2426,20 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
       return true;
     }
 
-    if (msg.type === "FLOWX_OPEN_NEW_RENDERING_VIDEO") {
-      openNewRenderingVideoCard(msg.videoCardBaseline)
+    if (msg.type === "FLOWX_FIND_NEW_RENDERING_VIDEO") {
+      findNewRenderingVideoCard(msg.videoCardBaseline)
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+
+    if (msg.type === "FLOWX_CHECK_RENDERING_VIDEO_CARD") {
+      sendResponse(renderingVideoCardState(String(msg.cardKey || "")));
+      return;
+    }
+
+    if (msg.type === "FLOWX_OPEN_RENDERED_VIDEO_CARD") {
+      openRenderedVideoCard(String(msg.cardKey || ""))
         .then((result) => sendResponse(result))
         .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true;

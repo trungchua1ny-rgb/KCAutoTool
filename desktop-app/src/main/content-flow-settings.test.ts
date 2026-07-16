@@ -68,10 +68,12 @@ class FakeGroup {
 }
 
 class FakeVideoCard {
+  video: FakeVideo | null = null;
+
   constructor(public id: string, private readonly trigger: FakeControl) {}
 
-  querySelector(): FakeControl {
-    return this.trigger;
+  querySelector(selector: string): FakeControl | FakeVideo | null {
+    return selector === "video" ? this.video : this.trigger;
   }
 }
 
@@ -179,7 +181,9 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     videoBaselineSnapshot: () => Set<string>;
     startNativeVideoDownload: (baseline: string[]) => Promise<Record<string, unknown>>;
     videoRenderCardSnapshot: () => Set<string>;
-    openNewRenderingVideoCard: (baseline: string[]) => Promise<Record<string, unknown>>;
+    findNewRenderingVideoCard: (baseline: string[]) => Promise<Record<string, unknown>>;
+    renderingVideoCardState: (cardKey: string) => Record<string, unknown>;
+    openRenderedVideoCard: (cardKey: string) => Promise<Record<string, unknown>>;
     videoViewerState: () => Record<string, unknown>;
   };
 
@@ -380,10 +384,17 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   videoCards.push(new FakeVideoCard("fe_id_old", oldRenderTrigger));
   const renderCardBaseline = [...internals.videoRenderCardSnapshot()];
   const newRenderTrigger = new FakeControl("new-render", "", {});
-  videoCards.push(new FakeVideoCard("fe_id_new", newRenderTrigger));
-  const openedRenderCard = await internals.openNewRenderingVideoCard(renderCardBaseline);
+  const newRenderCard = new FakeVideoCard("fe_id_new", newRenderTrigger);
+  videoCards.push(newRenderCard);
+  const trackedRenderCard = await internals.findNewRenderingVideoCard(renderCardBaseline);
+  assert.equal(trackedRenderCard.ok, true);
+  assert.equal(trackedRenderCard.cardKey, "fe_id_new");
+  assert.equal(newRenderTrigger.clickCount, 0);
+  assert.equal(internals.renderingVideoCardState("fe_id_new").ready, false);
+  newRenderCard.video = newVideo;
+  assert.equal(internals.renderingVideoCardState("fe_id_new").ready, true);
+  const openedRenderCard = await internals.openRenderedVideoCard("fe_id_new");
   assert.equal(openedRenderCard.ok, true);
-  assert.equal(openedRenderCard.cardKey, "fe_id_new");
   assert.equal(newRenderTrigger.clickCount > 0, true);
   assert.equal(internals.videoViewerState().downloadReady, true);
 
