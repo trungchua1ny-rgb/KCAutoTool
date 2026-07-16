@@ -204,6 +204,70 @@ function promptIngredientSnapshot() {
   );
 }
 
+function promptMediaRemoveControl(mediaElement) {
+  const mediaRect = mediaElement.getBoundingClientRect();
+  const controls = [];
+  let current = mediaElement.parentElement;
+  for (let depth = 0; current && depth < 5 && current !== document.body; depth += 1) {
+    const rect = current.getBoundingClientRect();
+    if (rect.width <= 420 && rect.height <= 320) {
+      controls.push(...current.querySelectorAll('button, [role="button"], [tabindex="0"]'));
+    }
+    current = current.parentElement;
+  }
+  const removePattern = /^(?:close|remove|delete|clear|cancel|x|đóng|xóa|gỡ)(?:\s+(?:image|media|asset|frame|ảnh|khung\s*hình))?$|remove_circle|cancel|close/i;
+  return [...new Set(controls)]
+    .filter(isVisible)
+    .filter((control) => !control.disabled && control.getAttribute("aria-disabled") !== "true")
+    .filter((control) => removePattern.test(buttonLabel(control).replace(/\s+/g, " ").trim()))
+    .sort((left, right) => {
+      const distance = (element) => {
+        const rect = element.getBoundingClientRect();
+        return Math.hypot(rect.right - mediaRect.right, rect.top - mediaRect.top);
+      };
+      return distance(left) - distance(right);
+    })[0] || null;
+}
+
+async function clearPromptMedia() {
+  const prompt = await wakePromptBox();
+  if (!prompt) {
+    return { ok: false, code: "FLOW_UI_CHANGED", error: "Không tìm thấy ô prompt để dọn ảnh cũ." };
+  }
+  let removed = 0;
+  for (let pass = 0; pass < 12; pass += 1) {
+    const media = promptIngredientElements();
+    if (media.length === 0) return { ok: true, removed };
+
+    let removedThisPass = false;
+    for (const element of media) {
+      element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, composed: true }));
+      element.parentElement?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true, composed: true }));
+      await sleep(120);
+      const remove = promptMediaRemoveControl(element);
+      if (!remove) continue;
+      clickFully(remove);
+      removed += 1;
+      removedThisPass = true;
+      await sleep(250);
+      break;
+    }
+    if (!removedThisPass) {
+      // Nearby generated-result thumbnails can fall inside the broad prompt
+      // geometry but do not have a Remove control. They are not attachments.
+      return { ok: true, removed, ignoredNearbyMedia: media.length };
+    }
+  }
+  const remaining = promptIngredientElements().length;
+  return remaining === 0
+    ? { ok: true, removed }
+    : {
+      ok: false,
+      code: "FLOW_STALE_MEDIA_CLEAR_FAILED",
+      error: `Đã thử dọn ảnh cũ nhưng prompt vẫn còn ${remaining} thumbnail.`,
+    };
+}
+
 function centerOf(element) {
   const rect = element.getBoundingClientRect();
   return {
@@ -1094,7 +1158,7 @@ function canonicalAssetUrl(value) {
   if (!/^https?:/i.test(String(value || ""))) return "";
   try {
     const url = new URL(value, location.href);
-    const explicitId = ["assetId", "asset_id", "mediaId", "media_id", "id"]
+    const explicitId = ["assetId", "asset_id", "mediaId", "media_id", "id", "name"]
       .map((name) => url.searchParams.get(name))
       .find((entry) => entry && entry.length >= 8);
     if (explicitId) return `id:${explicitId}`;
@@ -1170,6 +1234,8 @@ function assetMatchesLocator(element, locator, filenameHint = "") {
   if (assetKey && flowAssetKeyForElement(element) === assetKey) return true;
   const rawSrc = String(normalized.rawSrc || "").trim();
   if (rawSrc && srcKey(element) === rawSrc) return true;
+  const rawSrcKey = canonicalAssetUrl(rawSrc);
+  if (rawSrcKey && flowAssetKeyForElement(element) === rawSrcKey) return true;
 
   const candidateHints = assetTextHintsForElement(element);
   const wantedHints = Array.isArray(normalized.hints)
@@ -1821,6 +1887,12 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
 
     if (msg.type === "FLOWX_GET_VIDEO_SETTINGS_PICKER") {
       getVideoSettingsPicker().then(sendResponse);
+      return true;
+    }
+
+    if (msg.type === "FLOWX_CLEAR_PROMPT_MEDIA") {
+      STOP = false;
+      clearPromptMedia().then(sendResponse);
       return true;
     }
 

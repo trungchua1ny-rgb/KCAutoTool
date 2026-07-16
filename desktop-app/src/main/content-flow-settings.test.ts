@@ -8,6 +8,8 @@ class FakeControl {
   id: string;
   textContent: string;
   title = "";
+  currentSrc = "";
+  src = "";
   private readonly attributes: Record<string, string>;
 
   constructor(id: string, textContent: string, attributes: Record<string, string>) {
@@ -60,6 +62,8 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     setTimeout,
     clearTimeout,
     getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+    URL,
+    location: { href: "https://labs.google/fx/tools/flow/project/test" },
     Event: class {},
     InputEvent: class {},
     DataTransfer: class {},
@@ -169,6 +173,21 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
       gullitAsset,
       { assetKey: "", rawSrc: "", hints: [] },
       "D:\\characters\\Gullit.png",
+    ),
+    true,
+  );
+
+  const generatedAsset = new FakeControl("generated-card", "", {});
+  generatedAsset.currentSrc = "https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=d98ac0e8-d8fb-4d40-8f61-af21fbf6af46&size=thumbnail";
+  assert.equal(
+    internals.assetMatchesLocator(
+      generatedAsset,
+      {
+        assetKey: "path:https://labs.google/fx/api/trpc/media.getMediaUrlRedirect",
+        rawSrc: "https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=d98ac0e8-d8fb-4d40-8f61-af21fbf6af46",
+        hints: ["hình ảnh được tạo"],
+      },
+      "",
     ),
     true,
   );

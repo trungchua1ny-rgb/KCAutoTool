@@ -166,7 +166,7 @@ export function classifyQueueError(error: unknown): StoredQueueError {
     return { category: "extension_disconnected", message, retryable: true };
   }
   if (
-    /element|selector|dom|not_found|not found|ui_changed|mode_not_found|attach_failed|submit_failed/.test(text)
+    /element|selector|dom|not_found|not found|ui_changed|mode_not_found|attach_failed|clear_failed|submit_failed/.test(text)
   ) {
     return { category: "dom_element_not_found", message, retryable: true };
   }

@@ -739,6 +739,11 @@ async function ensureFreeNanoBananaPro(tabId) {
 }
 
 async function generateFlowImage(tabId, payload, jobId) {
+  const cleared = await sendImageToFlowTab(tabId, { type: "FLOWX_CLEAR_PROMPT_MEDIA" });
+  if (!cleared?.ok) return cleared;
+  if (cleared.removed > 0) {
+    sendJobProgress(jobId, "preparing", `Đã gỡ ${cleared.removed} ảnh cũ khỏi prompt trước khi tạo scene độc lập`);
+  }
   const modelReady = await ensureFreeNanoBananaPro(tabId);
   if (!modelReady?.ok) return modelReady;
 
@@ -1007,6 +1012,11 @@ async function attachFrameWithPicker(tabId, localPath, position, assetKey = "") 
 async function generateFlowVideo(tabId, payload, jobId) {
   await pressEscape(tabId).catch(() => {});
   await pause(150);
+  const cleared = await sendImageToFlowTab(tabId, { type: "FLOWX_CLEAR_PROMPT_MEDIA" });
+  if (!cleared?.ok) return cleared;
+  if (cleared.removed > 0) {
+    sendJobProgress(jobId, "preparing", `Đã gỡ ${cleared.removed} ảnh cũ khỏi prompt Video`);
+  }
   const configured = await configureFlowVideoSettings(tabId, payload, jobId);
   if (!configured?.ok) return configured;
   await pressEscape(tabId).catch(() => {});
@@ -1253,7 +1263,7 @@ async function handleSceneJob(message) {
         jobId,
         response?.error || (response?.timeout ? `Google Flow tạo ${payload.mediaType === "image" ? "ảnh" : "video"} quá thời gian` : `Google Flow không tạo được ${payload.mediaType === "image" ? "ảnh" : "video"}`),
         code,
-        ["TIMEOUT", "FLOW_UI_CHANGED", "FLOW_REF_UPLOAD_FAILED", "FLOW_REF_ATTACH_FAILED", "FLOW_START_FRAME_ATTACH_FAILED", "FLOW_END_FRAME_ATTACH_FAILED", "FLOW_VIDEO_MODE_NOT_FOUND", "FLOW_VIDEO_MODE_CHANGE_FAILED", "FLOW_VIDEO_SETTINGS_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED", "FLOW_VIDEO_DURATION_NOT_FOUND", "FLOW_VIDEO_DURATION_CHANGE_FAILED", "FLOW_SUBMIT_FAILED"].includes(code),
+        ["TIMEOUT", "FLOW_UI_CHANGED", "FLOW_REF_UPLOAD_FAILED", "FLOW_REF_ATTACH_FAILED", "FLOW_START_FRAME_ATTACH_FAILED", "FLOW_END_FRAME_ATTACH_FAILED", "FLOW_STALE_MEDIA_CLEAR_FAILED", "FLOW_VIDEO_MODE_NOT_FOUND", "FLOW_VIDEO_MODE_CHANGE_FAILED", "FLOW_VIDEO_SETTINGS_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED", "FLOW_VIDEO_DURATION_NOT_FOUND", "FLOW_VIDEO_DURATION_CHANGE_FAILED", "FLOW_SUBMIT_FAILED"].includes(code),
       );
       return;
     }
