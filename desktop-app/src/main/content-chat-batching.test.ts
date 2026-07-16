@@ -65,6 +65,12 @@ test("splits a long SRT into batches of six 8-second scenes", async () => {
       },
       characterRoster?: Array<{ token: string; name: string }>,
     ) => string;
+    buildTimelineRetryPrompt: (
+      batch: TimelineBatch & { index: number },
+      batchCount: number,
+      reason: string,
+      attempt: number,
+    ) => string;
     validateBatchResult: (
       result: { scenes: Array<Record<string, unknown>>; visualBible?: unknown },
       batch: TimelineBatch & { index: number },
@@ -168,6 +174,20 @@ The hero crosses the hall.`;
   assert.match(lockedStylePrompt, /SETTING AND BACKGROUND:/);
   assert.match(lockedStylePrompt, /natural timing: appropriate acceleration and deceleration/);
   assert.match(lockedStylePrompt, /do not force every shot to be slow/);
+  assert.match(lockedStylePrompt, /Primary motion must visibly occupy at least 60%/);
+  assert.match(lockedStylePrompt, /For 4s: begin the primary motion immediately/);
+  assert.match(lockedStylePrompt, /For 8s: anticipation is at most 1.5s/);
+  assert.match(lockedStylePrompt, /never slow-motion, floaty, suspended, or dreamlike/);
+
+  const retryPrompt = internals.buildTimelineRetryPrompt(
+    batches[0] as TimelineBatch & { index: number },
+    batches.length,
+    "invalid output",
+    1,
+  );
+  assert.match(retryPrompt, /Primary motion visibly occupies at least 60%/);
+  assert.match(retryPrompt, /For 6s, primary motion occupies about 3.5–4.5s/);
+  assert.match(retryPrompt, /never stretch a small gesture to fill 8s/);
 
   const filler = Array.from({ length: 72 }, (_, index) => `visible${index}`).join(" ");
   const detailedImagePrompt = `SUBJECT AND ACTION: a figure opens a door. EMOTION AND BODY LANGUAGE: worried eyes and tense shoulders. SETTING AND BACKGROUND: an old farmhouse at night. DEPTH LAYERS: fence foreground, figure middle-ground, forest background. CAMERA AND COMPOSITION: medium eye-level shot. ${filler}`;

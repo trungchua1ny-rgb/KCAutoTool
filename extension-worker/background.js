@@ -1,4 +1,5 @@
 import { WorkerConnection } from "./worker-connection.js";
+import { videoPacingLock } from "./video-pacing.js";
 
 const RECONNECT_ALARM = "flowx-worker-reconnect";
 const PROFILE_TAG_KEY = "flowxProfileTag";
@@ -823,9 +824,10 @@ function videoPromptFromFirstFrame(payload) {
     stripConflictingRenderPhrases(payload.prompt),
     [
       "NATURAL MOTION AND ANATOMY — HIGH PRIORITY:",
-      "Stage one coherent action arc with anticipation, clear main movement, reaction, follow-through, and a brief settle. Use natural acceleration and deceleration, visible weight transfer, balanced foot placement, and secondary overlap in the head, torso, clothing, and nearby environment.",
+      "Stage one coherent visible action with clear main movement and immediate reaction. Add anticipation or follow-through only when the duration budget below permits it. Use natural acceleration and deceleration, visible weight transfer, balanced foot placement, and secondary overlap in the head, torso, clothing, and nearby environment.",
       "Choose a purposeful camera move that supports the action at an appropriate speed; keep it static when movement would weaken the shot. Preserve body topology and object count throughout. Keep joints connected and silhouettes readable; do not fuse, duplicate, detach, stretch, or morph limbs.",
     ].join("\n"),
+    videoPacingLock(payload.videoSettings.durationSeconds),
   ];
   if (stickFigureMode) {
     sections.push([

@@ -159,7 +159,7 @@ one scene. Right-click a scene row for the resume/regenerate commands.
 Jobs run sequentially through the Flow worker, respect `depends_on`, and retry
 retryable failures with 2s/8s/20s backoff (three attempts by default). The
 Error Center groups DOM, response, timeout, quota, and extension-connection
-failures. Extension version `2.25.0` sends a five-second job heartbeat, recognizes Flow's current `IMAGE`, `Bắt đầu`, and `Kết thúc` controls, selects an existing generated asset from the Flow library before falling back to local import, and prevents generated scene images from accumulating as references. Every video uses its own approved scene image as the single Start frame; reload
+failures. Extension version `2.26.0` adds duration-aware pacing for 4/6/8-second clips: primary motion must occupy at least 60% of runtime, setup/final holds are capped, and 4-second clips begin their action immediately. It also recognizes Flow's current `IMAGE`, `Bắt đầu`, and `Kết thúc` controls, selects an existing generated asset from the Flow library before falling back to local import, and prevents generated scene images from accumulating as references. Every video uses its own approved scene image as the single Start frame; reload
 the unpacked extension before using the production queue.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without
