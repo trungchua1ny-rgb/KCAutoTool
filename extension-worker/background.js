@@ -762,7 +762,7 @@ async function waitForFlowVideo(tabId, videoBaseline, jobId) {
       sendJobProgress(
         jobId,
         "generating",
-        `Vẫn đang chờ đúng video mới từ Flow; thấy ${Number(check.visibleVideos) || 0} video trên trang`,
+        `Vẫn đang chờ đúng video mới từ Flow; thấy ${Number(check.visibleVideos) || 0} video, loại ${Number(check.rejectedVideos) || 0} kết quả cũ`,
       );
     }
     await pause(2_000);

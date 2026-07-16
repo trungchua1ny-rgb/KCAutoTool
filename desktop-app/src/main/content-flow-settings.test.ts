@@ -56,7 +56,12 @@ class FakeVideo {
   src = "";
   poster = "";
 
-  constructor(public currentSrc: string, poster = "") {
+  constructor(
+    public currentSrc: string,
+    poster = "",
+    private readonly width = 400,
+    private readonly height = 225,
+  ) {
     this.src = currentSrc;
     this.poster = poster;
   }
@@ -68,7 +73,14 @@ class FakeVideo {
   }
 
   getBoundingClientRect(): Record<string, number> {
-    return { left: 10, top: 10, right: 410, bottom: 235, width: 400, height: 225 };
+    return {
+      left: 10,
+      top: 10,
+      right: 10 + this.width,
+      bottom: 10 + this.height,
+      width: this.width,
+      height: this.height,
+    };
   }
 
   querySelector(): null {
@@ -296,9 +308,13 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   const videoBaseline = [...internals.videoBaselineSnapshot()];
   oldVideo.currentSrc = "blob:https://flow.google/remounted-old-video";
   oldVideo.src = oldVideo.currentSrc;
+  const remountedOnlyResult = internals.checkForNewVideo(videoBaseline);
+  assert.equal(remountedOnlyResult.found, false);
   const newVideo = new FakeVideo(
     "blob:https://flow.google/new-video",
-    "https://flow.google/media?name=new-media-id",
+    "https://flow.google/media?name=old-media-id",
+    180,
+    101,
   );
   newVideo.src = "https://flow.google/generated/new-video.mp4?token=signed";
   videos.push(newVideo);

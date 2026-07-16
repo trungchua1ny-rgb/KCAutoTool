@@ -1763,7 +1763,9 @@ function getCompletedVideos() {
     if (!isVisible(video)) return false;
     const src = videoSrcKey(video);
     const rect = video.getBoundingClientRect();
-    return /^(?:https?:|blob:)/.test(src) && rect.width >= 240 && rect.height >= 120;
+    // Flow compresses result cards substantially in a split-screen window.
+    // A real 16:9 result can be around 160x90 even though it is fully ready.
+    return /^(?:https?:|blob:)/.test(src) && rect.width >= 96 && rect.height >= 54;
   });
 }
 
@@ -1789,10 +1791,16 @@ function videoSrcKey(video) {
 }
 
 function videoIdentityKeys(video) {
+  const sources = videoSourceCandidates(video);
+  const preferredSource = sources.find((value) => /^https?:/i.test(value)) || sources[0] || "";
+  // A shared placeholder/poster must not make a new signed HTTPS result look
+  // old. Keep poster identity only for blob-only players, where it prevents a
+  // virtualized old card receiving a new blob URL from becoming a false hit.
   const values = [
-    ...videoSourceCandidates(video),
-    video.poster,
-    video.getAttribute("poster"),
+    preferredSource,
+    ...(/^blob:/i.test(preferredSource)
+      ? [video.poster, video.getAttribute("poster")]
+      : []),
   ].filter((value) => typeof value === "string" && value.trim());
   const keys = new Set();
   for (const value of values) {
@@ -1816,12 +1824,18 @@ function videoBaselineSnapshot() {
 
 function checkForNewVideo(baselineValues) {
   const baseline = new Set(Array.isArray(baselineValues) ? baselineValues : []);
-  const fresh = getCompletedVideos().filter((video) => {
+  const completed = getCompletedVideos();
+  const fresh = completed.filter((video) => {
     const keys = videoIdentityKeys(video);
     return keys.length > 0 && !keys.some((key) => baseline.has(key));
   });
   if (fresh.length === 0) {
-    return { ok: true, found: false, visibleVideos: getCompletedVideos().length };
+    return {
+      ok: true,
+      found: false,
+      visibleVideos: completed.length,
+      rejectedVideos: completed.length,
+    };
   }
   // Flow appends the newest generation after older result cards. Taking the
   // final fresh video avoids selecting an older card remounted by virtualization.
@@ -1831,6 +1845,8 @@ function checkForNewVideo(baselineValues) {
     found: true,
     src: videoSrcKey(newest),
     identity: videoIdentityKeys(newest).join("|"),
+    visibleVideos: completed.length,
+    rejectedVideos: completed.length - fresh.length,
   };
 }
 
