@@ -1976,12 +1976,18 @@ async function clickViewerDownload() {
     downloadButton.getAttribute("aria-disabled") === "true" ||
     downloadButton.hasAttribute("disabled"),
   );
-  clickFully(downloadButton);
+  // Download is not an ordinary UI action: clickFully dispatches a synthetic
+  // click and then calls HTMLElement.click(), which can start two downloads.
+  // While Flow is rendering we only observe the disabled button. Once it is
+  // enabled, issue exactly one native DOM click and let the background worker
+  // wait for chrome.downloads.onCreated before doing anything else.
+  if (!disabled) downloadButton.click();
   return {
     ok: true,
     viewerOpen: Boolean(findVideoViewerButton("done")),
     buttonFound: true,
     disabled,
+    clicked: !disabled,
   };
 }
 
@@ -1990,7 +1996,7 @@ async function clickViewerDownloadAndClose() {
   if (!downloadButton || videoViewerState().downloadReady !== true) {
     return { ok: false, error: "Video trong viewer chưa sẵn sàng để tải xuống." };
   }
-  clickFully(downloadButton);
+  downloadButton.click();
   await sleep(500);
   const doneButton = await waitUntil(() => findVideoViewerButton("done"), 2_000);
   if (doneButton) {
@@ -2024,7 +2030,7 @@ async function startNativeVideoDownload(baselineValues) {
     if (!downloadButton) {
       return { ok: false, error: "Đã mở video mới nhưng không tìm thấy nút Tải xuống của Flow." };
     }
-    clickFully(downloadButton);
+    downloadButton.click();
     await sleep(500);
     return {
       ok: true,

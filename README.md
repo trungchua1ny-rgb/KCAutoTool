@@ -162,6 +162,8 @@ Error Center groups DOM, response, timeout, quota, and extension-connection
 failures. Extension version `2.40.0` starts looking immediately after video submit for the in-progress `a > div` card containing `play_circle` plus any numeric percentage, locks its anchor as soon as it appears, and clicks that render result every two seconds until its viewer opens. After another five seconds it retries native `Tải xuống` every two seconds until Chrome creates the download, waits for the file, and clicks `Xong`. Direct signed HTTPS and blob conversion remain fallbacks. It retains single-popup `VIDEO_FRAMES` / `VIDEO_REFERENCES` configuration, clean-composer handling, duration-aware pacing, bounded continuation references, and Start-frame-only video generation; reload
 the unpacked extension before using the production queue.
 
+Extension version `2.41.0` prevents duplicate native video files by polling only the disabled state of the viewer's download button. It clicks the button exactly once when enabled, waits for Chrome to register and finish that same download, and only then closes the viewer.
+
 Extension version `2.32.0` also adds **Sửa chính sách** beside a failed image or video prompt. The action stops both direct Flow work and the production queue, asks ChatGPT for one policy-safe replacement without evasion, validates and saves it, resets the failed scene, then resumes production from that exact prompt. If rewriting or validation fails, the original prompt remains and the queue stays stopped.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without

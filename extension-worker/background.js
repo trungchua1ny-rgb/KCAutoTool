@@ -359,8 +359,7 @@ async function downloadNewestVideoThroughFlow(tabId, videoBaseline, payload, job
     );
     let item = null;
     if (viewerAlreadyOpen) {
-      sendJobProgress(jobId, "generating", "Viewer đã mở; chờ 5 giây trước khi bắt đầu bấm Download");
-      await pause(5_000);
+      sendJobProgress(jobId, "generating", "Viewer đã mở; kiểm tra nút Download mỗi 2 giây và chỉ bấm một lần khi nút sẵn sàng");
       const deadline = Date.now() + 600_000;
       let attempt = 0;
       while (!capturedItem && Date.now() < deadline) {
@@ -378,11 +377,25 @@ async function downloadNewestVideoThroughFlow(tabId, videoBaseline, payload, job
         sendJobProgress(
           jobId,
           "downloading",
-          `Đang thử nút Tải xuống trong viewer · lần ${attempt}${response?.disabled ? " · nút còn khóa" : ""}`,
+          response?.disabled
+            ? `Đang kiểm tra nút Tải xuống · lần ${attempt} · nút còn khóa`
+            : response?.clicked
+              ? "Nút Tải xuống đã sẵn sàng; đã bấm đúng một lần và đang chờ Chrome lưu file"
+              : `Đang kiểm tra nút Tải xuống · lần ${attempt} · nút chưa xuất hiện`,
         );
+        if (response?.clicked) {
+          item = capturedItem || await Promise.race([createdPromise, pause(30_000).then(() => null)]);
+          if (!item) {
+            const recent = await chrome.downloads.search({ orderBy: ["-startTime"], limit: 50 });
+            item = recent.find((entry) => isNativeFlowVideoDownload(entry, knownIds, startedAt)) || null;
+          }
+          if (!item) {
+            throw new Error("Chrome không ghi nhận lượt tải video sau một lần bấm nút Flow");
+          }
+          break;
+        }
         const remaining = Math.max(0, 2_000 - (Date.now() - attemptStartedAt));
-        item = capturedItem || await Promise.race([createdPromise, pause(remaining).then(() => null)]);
-        if (item) break;
+        await pause(remaining);
       }
     } else {
       const response = await sendImageToFlowTab(tabId, {

@@ -24,6 +24,7 @@ Chat worker profile. The worker processes one timeline at a time and supports
 the protocol `STOP` message.
 
 Version `2.40.0` starts looking immediately after Flow accepts the video prompt for an in-progress `a > div` card containing `play_circle` and any numeric percentage from `0%` to `100%`. The first time it appears the worker clicks it, then retries every two seconds using the locked anchor. After the viewer opens it waits five seconds, retries native `Tải xuống` every two seconds, waits for the file, and clicks `Xong`.
+Version `2.41.0` removes duplicate native downloads: while the viewer button is disabled the worker only checks its state every two seconds; when enabled it performs exactly one DOM click, waits for Chrome to register and finish that download, then clicks `Xong`.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from

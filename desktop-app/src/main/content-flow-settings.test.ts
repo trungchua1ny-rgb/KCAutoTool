@@ -413,7 +413,7 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   const nativeDownloadResult = await internals.startNativeVideoDownload(videoBaseline);
   assert.equal(nativeDownloadResult.ok, true);
   assert.equal(videoTrigger.clickCount > 0, true);
-  assert.equal(nativeDownload.clickCount > 0, true);
+  assert.equal(nativeDownload.clickCount, 1);
   assert.equal(done.clickCount > 0, true);
 
   const renderAnchor = new FakeRenderAnchor();
@@ -433,9 +433,16 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   assert.equal(completedRenderTrigger.clickCount > 0, true);
   assert.equal(internals.videoViewerState().downloadReady, true);
   nativeDownload.setAttribute("disabled", "");
+  const downloadCountBeforeDisabledCheck = nativeDownload.clickCount;
   const disabledDownloadAttempt = await internals.clickViewerDownload();
   assert.equal(disabledDownloadAttempt.ok, true);
   assert.equal(disabledDownloadAttempt.disabled, true);
+  assert.equal(disabledDownloadAttempt.clicked, false);
+  assert.equal(nativeDownload.clickCount, downloadCountBeforeDisabledCheck);
+  nativeDownload.removeAttribute("disabled");
+  const enabledDownloadAttempt = await internals.clickViewerDownload();
+  assert.equal(enabledDownloadAttempt.clicked, true);
+  assert.equal(nativeDownload.clickCount, downloadCountBeforeDisabledCheck + 1);
 
   const gullitAsset = new FakeControl("asset-card", "", { alt: "Gullit.png" });
   assert.equal(
