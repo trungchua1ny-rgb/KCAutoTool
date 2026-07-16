@@ -369,6 +369,13 @@ export class WorkerServer {
       previous.socket.close(4001, "Replaced by newer worker");
     }
 
+    // A browser service worker can outlive the desktop process. After an app
+    // restart it may still hold a job that no server instance can identify.
+    // STOP without a jobId clears only that orphaned worker-local operation.
+    if (client.socket.readyState === WebSocket.OPEN) {
+      client.socket.send(JSON.stringify({ type: "STOP" }));
+    }
+
     this.statuses[registration.role] = {
       role: registration.role,
       connected: true,

@@ -47,6 +47,7 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
   try {
     await waitForOpen(socket);
     const pingPromise = waitForMessage(socket, "PING");
+    const orphanResetPromise = waitForMessage(socket, "STOP");
     socket.send(
       JSON.stringify({
         type: "REGISTER",
@@ -55,6 +56,8 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
       workerVersion: "2.32.0",
       }),
     );
+    const orphanReset = await orphanResetPromise;
+    assert.equal(orphanReset.jobId, undefined);
     const ping = await pingPromise;
     socket.send(JSON.stringify({ type: "PONG", timestamp: ping.timestamp }));
     assert.equal(server.getStatuses()["chat-worker"].connected, true);
