@@ -1163,14 +1163,12 @@ async function prepareVideoPromptForDebugger() {
   }
   const rect = input.getBoundingClientRect();
   const videoBaseline = videoBaselineSnapshot();
-  const videoCardBaseline = videoRenderCardSnapshot();
   window.__flowx_video_baseline = videoBaseline;
   return {
     ok: true,
     x: Math.round(rect.left + rect.width / 2),
     y: Math.round(rect.top + rect.height / 2),
     videoBaseline: [...videoBaseline],
-    videoCardBaseline: [...videoCardBaseline],
   };
 }
 
@@ -1843,28 +1841,12 @@ function videoRenderCards() {
   });
 }
 
-function videoRenderCardSnapshot() {
-  return new Set(videoRenderCards().map((entry) => entry.key));
-}
-
-async function findNewRenderingVideoCard(baselineValues) {
-  const baseline = new Set(Array.isArray(baselineValues) ? baselineValues : []);
-  const entry = await waitUntil(() => {
-    const fresh = videoRenderCards().filter((candidate) => !baseline.has(candidate.key));
-    return fresh.at(-1) || null;
-  }, 20_000);
-  if (!entry) {
-    return { ok: false, error: "Không tìm thấy card video đang render mới sau khi gửi prompt." };
-  }
-  return { ok: true, cardKey: entry.key };
-}
-
-async function clickRenderingVideoCard(cardKey) {
-  const entry = videoRenderCards().find((candidate) => candidate.key === cardKey);
-  if (!entry) return { ok: false, cardFound: false, error: "Không còn tìm thấy card video đang render." };
+async function clickLatestVideoRenderCard() {
+  const entry = videoRenderCards().at(-1);
+  if (!entry) return { ok: false, cardFound: false, error: "Không tìm thấy card media cuối cùng trên lưới Flow." };
   clickFully(entry.trigger);
   await sleep(250);
-  return { ok: true, cardFound: true };
+  return { ok: true, cardFound: true, cardKey: entry.key };
 }
 
 function freshCompletedVideos(baselineValues) {
@@ -2116,9 +2098,7 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     checkForNewVideo,
     videoBaselineSnapshot,
     startNativeVideoDownload,
-    videoRenderCardSnapshot,
-    findNewRenderingVideoCard,
-    clickRenderingVideoCard,
+    clickLatestVideoRenderCard,
     videoViewerState,
     clickViewerDownload,
     clickViewerDownloadAndClose,
@@ -2426,15 +2406,8 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
       return true;
     }
 
-    if (msg.type === "FLOWX_FIND_NEW_RENDERING_VIDEO") {
-      findNewRenderingVideoCard(msg.videoCardBaseline)
-        .then((result) => sendResponse(result))
-        .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
-      return true;
-    }
-
-    if (msg.type === "FLOWX_CLICK_RENDERING_VIDEO_CARD") {
-      clickRenderingVideoCard(String(msg.cardKey || ""))
+    if (msg.type === "FLOWX_CLICK_LATEST_VIDEO_CARD") {
+      clickLatestVideoRenderCard()
         .then((result) => sendResponse(result))
         .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true;

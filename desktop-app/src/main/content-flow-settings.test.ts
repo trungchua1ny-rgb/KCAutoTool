@@ -180,9 +180,7 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     checkForNewVideo: (baseline: string[]) => Record<string, unknown>;
     videoBaselineSnapshot: () => Set<string>;
     startNativeVideoDownload: (baseline: string[]) => Promise<Record<string, unknown>>;
-    videoRenderCardSnapshot: () => Set<string>;
-    findNewRenderingVideoCard: (baseline: string[]) => Promise<Record<string, unknown>>;
-    clickRenderingVideoCard: (cardKey: string) => Promise<Record<string, unknown>>;
+    clickLatestVideoRenderCard: () => Promise<Record<string, unknown>>;
     videoViewerState: () => Record<string, unknown>;
     clickViewerDownload: () => Promise<Record<string, unknown>>;
   };
@@ -382,16 +380,13 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
 
   const oldRenderTrigger = new FakeControl("old-render", "", {});
   videoCards.push(new FakeVideoCard("fe_id_old", oldRenderTrigger));
-  const renderCardBaseline = [...internals.videoRenderCardSnapshot()];
   const newRenderTrigger = new FakeControl("new-render", "", {});
   const newRenderCard = new FakeVideoCard("fe_id_new", newRenderTrigger);
   videoCards.push(newRenderCard);
-  const trackedRenderCard = await internals.findNewRenderingVideoCard(renderCardBaseline);
-  assert.equal(trackedRenderCard.ok, true);
-  assert.equal(trackedRenderCard.cardKey, "fe_id_new");
-  assert.equal(newRenderTrigger.clickCount, 0);
-  const clickedRenderCard = await internals.clickRenderingVideoCard("fe_id_new");
+  const clickedRenderCard = await internals.clickLatestVideoRenderCard();
   assert.equal(clickedRenderCard.ok, true);
+  assert.equal(clickedRenderCard.cardKey, "fe_id_new");
+  assert.equal(oldRenderTrigger.clickCount, 0);
   assert.equal(newRenderTrigger.clickCount > 0, true);
   assert.equal(internals.videoViewerState().downloadReady, true);
   nativeDownload.setAttribute("disabled", "");
