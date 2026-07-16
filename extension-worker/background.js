@@ -197,6 +197,17 @@ function isTimelinePayload(payload) {
   );
 }
 
+function isPolicyRewritePayload(payload) {
+  return Boolean(
+    payload &&
+    /^scene-\d{3,4}$/.test(payload.sceneId || "") &&
+    (payload.mediaType === "image" || payload.mediaType === "video") &&
+    typeof payload.prompt === "string" &&
+    payload.prompt.trim() &&
+    typeof payload.policyError === "string"
+  );
+}
+
 function isSceneJobPayload(payload) {
   const validVideoSettings = payload?.mediaType !== "video" || (
     payload.videoSettings &&
@@ -1199,22 +1210,23 @@ async function generateFlowVideo(tabId, payload, jobId) {
 
 async function handleTimelineJob(message) {
   const { jobId, action, payload } = message;
-  if (typeof jobId !== "string" || action !== "GENERATE_TIMELINE") {
+  const rewritingPolicy = action === "REWRITE_POLICY_PROMPT";
+  if (typeof jobId !== "string" || (action !== "GENERATE_TIMELINE" && !rewritingPolicy)) {
     if (typeof jobId === "string") {
       sendJobError(jobId, "Unsupported or malformed job", "INVALID_JOB");
     }
     return;
   }
   if (connection.registration?.role !== "chat-worker") {
-    sendJobError(jobId, "GENERATE_TIMELINE requires chat-worker", "WRONG_ROLE");
+    sendJobError(jobId, `${action} requires chat-worker`, "WRONG_ROLE");
     return;
   }
   if (activeJob) {
     sendJobError(jobId, "Worker is already processing another job", "INVALID_JOB");
     return;
   }
-  if (!isTimelinePayload(payload)) {
-    sendJobError(jobId, "SRT and script text are required", "INVALID_JOB");
+  if (rewritingPolicy ? !isPolicyRewritePayload(payload) : !isTimelinePayload(payload)) {
+    sendJobError(jobId, rewritingPolicy ? "Prompt sửa chính sách không hợp lệ" : "SRT and script text are required", "INVALID_JOB");
     return;
   }
 
@@ -1243,11 +1255,15 @@ async function handleTimelineJob(message) {
   const job = { kind: "timeline", jobId, tabId: tab.id, stopping: false };
   activeJob = job;
   startActiveJobHeartbeat(jobId);
-  sendJobProgress(jobId, "preparing", "Đang chuẩn bị yêu cầu cho ChatGPT");
+  sendJobProgress(
+    jobId,
+    "preparing",
+    rewritingPolicy ? `Đang chuẩn bị sửa prompt ${payload.sceneId} với ChatGPT` : "Đang chuẩn bị yêu cầu cho ChatGPT",
+  );
 
   try {
     const response = await sendTimelineToChatTab(tab.id, {
-      type: "FLOWX_GENERATE_TIMELINE",
+      type: rewritingPolicy ? "FLOWX_REWRITE_POLICY_PROMPT" : "FLOWX_GENERATE_TIMELINE",
       jobId,
       tabId: tab.id,
       payload,
@@ -1436,7 +1452,7 @@ async function handleStop(message) {
 
 function handleDesktopMessage(message) {
   if (message?.type === "JOB") {
-    if (message.action === "GENERATE_TIMELINE") {
+    if (message.action === "GENERATE_TIMELINE" || message.action === "REWRITE_POLICY_PROMPT") {
       void handleTimelineJob(message);
     } else {
       void handleSceneJob(message);

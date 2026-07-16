@@ -75,6 +75,8 @@ test("splits a long SRT into batches of six 8-second scenes", async () => {
       result: { scenes: Array<Record<string, unknown>>; visualBible?: unknown },
       batch: TimelineBatch & { index: number },
     ) => void;
+    buildPolicyRewritePrompt: (payload: Record<string, unknown>) => string;
+    parsePolicyRewriteResponse: (text: string, mediaType: "image" | "video") => { prompt: string };
   };
   const batches = internals.createTimelineBatches(`1
 00:00:00,000 --> 00:00:04,000
@@ -115,6 +117,23 @@ The hero crosses the hall.`;
   );
   assert.deepEqual(Array.from(beatPlan, (beat) => beat.durationSeconds), [8, 6, 4]);
   assert.equal(beatPlan.at(-1)?.endMs, 18_000);
+  const rewriteRequest = internals.buildPolicyRewritePrompt({
+    sceneId: "scene-004",
+    mediaType: "video",
+    prompt: "Unsafe original prompt",
+    policyError: "Safety policy",
+    timeStart: "00:00:24,000",
+    timeEnd: "00:00:32,000",
+    pairedPrompt: "Opening frame context",
+    visualBible: { aspectRatio: "16:9" },
+  });
+  assert.match(rewriteRequest, /policy_safe_prompt_rewrite/);
+  assert.match(rewriteRequest, /Do not evade, disguise, encode/);
+  const safeVideoPrompt = `STARTING STATE: a worried figure pauses beside a closed doorway in a quiet hallway. PRIMARY MOTION: the figure steps backward while keeping both hands visible and turning toward a distant sound. REACTION: concern changes into alert attention through the eyes, eyebrows, head angle, and guarded posture. ENVIRONMENTAL MOTION: a loose curtain moves gently beside the window while soft dust crosses the light. CAMERA MOTION: a steady medium tracking shot follows the retreat at natural speed without sudden movement. END FRAME: the figure stops safely near the hallway corner and looks toward the unseen source.`;
+  assert.equal(
+    internals.parsePolicyRewriteResponse(JSON.stringify({ prompt: safeVideoPrompt }), "video").prompt,
+    safeVideoPrompt,
+  );
   assert.throws(() => internals.validateBeatPlanningResult([
     { timeStart: "00:00:00,000", timeEnd: "00:00:08,000", durationSeconds: 8, chainId: null, chainRole: "single" },
     { timeStart: "00:00:10,000", timeEnd: "00:00:18,000", durationSeconds: 8, chainId: null, chainRole: "single" },

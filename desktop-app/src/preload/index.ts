@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import {
   TIMELINE_CANCEL_CHANNEL,
   TIMELINE_GENERATE_CHANNEL,
+  PROMPT_POLICY_REWRITE_CHANNEL,
   TIMELINE_PROGRESS_CHANNEL,
   TIMELINE_SESSION_CLEAR_CHANNEL,
   TIMELINE_SESSION_LOAD_CHANNEL,
@@ -17,6 +18,7 @@ import {
 import {
   SCENE_JOB_PROGRESS_CHANNEL,
   SCENE_JOB_RUN_CHANNEL,
+  SCENE_JOB_CANCEL_CHANNEL,
   type SceneJobProgress,
 } from "../shared/scene-job";
 import {
@@ -59,6 +61,7 @@ const bridge: KCAutoToolBridge = {
   },
   timeline: {
     generate: (input) => ipcRenderer.invoke(TIMELINE_GENERATE_CHANNEL, input),
+    rewritePolicyPrompt: (input) => ipcRenderer.invoke(PROMPT_POLICY_REWRITE_CHANNEL, input),
     cancel: () => ipcRenderer.invoke(TIMELINE_CANCEL_CHANNEL),
     loadSession: () => ipcRenderer.invoke(TIMELINE_SESSION_LOAD_CHANNEL),
     saveSession: (input) => ipcRenderer.invoke(TIMELINE_SESSION_SAVE_CHANNEL, input),
@@ -74,6 +77,7 @@ const bridge: KCAutoToolBridge = {
   },
   sceneJobs: {
     run: (input) => ipcRenderer.invoke(SCENE_JOB_RUN_CHANNEL, input),
+    cancel: () => ipcRenderer.invoke(SCENE_JOB_CANCEL_CHANNEL),
     onProgress: (callback) => {
       const listener = (
         _event: Electron.IpcRendererEvent,

@@ -23,7 +23,7 @@ For `GENERATE_TIMELINE`, keep a logged-in ChatGPT conversation open in the
 Chat worker profile. The worker processes one timeline at a time and supports
 the protocol `STOP` message.
 
-Version `2.31.0` starts video downloads directly from Flow's signed HTTPS media URL when the player exposes one. It prefers that URL over `currentSrc=blob:`, avoiding the previous full-video fetch, Base64 conversion, extension-message transfer, and second browser write before a download could begin. Blob conversion remains as a compatibility fallback. It retains 2.30.0's recoverable video polling, full baseline, stable-result confirmation, and old-result rejection.
+Version `2.32.0` adds policy-safe prompt repair through the ChatGPT worker. From a failed prompt row, KC Auto Tool can stop Flow and the production queue, submit only that scene prompt plus its policy error, timeline, paired prompt, and Visual Bible to ChatGPT, validate the replacement JSON and required visual sections, replace the failed prompt, reset its dependent media state, and resume the queue from that exact scene. The rewrite explicitly forbids policy evasion and uses non-graphic visual storytelling where needed. It retains 2.31.0's direct HTTPS video downloads and blob fallback.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from

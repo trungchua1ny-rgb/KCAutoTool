@@ -513,6 +513,16 @@ body {
   padding: 8px;
 }
 
+.scene-prompt-cell {
+  display: grid;
+  gap: 6px;
+}
+
+.policy-repair-button {
+  justify-self: start;
+  white-space: nowrap;
+}
+
 .scene-prompt:focus,
 .scene-alternative-editor textarea:focus {
   outline: 2px solid #167c5a;

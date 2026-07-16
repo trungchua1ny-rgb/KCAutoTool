@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain } from "electron";
 import {
   SCENE_JOB_PROGRESS_CHANNEL,
+  SCENE_JOB_CANCEL_CHANNEL,
   SCENE_JOB_RUN_CHANNEL,
   normalizeSceneJobInput,
   type SceneJobProgress,
@@ -18,6 +19,7 @@ export function registerSceneJobIpcHandlers(
   server: WorkerServer,
   characterStore: CharacterStore,
 ): void {
+  ipcMain.handle(SCENE_JOB_CANCEL_CHANNEL, () => server.stopActiveJob("flow-worker"));
   ipcMain.handle(SCENE_JOB_RUN_CHANNEL, async (_event, value: unknown) => {
     const input = normalizeSceneJobInput(value);
     const refImages = input.mediaType === "image"

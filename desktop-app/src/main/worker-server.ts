@@ -5,6 +5,8 @@ import {
   validateGeneratedVisualBible,
   validateTimelineCoverage,
   type JobProgressStatus,
+  type PolicyPromptRewriteInput,
+  type PolicyPromptRewriteResult,
   type TimelineGenerateInput,
   type TimelineProgress,
   type TimelineResult,
@@ -64,9 +66,9 @@ interface RegisterMessage {
 interface PendingJob {
   id: string;
   role: WorkerRole;
-  action: "GENERATE_TIMELINE" | "GENERATE_IMAGE" | "GENERATE_VIDEO";
+  action: "GENERATE_TIMELINE" | "REWRITE_POLICY_PROMPT" | "GENERATE_IMAGE" | "GENERATE_VIDEO";
   client: ClientState;
-  input: TimelineGenerateInput | BoundSceneJobInput;
+  input: TimelineGenerateInput | PolicyPromptRewriteInput | BoundSceneJobInput;
   timer: NodeJS.Timeout;
   ackTimer: NodeJS.Timeout;
   onProgress: (progress: any) => void;
@@ -101,6 +103,37 @@ function supportsSceneJobs(value: string | null): boolean {
   const parts = value.split(".").map((part) => Number.parseInt(part, 10) || 0);
   const current = (parts[0] || 0) * 1_000_000 + (parts[1] || 0) * 1_000 + (parts[2] || 0);
   return current >= 2_021_000;
+}
+
+function supportsPolicyPromptRewrite(value: string | null): boolean {
+  if (!value) return false;
+  const parts = value.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const current = (parts[0] || 0) * 1_000_000 + (parts[1] || 0) * 1_000 + (parts[2] || 0);
+  return current >= 2_032_000;
+}
+
+function normalizePolicyPromptRewriteResult(
+  value: unknown,
+  input: PolicyPromptRewriteInput,
+): PolicyPromptRewriteResult {
+  if (!value || typeof value !== "object") {
+    throw new Error("ChatGPT không trả về prompt thay thế hợp lệ");
+  }
+  const prompt = typeof (value as Record<string, unknown>).prompt === "string"
+    ? String((value as Record<string, unknown>).prompt).trim()
+    : "";
+  const wordCount = prompt ? prompt.split(/\s+/).length : 0;
+  const requiredSections = input.mediaType === "image"
+    ? ["SUBJECT AND ACTION:", "EMOTION AND BODY LANGUAGE:", "SETTING AND BACKGROUND:", "DEPTH LAYERS:", "CAMERA AND COMPOSITION:"]
+    : ["STARTING STATE:", "PRIMARY MOTION:", "REACTION:", "ENVIRONMENTAL MOTION:", "CAMERA MOTION:", "END FRAME:"];
+  if (
+    wordCount < 50 ||
+    wordCount > 180 ||
+    requiredSections.some((section) => !prompt.toUpperCase().includes(section))
+  ) {
+    throw new Error("Prompt ChatGPT sửa lại không đạt cấu trúc hoặc độ dài yêu cầu");
+  }
+  return { prompt };
 }
 
 function parseRegisterMessage(value: unknown): RegisterMessage | null {
@@ -205,6 +238,13 @@ export class WorkerServer {
     onProgress: (progress: TimelineProgress) => void = () => {},
   ): Promise<TimelineResult> {
     return this.dispatchTimelineJob(input, onProgress);
+  }
+
+  rewritePolicyPrompt(
+    input: PolicyPromptRewriteInput,
+    onProgress: (progress: TimelineProgress) => void = () => {},
+  ): Promise<PolicyPromptRewriteResult> {
+    return this.dispatchPolicyPromptRewrite(input, onProgress);
   }
 
   runSceneJob(
@@ -479,6 +519,64 @@ export class WorkerServer {
     });
   }
 
+  private dispatchPolicyPromptRewrite(
+    input: PolicyPromptRewriteInput,
+    onProgress: (progress: TimelineProgress) => void,
+  ): Promise<PolicyPromptRewriteResult> {
+    const role: WorkerRole = "chat-worker";
+    const client = this.clientsByRole.get(role);
+    if (!client || client.socket.readyState !== WebSocket.OPEN) {
+      return Promise.reject(
+        new WorkerJobError("ChatGPT worker chưa kết nối", "NOT_LOGGED_IN", true),
+      );
+    }
+    if (!supportsPolicyPromptRewrite(client.workerVersion)) {
+      return Promise.reject(
+        new WorkerJobError("KC Dev hiện tại chưa hỗ trợ sửa prompt chính sách. Hãy Reload extension.", "INVALID_JOB"),
+      );
+    }
+    if (this.activeJobsByRole.has(role)) {
+      return Promise.reject(
+        new WorkerJobError("ChatGPT worker đang xử lý công việc khác", "INVALID_JOB"),
+      );
+    }
+
+    const jobId = `policy-rewrite-${input.sceneId}-${randomUUID()}`;
+    return new Promise<PolicyPromptRewriteResult>((resolve, reject) => {
+      const job: PendingJob = {
+        id: jobId,
+        role,
+        action: "REWRITE_POLICY_PROMPT",
+        client,
+        input,
+        onProgress,
+        resolve,
+        reject,
+        ackTimer: setTimeout(() => {
+          this.finishJob(
+            job,
+            new WorkerJobError("ChatGPT extension không phản hồi yêu cầu sửa prompt", "INTERNAL_ERROR", true),
+          );
+        }, this.options.jobAckTimeoutMs),
+        timer: setTimeout(() => {
+          this.finishJob(job, new WorkerJobError("Hết thời gian chờ ChatGPT sửa prompt", "TIMEOUT", true));
+          if (client.socket.readyState === WebSocket.OPEN) {
+            client.socket.send(JSON.stringify({ type: "STOP", jobId }));
+          }
+        }, this.options.jobTimeoutMs),
+      };
+      this.pendingJobs.set(jobId, job);
+      this.activeJobsByRole.set(role, job);
+      onProgress({ jobId, status: "queued", message: `Đang gửi prompt lỗi ${input.sceneId} tới ChatGPT` });
+      client.socket.send(
+        JSON.stringify({ type: "JOB", jobId, action: job.action, payload: input }),
+        (error) => {
+          if (error) this.finishJob(job, new WorkerJobError(error.message, "INTERNAL_ERROR", true));
+        },
+      );
+    });
+  }
+
   private dispatchSceneJob(
     input: BoundSceneJobInput,
     onProgress: (progress: SceneJobProgress) => void,
@@ -622,6 +720,15 @@ export class WorkerServer {
         validateGeneratedVisualBible(result.visualBible);
         validateTimelineCoverage(result, input.srtText);
         this.finishJob(job, null, result);
+      } else if (job.action === "REWRITE_POLICY_PROMPT") {
+        this.finishJob(
+          job,
+          null,
+          normalizePolicyPromptRewriteResult(
+            message.result,
+            job.input as PolicyPromptRewriteInput,
+          ),
+        );
       } else {
         const input = job.input as BoundSceneJobInput;
         this.finishJob(
@@ -645,7 +752,7 @@ export class WorkerServer {
   private finishJob(
     job: PendingJob,
     error: Error | null,
-    result?: TimelineResult | SceneJobResult,
+    result?: TimelineResult | PolicyPromptRewriteResult | SceneJobResult,
   ): void {
     if (!this.pendingJobs.has(job.id)) return;
 

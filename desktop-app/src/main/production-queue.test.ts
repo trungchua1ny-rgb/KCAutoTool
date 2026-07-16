@@ -6,7 +6,7 @@ import test from "node:test";
 import { CharacterStore } from "./character-store";
 import { ProjectDatabase } from "./project-database";
 import { ProjectRepositories } from "./project-repositories";
-import { ProductionQueue } from "./production-queue";
+import { classifyQueueError, ProductionQueue } from "./production-queue";
 import { syncTimelineSessionToProject } from "./production-session-sync";
 import { TimelineSessionStore } from "./timeline-session-store";
 import { WorkerJobError } from "./worker-server";
@@ -57,6 +57,14 @@ function statuses(connected: boolean) {
   });
   return { "chat-worker": status("chat-worker"), "flow-worker": status("flow-worker") };
 }
+
+test("classifies Flow safety blocks as non-retryable policy violations", () => {
+  assert.deepEqual(classifyQueueError(new Error("Google Flow blocked this prompt because of its safety policy")), {
+    category: "flow_policy_violation",
+    message: "Google Flow blocked this prompt because of its safety policy",
+    retryable: false,
+  });
+});
 
 class FakeQueueWorker {
   readonly calls: string[] = [];

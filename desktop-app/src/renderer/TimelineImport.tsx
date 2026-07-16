@@ -9,6 +9,7 @@ import {
   Play,
   RotateCcw,
   Save,
+  ShieldCheck,
   Sparkles,
   Square,
   Trash2,
@@ -238,6 +239,9 @@ function TimelineTable({
   onResumeFrom,
   onApprove,
   onReject,
+  onRepairPolicy,
+  repairingPromptKey,
+  chatConnected,
 }: {
   scenes: Scene[];
   errors: Record<string, string>;
@@ -252,6 +256,9 @@ function TimelineTable({
   onResumeFrom: (sceneId: string, mediaType: SceneMediaType) => void;
   onApprove: (sceneId: string, mediaType: SceneMediaType) => void;
   onReject: (sceneId: string, mediaType: SceneMediaType) => void;
+  onRepairPolicy: (sceneId: string, mediaType: SceneMediaType) => void;
+  repairingPromptKey: string;
+  chatConnected: boolean;
 }) {
   const [alternative, setAlternative] = useState<{ sceneId: string; mediaType: SceneMediaType } | null>(null);
   const [draft, setDraft] = useState("");
@@ -354,7 +361,21 @@ function TimelineTable({
                   </div>
                 </td>
                 <td>
-                  <textarea className="scene-prompt" aria-label={`Prompt ảnh scene ${scene.order}`} value={scene.imagePrompt} onChange={(event) => onPromptChange(scene.id, "image", event.target.value)} />
+                  <div className="scene-prompt-cell">
+                    <textarea className="scene-prompt" aria-label={`Prompt ảnh scene ${scene.order}`} value={scene.imagePrompt} onChange={(event) => onPromptChange(scene.id, "image", event.target.value)} />
+                    {(scene.imageStatus === "error" || errors[`${scene.id}:image`]) && (
+                      <button
+                        className="button secondary compact policy-repair-button"
+                        type="button"
+                        disabled={!chatConnected || Boolean(repairingPromptKey)}
+                        title={chatConnected ? "Dừng hàng đợi, nhờ ChatGPT sửa prompt rồi chạy tiếp từ scene này" : "ChatGPT worker chưa kết nối"}
+                        onClick={() => onRepairPolicy(scene.id, "image")}
+                      >
+                        {repairingPromptKey === `${scene.id}:image` ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />}
+                        Sửa chính sách
+                      </button>
+                    )}
+                  </div>
                 </td>
                 <td>
                   <SceneStatusCell
@@ -369,7 +390,21 @@ function TimelineTable({
                   />
                 </td>
                 <td>
-                  <textarea className="scene-prompt" aria-label={`Prompt video scene ${scene.order}`} value={scene.videoPrompt} onChange={(event) => onPromptChange(scene.id, "video", event.target.value)} />
+                  <div className="scene-prompt-cell">
+                    <textarea className="scene-prompt" aria-label={`Prompt video scene ${scene.order}`} value={scene.videoPrompt} onChange={(event) => onPromptChange(scene.id, "video", event.target.value)} />
+                    {(scene.videoStatus === "error" || errors[`${scene.id}:video`]) && (
+                      <button
+                        className="button secondary compact policy-repair-button"
+                        type="button"
+                        disabled={!chatConnected || Boolean(repairingPromptKey)}
+                        title={chatConnected ? "Dừng hàng đợi, nhờ ChatGPT sửa prompt rồi chạy tiếp từ scene này" : "ChatGPT worker chưa kết nối"}
+                        onClick={() => onRepairPolicy(scene.id, "video")}
+                      >
+                        {repairingPromptKey === `${scene.id}:video` ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />}
+                        Sửa chính sách
+                      </button>
+                    )}
+                  </div>
                 </td>
                 <td>
                   <SceneStatusCell
@@ -443,6 +478,7 @@ function TimelineTable({
 
 const ERROR_CATEGORY_LABELS: Record<QueueErrorView["category"], string> = {
   dom_element_not_found: "Không tìm thấy phần tử Flow",
+  flow_policy_violation: "Vi phạm chính sách Flow",
   response_schema_invalid: "Phản hồi không hợp lệ",
   timeout_no_response: "Quá thời gian phản hồi",
   flow_quota_or_rate_limit: "Giới hạn Google Flow",
@@ -520,6 +556,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
   >("loading");
   const [queueSnapshot, setQueueSnapshot] = useState<ProductionQueueSnapshot | null>(null);
   const [queueCommandError, setQueueCommandError] = useState("");
+  const [repairingPromptKey, setRepairingPromptKey] = useState("");
   const sessionSaveVersion = useRef(0);
   const settledSceneJobs = useRef(new Set<string>());
   const loadedThumbnailPaths = useRef(new Set<string>());
@@ -887,6 +924,92 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     const bridge = window.flowx?.productionQueue;
     if (!bridge) return;
     void runQueueCommand(() => bridge.resumeFrom(sceneId, mediaType, DEFAULT_PROJECT_ID));
+  };
+
+  const repairPolicyPromptAndResume = async (
+    sceneId: string,
+    mediaType: SceneMediaType,
+  ) => {
+    const key = `${sceneId}:${mediaType}`;
+    if (repairingPromptKey) return;
+    const scene = scenes.find((entry) => entry.id === sceneId);
+    const timeline = window.flowx?.timeline;
+    const queue = window.flowx?.productionQueue;
+    if (!scene || !timeline || !queue || !chatConnected) {
+      setSceneErrors((current) => ({
+        ...current,
+        [key]: !chatConnected ? "ChatGPT worker chưa kết nối" : "Bridge sửa prompt chưa sẵn sàng",
+      }));
+      return;
+    }
+
+    setRepairingPromptKey(key);
+    setQueueCommandError("");
+    try {
+      const stopped = await queue.stopQueue();
+      setQueueSnapshot(stopped);
+      await window.flowx?.sceneJobs.cancel().catch(() => false);
+
+      const originalPrompt = mediaType === "image" ? scene.imagePrompt : scene.videoPrompt;
+      const pairedPrompt = mediaType === "image" ? scene.videoPrompt : scene.imagePrompt;
+      const queueError = queueSnapshot?.errors.find((item) =>
+        item.sceneId === sceneId && item.mediaType === mediaType
+      )?.message || "";
+      const rewritten = await timeline.rewritePolicyPrompt({
+        sceneId,
+        mediaType,
+        prompt: originalPrompt,
+        policyError: sceneErrors[key] || queueError || "Google Flow rejected this prompt under its safety policy.",
+        timeStart: scene.timeStart,
+        timeEnd: scene.timeEnd,
+        pairedPrompt,
+        visualBible,
+      });
+
+      const nextScenes = scenes.map((entry) => {
+        if (entry.id !== sceneId) return entry;
+        if (mediaType === "image") {
+          return {
+            ...entry,
+            imagePrompt: rewritten.prompt,
+            imageStatus: "pending" as const,
+            imageResultPath: "",
+            imageFlowAssetKey: "",
+            imageApproved: false,
+            videoStatus: "pending" as const,
+            videoResultPath: "",
+            videoApproved: false,
+            usedCharacterTokens: parseCharacterTokens(`${rewritten.prompt}\n${entry.videoPrompt}`),
+          };
+        }
+        return {
+          ...entry,
+          videoPrompt: rewritten.prompt,
+          imageApproved: entry.imageResultPath ? true : entry.imageApproved,
+          videoStatus: "pending" as const,
+          videoResultPath: "",
+          videoApproved: false,
+          usedCharacterTokens: parseCharacterTokens(`${entry.imagePrompt}\n${rewritten.prompt}`),
+        };
+      });
+      setScenes(nextScenes);
+      await timeline.saveSession({ scenes: nextScenes, visualBible });
+      setSceneErrors((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      const resumed = await queue.resumeFrom(sceneId, mediaType, DEFAULT_PROJECT_ID);
+      setQueueSnapshot(resumed);
+      setScenes((current) => applyQueueSnapshotToScenes(current, resumed));
+    } catch (caught) {
+      setSceneErrors((current) => ({
+        ...current,
+        [key]: `Không thể tự sửa prompt: ${errorMessage(caught)}. Hàng đợi vẫn đang dừng.`,
+      }));
+    } finally {
+      setRepairingPromptKey("");
+    }
   };
 
   const approveQueuedScene = (sceneId: string, mediaType: SceneMediaType) => {
@@ -1257,6 +1380,9 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
             onResumeFrom={resumeQueueFromScene}
             onApprove={approveQueuedScene}
             onReject={rejectQueuedScene}
+            onRepairPolicy={(sceneId, mediaType) => void repairPolicyPromptAndResume(sceneId, mediaType)}
+            repairingPromptKey={repairingPromptKey}
+            chatConnected={chatConnected}
           />
       ) : (
         <p className="empty-state timeline-empty">Chưa có dữ liệu scene.</p>

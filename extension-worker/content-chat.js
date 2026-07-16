@@ -914,6 +914,88 @@ ${batch.srtText}
     return { visualBible, scenes };
   }
 
+  function buildPolicyRewritePrompt(payload, previousError = "") {
+    const required = payload.mediaType === "image"
+      ? "SUBJECT AND ACTION:, EMOTION AND BODY LANGUAGE:, SETTING AND BACKGROUND:, DEPTH LAYERS:, CAMERA AND COMPOSITION:"
+      : "STARTING STATE:, PRIMARY MOTION:, REACTION:, ENVIRONMENTAL MOTION:, CAMERA MOTION:, END FRAME:";
+    return `JOB TYPE: policy_safe_prompt_rewrite
+
+Rewrite exactly one ${payload.mediaType} prompt that Google Flow rejected. Preserve the same source-grounded story beat, characters, setting, emotion, camera intent, continuity, and ${payload.timeStart}–${payload.timeEnd} timeline. Remove or soften only details likely to trigger a safety policy. Do not evade, disguise, encode, or work around safety rules. Replace unsafe graphic detail with non-graphic, implied, aftermath, reaction, distance, silhouette, or environmental storytelling as appropriate.
+
+Keep the prompt in English, 80–150 words, and retain these exact section labels in order: ${required}.
+Do not add dialogue, new characters, new events, copyrighted character imitation, or conflicting visual style. Do not repeat the global Visual Bible unless needed to resolve the unsafe wording.
+
+Google Flow error:
+${payload.policyError || "Policy violation"}
+
+Visual Bible:
+${JSON.stringify(payload.visualBible || {})}
+
+Paired scene prompt for context only:
+${payload.pairedPrompt || "(none)"}
+
+ORIGINAL PROMPT:
+${payload.prompt}
+
+Return JSON only, exactly: {"prompt":"rewritten prompt"}.${previousError ? `\nThe previous response was invalid: ${previousError}` : ""}`;
+  }
+
+  function parsePolicyRewriteResponse(text, mediaType) {
+    const candidates = [text.trim()];
+    for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+      candidates.push(match[1].trim());
+    }
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) candidates.push(text.slice(start, end + 1));
+    for (const candidate of candidates) {
+      try {
+        const value = JSON.parse(candidate);
+        const prompt = typeof value?.prompt === "string" ? value.prompt.trim() : "";
+        const words = prompt ? prompt.split(/\s+/).length : 0;
+        const required = mediaType === "image"
+          ? ["SUBJECT AND ACTION:", "EMOTION AND BODY LANGUAGE:", "SETTING AND BACKGROUND:", "DEPTH LAYERS:", "CAMERA AND COMPOSITION:"]
+          : ["STARTING STATE:", "PRIMARY MOTION:", "REACTION:", "ENVIRONMENTAL MOTION:", "CAMERA MOTION:", "END FRAME:"];
+        if (words >= 50 && words <= 180 && required.every((label) => prompt.toUpperCase().includes(label))) {
+          return { prompt };
+        }
+      } catch (_) {}
+    }
+    const error = new Error("ChatGPT policy rewrite response has invalid JSON, sections, or length");
+    error.code = "INVALID_JOB";
+    throw error;
+  }
+
+  async function rewritePolicyPrompt(jobId, payload, signal) {
+    let previousError = "";
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const composer = findComposer();
+      if (!composer) {
+        const error = new Error("Không tìm thấy ô nhập ChatGPT. Hãy đăng nhập và mở một cuộc trò chuyện.");
+        error.code = "NOT_LOGGED_IN";
+        error.retryable = true;
+        throw error;
+      }
+      const messages = assistantMessages();
+      const baseline = { count: messages.length, lastElement: messages.at(-1) || null };
+      notifyProgress(jobId, `Đang gửi prompt lỗi tới ChatGPT · lần ${attempt}/2`);
+      await submitPrompt(composer, buildPolicyRewritePrompt(payload, previousError), signal);
+      notifyProgress(jobId, "Đang chờ ChatGPT viết lại prompt an toàn");
+      const response = await waitForAssistantResponse(
+        baseline,
+        signal,
+        (seconds) => notifyProgress(jobId, `Đang chờ prompt thay thế · ${seconds} giây`),
+      );
+      try {
+        return parsePolicyRewriteResponse(response, payload.mediaType);
+      } catch (error) {
+        previousError = String(error?.message || error);
+        if (attempt === 2) throw error;
+      }
+    }
+    throw new Error("ChatGPT không tạo được prompt thay thế");
+  }
+
   window.__FLOWX_CHAT_INTERNALS__ = {
     createTimelineBatches,
     beatPlanningContract,
@@ -924,6 +1006,8 @@ ${batch.srtText}
     buildTimelineRetryPrompt,
     parseJsonResponse,
     validateBatchResult,
+    buildPolicyRewritePrompt,
+    parsePolicyRewriteResponse,
   };
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -944,11 +1028,11 @@ ${batch.srtText}
       return undefined;
     }
 
-    if (message?.type !== "FLOWX_GENERATE_TIMELINE") return undefined;
+    if (message?.type !== "FLOWX_GENERATE_TIMELINE" && message?.type !== "FLOWX_REWRITE_POLICY_PROMPT") return undefined;
     if (activeControllers.size > 0) {
       sendResponse({
         ok: false,
-        error: "ChatGPT tab is already generating a timeline",
+        error: "ChatGPT tab is already processing another job",
         code: "INVALID_JOB",
       });
       return undefined;
@@ -956,7 +1040,10 @@ ${batch.srtText}
 
     const controller = new AbortController();
     activeControllers.set(message.jobId, controller);
-    generateTimeline(message.jobId, message.payload, controller.signal)
+    const operation = message.type === "FLOWX_REWRITE_POLICY_PROMPT"
+      ? rewritePolicyPrompt(message.jobId, message.payload, controller.signal)
+      : generateTimeline(message.jobId, message.payload, controller.signal);
+    operation
       .then((result) => sendResponse({ ok: true, result }))
       .catch((error) =>
         sendResponse({

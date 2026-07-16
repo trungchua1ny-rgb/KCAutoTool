@@ -153,6 +153,13 @@ export function classifyQueueError(error: unknown): StoredQueueError {
   const message = error instanceof Error ? error.message : String(error);
   const code = error instanceof WorkerJobError ? error.code : "INTERNAL_ERROR";
   const text = `${code} ${message}`.toLowerCase();
+  if (
+    /policy|safety|moderation|responsible ai|blocked.{0,20}prompt|prompt.{0,20}blocked|violation|vi pham|chinh sach|vi phạm|chính sách/.test(
+      text,
+    )
+  ) {
+    return { category: "flow_policy_violation", message, retryable: false };
+  }
   if (/quota|rate.?limit|credit|too many requests|429/.test(text)) {
     return { category: "flow_quota_or_rate_limit", message, retryable: true };
   }

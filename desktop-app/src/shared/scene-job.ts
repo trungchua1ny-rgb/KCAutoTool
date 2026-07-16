@@ -8,6 +8,7 @@ import {
 import { normalizeCharacterToken } from "./character";
 
 export const SCENE_JOB_RUN_CHANNEL = "scene-job:run";
+export const SCENE_JOB_CANCEL_CHANNEL = "scene-job:cancel";
 export const SCENE_JOB_PROGRESS_CHANNEL = "scene-job:progress";
 
 export const SCENE_MEDIA_TYPES = ["image", "video"] as const;
@@ -71,6 +72,7 @@ export interface SceneJobResult {
 
 export interface SceneJobsBridge {
   run: (input: SceneJobInput) => Promise<SceneJobResult>;
+  cancel: () => Promise<boolean>;
   onProgress: (callback: (progress: SceneJobProgress) => void) => () => void;
 }
 

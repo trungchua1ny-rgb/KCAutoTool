@@ -7,6 +7,7 @@ import {
 export const TIMELINE_GENERATE_CHANNEL = "timeline:generate";
 export const TIMELINE_CANCEL_CHANNEL = "timeline:cancel";
 export const TIMELINE_PROGRESS_CHANNEL = "timeline:progress";
+export const PROMPT_POLICY_REWRITE_CHANNEL = "timeline:rewrite-policy-prompt";
 export const TIMELINE_SESSION_LOAD_CHANNEL = "timeline-session:load";
 export const TIMELINE_SESSION_SAVE_CHANNEL = "timeline-session:save";
 export const TIMELINE_SESSION_CLEAR_CHANNEL = "timeline-session:clear";
@@ -72,6 +73,21 @@ export interface TimelineGenerateInput {
   characterRoster: CharacterRosterEntry[];
 }
 
+export interface PolicyPromptRewriteInput {
+  sceneId: string;
+  mediaType: "image" | "video";
+  prompt: string;
+  policyError: string;
+  timeStart: string;
+  timeEnd: string;
+  pairedPrompt: string;
+  visualBible: VisualBible;
+}
+
+export interface PolicyPromptRewriteResult {
+  prompt: string;
+}
+
 export interface TimelineResult {
   scenes: Scene[];
   visualBible: VisualBible;
@@ -96,6 +112,9 @@ export interface TimelineProgress {
 
 export interface TimelineBridge {
   generate: (input: TimelineGenerateInput) => Promise<TimelineResult>;
+  rewritePolicyPrompt: (
+    input: PolicyPromptRewriteInput,
+  ) => Promise<PolicyPromptRewriteResult>;
   cancel: () => Promise<boolean>;
   loadSession: () => Promise<TimelineSession | null>;
   saveSession: (input: TimelineSessionInput) => Promise<TimelineSession>;

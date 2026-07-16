@@ -52,7 +52,7 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
         type: "REGISTER",
         role: "chat-worker",
         profileTag: "isolated-test",
-      workerVersion: "2.21.0",
+      workerVersion: "2.32.0",
       }),
     );
     const ping = await pingPromise;
@@ -106,6 +106,34 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
     assert.equal(result.visualBible.palette, "locked black, white, and red accents");
     assert.equal(result.visualBible.lighting, "soft directional sunset light");
     assert.equal(result.visualBible.continuityNotes, "locked round heads and single-line limbs");
+
+    const rewriteJobPromise = waitForMessage(socket, "JOB");
+    const rewriteResultPromise = server.rewritePolicyPrompt({
+      sceneId: "scene-004",
+      mediaType: "video",
+      prompt: "Original rejected prompt",
+      policyError: "Google Flow safety policy",
+      timeStart: "00:00:24,000",
+      timeEnd: "00:00:32,000",
+      pairedPrompt: "Opening image context",
+      visualBible: {
+        style: "locked stickman style",
+        palette: "black, white, red",
+        lighting: "flat light",
+        continuityNotes: "same design",
+        aspectRatio: "16:9",
+      },
+    });
+    const rewriteJob = await rewriteJobPromise;
+    assert.equal(rewriteJob.action, "REWRITE_POLICY_PROMPT");
+    assert.equal((rewriteJob.payload as { sceneId: string }).sceneId, "scene-004");
+    const rewrittenPrompt = "STARTING STATE: a worried figure pauses beside a closed doorway in a quiet hallway. PRIMARY MOTION: the figure steps backward while keeping both hands visible and turning toward a distant sound. REACTION: concern changes into alert attention through the eyes, eyebrows, head angle, and guarded posture. ENVIRONMENTAL MOTION: a loose curtain moves gently beside the window while soft dust crosses the light. CAMERA MOTION: a steady medium tracking shot follows the retreat at natural speed without sudden movement. END FRAME: the figure stops safely near the hallway corner and looks toward the unseen source.";
+    socket.send(JSON.stringify({
+      type: "JOB_DONE",
+      jobId: rewriteJob.jobId,
+      result: { prompt: rewrittenPrompt },
+    }));
+    assert.equal((await rewriteResultPromise).prompt, rewrittenPrompt);
 
     const secondJobPromise = waitForMessage(socket, "JOB");
     const stoppedResult = server.generateTimeline({
