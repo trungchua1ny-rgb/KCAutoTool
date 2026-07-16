@@ -1316,11 +1316,7 @@ async function generateFlowVideo(tabId, payload, jobId) {
     `Đã gửi prompt; Google Flow đang tạo video ${payload.videoSettings.durationSeconds} giây`,
   );
 
-  sendJobProgress(jobId, "generating", "Đã gửi prompt; chờ cố định 10 giây trước khi bấm card cuối cùng");
-  await pause(10_000);
-  if (activeJob?.jobId !== jobId || activeJob?.stopping) {
-    return { ok: false, stopped: true, code: "STOPPED", error: "Đã dừng trước vòng lặp mở video." };
-  }
+  sendJobProgress(jobId, "generating", "Bắt đầu dò ô video có phần trăm ngay sau khi gửi prompt; thử lại mỗi 2 giây");
   const viewerOpened = await openLatestViewerWithRetries(tabId, jobId);
   if (viewerOpened?.ok) {
     try {
