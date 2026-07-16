@@ -655,7 +655,10 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
   }, []);
 
   useEffect(() => {
-    if (!sessionReady) return undefined;
+    // Clearing generated media performs its own ordered session writes. Pause
+    // the debounced renderer autosave so an older scene snapshot cannot be
+    // queued behind the clear operation and restore deleted result paths.
+    if (!sessionReady || clearingGeneratedMedia) return undefined;
     const saveVersion = ++sessionSaveVersion.current;
     setSessionStatus("saving");
     const timer = window.setTimeout(() => {
@@ -679,7 +682,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
       );
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [scenes, visualBible, sessionReady]);
+  }, [scenes, visualBible, sessionReady, clearingGeneratedMedia]);
 
   const validateFile = (
     file: File | null,
@@ -936,7 +939,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
       loadedThumbnailPaths.current.clear();
       setClearMediaConfirmOpen(false);
       setClearMediaNotice(
-        `Đã xóa ${result.deletedFiles} file trong ${result.deletedDirectories} thư mục; giữ nguyên ${result.retainedScenes} scene và toàn bộ prompt Phase 3.`,
+        `Đã xóa ${result.deletedFiles} file trên máy trong ${result.deletedDirectories} thư mục; giữ nguyên ${result.retainedScenes} scene và toàn bộ prompt Phase 3. Nội dung trong thư viện Google Flow không bị xóa.`,
       );
     } catch (caught) {
       setQueueCommandError(errorMessage(caught));
@@ -1205,7 +1208,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
               className="button danger compact"
               type="button"
               disabled={clearingGeneratedMedia}
-              title="Xóa vĩnh viễn toàn bộ ảnh, video và frame đã tạo; giữ nguyên prompt Phase 3"
+              title="Xóa ảnh, video và frame trên máy; giữ nguyên prompt Phase 3 và thư viện Google Flow"
               onClick={() => setClearMediaConfirmOpen(true)}
             >
               {clearingGeneratedMedia
@@ -1269,7 +1272,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
             <header>
               <div>
                 <p className="eyebrow">Xác nhận xóa kết quả</p>
-                <h3 id="clear-media-title">Xóa vĩnh viễn toàn bộ ảnh và video đã tạo?</h3>
+                <h3 id="clear-media-title">Xóa toàn bộ kết quả đã tải về máy?</h3>
               </div>
               <button
                 className="icon-button"
@@ -1282,7 +1285,10 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
               </button>
             </header>
             <p>
-              App sẽ dừng và xóa toàn bộ job, ảnh scene, video và frame trung gian trong thư mục KC Auto Tool trên máy. Thao tác này không thể hoàn tác. Timeline, prompt ảnh, prompt video, Visual Bible và gán nhân vật của Phase 3 được giữ nguyên.
+              App sẽ dừng hàng đợi rồi xóa toàn bộ job, ảnh scene, video và frame trung gian trong thư mục KC Auto Tool trên máy. Thao tác này không thể hoàn tác. Timeline, prompt ảnh, prompt video, Visual Bible và gán nhân vật của Phase 3 được giữ nguyên.
+            </p>
+            <p>
+              Lưu ý: nút này không xóa ảnh hoặc video đang nằm trong thư viện dự án Google Flow. Nội dung đó phải được xóa riêng trên Google Flow.
             </p>
             <footer>
               <button
