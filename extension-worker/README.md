@@ -23,7 +23,7 @@ For `GENERATE_TIMELINE`, keep a logged-in ChatGPT conversation open in the
 Chat worker profile. The worker processes one timeline at a time and supports
 the protocol `STOP` message.
 
-Version `2.23.0` stops duplicate character uploads. Character assets are cached with multiple locators (Flow asset ID, thumbnail URL, and filename hints), and the worker scans the scrollable project-media library before falling back to upload. Image jobs attach the required character references; video jobs attach only the approved scene image because it already contains the character design. It retains the 2.22.0 video-setting stabilization: 16:9 is confirmed by both the visible label and Flow's `LANDSCAPE` tab identity, the settings popup is reopened between fields, and detailed DOM diagnostics are recorded on failure. It also retains automatic natural-name character tagging, Chapter 4 continuity chains, project anchors, last-frame extraction, explicit Frames selection, and exact 4/6/8-second settings.
+Version `2.24.0` stops scene-reference accumulation and improves motion. Every image job attaches its required character references plus at most one prior final frame for a real continuation; generated images are never accumulated as Visual Bible anchors. Every video uses only its own approved scene image in Flow's Start-frame slot, with no End frame. This supports exact 4/6/8-second scenes while avoiding rigid interpolation between two unrelated compositions. Motion prompts request a coherent action arc, natural acceleration/deceleration, weight transfer, follow-through, secondary overlap, and a purposeful camera instead of forcing every movement to stay small and slow. Character assets remain cached with multiple locators and are reused from the Flow media library before upload. The 2.22.0 video-setting stabilization remains: 16:9 is confirmed by both the visible label and Flow's `LANDSCAPE` tab identity, the settings popup is reopened between fields, and detailed DOM diagnostics are recorded on failure.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from
@@ -35,7 +35,7 @@ sequence: prompt `+`, **Upload media**, intercepted local file selection,
 uploaded thumbnail selection, and **Add to prompt**. It only enters the Visual
 Bible and scene prompt after every selected ingredient thumbnail is visible,
 then saves the result under `Downloads/KC Auto Tool`. `GENERATE_VIDEO` routes to the
-same Flow tab after switching it to Video. Start/single scenes use Ingredients; continuation scenes use the extracted prior last frame and current scene image as Frames. The worker selects the planned 4/6/8-second duration, submits the motion prompt, waits for the clip, and downloads it.
+same Flow tab after switching it to Video. Every scene selects Frames, places only the scene's approved image in Start, leaves End empty, selects the planned 4/6/8-second duration, submits the motion prompt, waits for the clip, and downloads it. The extracted prior last frame is reserved only as a continuity reference while creating the next image.
 If the asset cannot be matched (for example, an older session or another Flow
 project), the worker falls back to uploading the downloaded image file.
 

@@ -166,7 +166,8 @@ The hero crosses the hall.`;
   assert.match(lockedStylePrompt, /foreground element, one middle-ground subject\/object, and one background element/);
   assert.match(lockedStylePrompt, /one continuous, physically possible shot lasting exactly the required boundary duration/);
   assert.match(lockedStylePrompt, /SETTING AND BACKGROUND:/);
-  assert.match(lockedStylePrompt, /Avoid fast gestures, crossed or overlapping limbs/);
+  assert.match(lockedStylePrompt, /natural timing: appropriate acceleration and deceleration/);
+  assert.match(lockedStylePrompt, /do not force every shot to be slow/);
 
   const filler = Array.from({ length: 72 }, (_, index) => `visible${index}`).join(" ");
   const detailedImagePrompt = `SUBJECT AND ACTION: a figure opens a door. EMOTION AND BODY LANGUAGE: worried eyes and tense shoulders. SETTING AND BACKGROUND: an old farmhouse at night. DEPTH LAYERS: fence foreground, figure middle-ground, forest background. CAMERA AND COMPOSITION: medium eye-level shot. ${filler}`;

@@ -944,21 +944,6 @@ export class ProductionQueue {
           error: null,
         });
       });
-      if (mediaType === "image" && scene.visualBibleId) {
-        const bible = this.repositories.visualBibles.get(scene.visualBibleId);
-        if (bible && bible.anchorImagePaths.length < 5) {
-          await access(result.resultPath).then(() => {
-            const anchors = [...new Set([...bible.anchorImagePaths, result.resultPath])].slice(0, 5);
-            this.repositories.visualBibles.setAnchors(
-              bible.id,
-              anchors,
-              bible.locked || anchors.length >= 3,
-            );
-          }).catch(() => {
-            // A mocked/remote-only result cannot serve as a local anchor.
-          });
-        }
-      }
       const project = this.repositories.projects.get(job.projectId);
       if (mediaType === "image" && project?.autoApproveImages) {
         const approved = this.repositories.scenes.updateState({
@@ -1093,31 +1078,18 @@ export class ProductionQueue {
     } catch {
       visualBible = normalizeVisualBible({});
     }
-    const videoMode = scene.chainRole === "continue" ? "frames" as const : "ingredients" as const;
-    const characterRefs = videoMode === "frames" && mediaType === "video"
-      ? []
-      : await this.characterStore.resolveReferences(scene.usedCharacterTokens);
-    const anchorPaths = (bibleRecord?.anchorImagePaths || [])
-      .filter((path) => mediaType !== "video" || path !== scene.imageAssetPath)
-      .slice(0, 5);
-    const anchorRefs: BoundSceneJobInput["refImages"] = [];
-    if (!(videoMode === "frames" && mediaType === "video")) {
-      for (const [index, path] of anchorPaths.entries()) {
-        try {
-          anchorRefs.push(await referenceFromPath(
-            path,
-            `@STYLE_ANCHOR_${index + 1}`,
-            `Visual Bible anchor ${index + 1}`,
-          ));
-        } catch {
-          // Ignore a deleted anchor; subsequent successful images replenish it.
-        }
-      }
-    }
+    const videoMode = "first-frame" as const;
+    const characterRefs = mediaType === "image"
+      ? await this.characterStore.resolveReferences(scene.usedCharacterTokens)
+      : [];
     const chainFrameRefs = mediaType === "image" && scene.chainRole === "continue" && scene.startFrameAssetPath
       ? [await referenceFromPath(scene.startFrameAssetPath, "@CHAIN_START_FRAME", "Previous clip final frame")]
       : [];
-    const refImages = [...characterRefs, ...anchorRefs, ...chainFrameRefs];
+    // Keep every image request bounded and scene-specific. Generated scene
+    // images are not cumulative style anchors: they quickly bury the actual
+    // character reference and make later scenes drift. A continuation receives
+    // only the previous clip's final frame in addition to its own characters.
+    const refImages = [...characterRefs, ...chainFrameRefs];
     return {
       sceneId: publicSceneId(scene.projectId, scene.id),
       mediaType,
@@ -1132,9 +1104,7 @@ export class ProductionQueue {
       },
       sourceImagePath: mediaType === "video" ? scene.imageAssetPath || "" : "",
       sourceFlowAssetKey: mediaType === "video" ? scene.flowImageAssetId || "" : "",
-      startFramePath: mediaType === "video" && videoMode === "frames"
-        ? scene.startFrameAssetPath || ""
-        : "",
+      startFramePath: "",
       videoSettings: {
         model: "veo-3.1-lite",
         mode: videoMode,

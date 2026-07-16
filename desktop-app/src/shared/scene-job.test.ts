@@ -105,6 +105,22 @@ test("normalizes Frames video settings and requires the extracted start frame", 
   }), /start frame/i);
 });
 
+test("normalizes First Frame video without requiring a separate end boundary", () => {
+  const input = normalizeSceneJobInput({
+    sceneId: "scene-003",
+    mediaType: "video",
+    prompt: "The character strides forward with natural weight transfer",
+    sourceImagePath: "C:\\FlowX\\scene-003.png",
+    videoSettings: {
+      mode: "first-frame",
+      durationSeconds: 6,
+    },
+  });
+  assert.equal(input.videoSettings.mode, "first-frame");
+  assert.equal(input.videoSettings.durationSeconds, 6);
+  assert.equal(input.startFramePath, "");
+});
+
 test("normalizes explicit character assignments and the free Ultra image preset", () => {
   const input = normalizeSceneJobInput({
     sceneId: "scene-012",

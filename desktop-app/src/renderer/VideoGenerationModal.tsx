@@ -46,8 +46,8 @@ export function VideoGenerationModal({
 
         <div className="generation-settings-strip">
           <div><Film size={16} /><span>Model</span><strong>Veo 3.1 Lite</strong></div>
-          <div><ImageIcon size={16} /><span>Chế độ</span><strong>Thành phần</strong></div>
-          <div><Sparkles size={16} /><span>Video</span><strong>16:9 · 8 giây</strong></div>
+          <div><ImageIcon size={16} /><span>Chế độ</span><strong>Khung hình đầu</strong></div>
+          <div><Sparkles size={16} /><span>Video</span><strong>16:9 · {scene.durationSeconds} giây</strong></div>
           <div className="credit-zero"><Check size={16} /><span>Chi phí mục tiêu</span><strong>0 tín dụng</strong></div>
         </div>
 
@@ -59,8 +59,8 @@ export function VideoGenerationModal({
                 : <ImageIcon size={28} />}
             </div>
             <div>
-              <strong>Ảnh thành phần của video</strong>
-              <span>Ảnh vừa tạo của scene {scene.order}</span>
+              <strong>Khung hình bắt đầu của video</strong>
+              <span>Chỉ dùng ảnh vừa tạo của scene {scene.order}</span>
               <small>{scene.imageResultPath}</small>
             </div>
           </div>
@@ -72,8 +72,8 @@ export function VideoGenerationModal({
 
           <div className="attachment-preflight">
             <strong>Worker sẽ tự chuyển tab Flow sang Video</strong>
-            <p>Ảnh trên được gắn vào câu lệnh như một Thành phần trước khi prompt được gửi.</p>
-            <small>Dòng thiết lập phụ được giữ nguyên: Veo 3.1 Lite · Thành phần · 16:9 · 8 giây. Visual Bible: {visualBible.style || "chưa thiết lập"}.</small>
+            <p>Ảnh trên được đặt vào Start frame. Worker không gắn End frame và không cộng dồn ảnh từ các scene cũ.</p>
+            <small>Thiết lập: Veo 3.1 Lite · Khung hình đầu · 16:9 · {scene.durationSeconds} giây. Visual Bible: {visualBible.style || "chưa thiết lập"}.</small>
           </div>
         </div>
 
@@ -85,7 +85,7 @@ export function VideoGenerationModal({
             disabled={!prompt.trim() || !scene.imageResultPath}
             onClick={() => onGenerate(prompt.trim())}
           >
-            <Sparkles size={16} /> Gắn thành phần và tạo video
+            <Sparkles size={16} /> Gắn khung hình đầu và tạo video
           </button>
         </footer>
       </section>

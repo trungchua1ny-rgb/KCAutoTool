@@ -159,7 +159,7 @@ one scene. Right-click a scene row for the resume/regenerate commands.
 Jobs run sequentially through the Flow worker, respect `depends_on`, and retry
 retryable failures with 2s/8s/20s backoff (three attempts by default). The
 Error Center groups DOM, response, timeout, quota, and extension-connection
-failures. Extension version `2.23.0` sends a five-second job heartbeat, records step-by-step video-setting diagnostics, and reuses character assets after scanning the Flow media library; reload
+failures. Extension version `2.24.0` sends a five-second job heartbeat, records step-by-step video-setting diagnostics, reuses character assets after scanning the Flow media library, and prevents generated scene images from accumulating as references. Every video now uses its own approved scene image as the single Start frame; reload
 the unpacked extension before using the production queue.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without

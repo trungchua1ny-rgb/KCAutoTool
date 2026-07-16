@@ -199,7 +199,7 @@ function isTimelinePayload(payload) {
 function isSceneJobPayload(payload) {
   const validVideoSettings = payload?.mediaType !== "video" || (
     payload.videoSettings &&
-    (payload.videoSettings.mode === "ingredients" || payload.videoSettings.mode === "frames") &&
+    (payload.videoSettings.mode === "ingredients" || payload.videoSettings.mode === "first-frame" || payload.videoSettings.mode === "frames") &&
     [4, 6, 8].includes(Number(payload.videoSettings.durationSeconds)) &&
     (payload.videoSettings.mode !== "frames" || (
       typeof payload.startFramePath === "string" &&
@@ -787,6 +787,29 @@ function videoPromptFromFrames(payload) {
   ].join("\n\n");
 }
 
+function videoPromptFromFirstFrame(payload) {
+  const stickFigureMode = isStickFigureStyle(payload.visualBible?.style);
+  const sections = [
+    "USE THE ATTACHED IMAGE AS THE EXACT OPENING FRAME, THEN ANIMATE FORWARD FROM IT.",
+    "Preserve the characters, proportions, clothing, colors, objects, environment, composition, and graphic style already visible in the opening frame. Do not redesign or replace any subject.",
+    `Create one continuous ${payload.videoSettings.durationSeconds}-second 16:9 cinematic shot. Follow this visible action direction:`,
+    stripConflictingRenderPhrases(payload.prompt),
+    [
+      "NATURAL MOTION AND ANATOMY — HIGH PRIORITY:",
+      "Stage one coherent action arc with anticipation, clear main movement, reaction, follow-through, and a brief settle. Use natural acceleration and deceleration, visible weight transfer, balanced foot placement, and secondary overlap in the head, torso, clothing, and nearby environment.",
+      "Choose a purposeful camera move that supports the action at an appropriate speed; keep it static when movement would weaken the shot. Preserve body topology and object count throughout. Keep joints connected and silhouettes readable; do not fuse, duplicate, detach, stretch, or morph limbs.",
+    ].join("\n"),
+  ];
+  if (stickFigureMode) {
+    sections.push([
+      "STICK-FIGURE MOTION LOCK:",
+      "Each character remains one circular head, one torso line, two arms connected at the shoulders, and two legs connected at the hips in every frame.",
+      "Animate coordinated shoulder, elbow, hip, and knee arcs with clear weight transfer and follow-through. Keep line length, line thickness, head size, facial marks, and clothing-color shapes unchanged; keep hands and limbs visually separated during motion.",
+    ].join("\n"));
+  }
+  return sections.join("\n\n");
+}
+
 async function openFlowVideoSettingsPopup(tabId) {
   await pressEscape(tabId).catch(() => {});
   await pause(350);
@@ -797,13 +820,13 @@ async function openFlowVideoSettingsPopup(tabId) {
 }
 
 async function configureFlowVideoSettings(tabId, payload, jobId) {
-  const mode = payload.videoSettings?.mode === "frames" ? "frames" : "ingredients";
+  const mode = payload.videoSettings?.mode === "ingredients" ? "ingredients" : "frames";
   const durationSeconds = [4, 6, 8].includes(Number(payload.videoSettings?.durationSeconds))
     ? Number(payload.videoSettings.durationSeconds)
     : 8;
 
-  // Ingredients is Flow's default video composition mode. Frames remains
-  // explicit because continuation clips require two frame slots.
+  // First-frame generation uses Flow's Frames workspace but fills only Start.
+  // Legacy two-frame jobs still fill both slots.
   if (mode === "frames") {
     sendJobProgress(jobId, "preparing", "Cấu hình video 1/3: đang mở lựa chọn Khung hình");
     const opened = await openFlowVideoSettingsPopup(tabId);
@@ -938,7 +961,11 @@ async function generateFlowVideo(tabId, payload, jobId) {
   if (!configured?.ok) return configured;
   await pressEscape(tabId).catch(() => {});
 
-  if (payload.videoSettings.mode === "frames") {
+  if (payload.videoSettings.mode === "first-frame") {
+    const startAttached = await attachStartFrameWithPicker(tabId, payload.sourceImagePath);
+    if (!startAttached?.ok) return startAttached;
+    sendJobProgress(jobId, "preparing", "Đã gắn ảnh scene hiện tại vào Start frame; không dùng End frame hoặc ảnh cộng dồn");
+  } else if (payload.videoSettings.mode === "frames") {
     const startAttached = await attachStartFrameWithPicker(tabId, payload.startFramePath);
     if (!startAttached?.ok) return startAttached;
     const endAttached = await attachFrameWithPicker(tabId, payload.sourceImagePath, "end");
@@ -968,9 +995,11 @@ async function generateFlowVideo(tabId, payload, jobId) {
   const submitted = await typeAndConfirmFlowPrompt(
     tabId,
     "FLOWX_PREPARE_VIDEO_PROMPT",
-    payload.videoSettings.mode === "frames"
-      ? videoPromptFromFrames(payload)
-      : videoPromptFromComponent(payload),
+    payload.videoSettings.mode === "first-frame"
+      ? videoPromptFromFirstFrame(payload)
+      : payload.videoSettings.mode === "frames"
+        ? videoPromptFromFrames(payload)
+        : videoPromptFromComponent(payload),
   );
   if (!submitted?.ok) return submitted;
   sendJobProgress(
@@ -1141,15 +1170,17 @@ async function handleSceneJob(message) {
   try {
     if (payload.mediaType === "image") {
       sendJobProgress(jobId, "preparing", "Đã tự chuyển tab Flow sang chế độ Hình ảnh");
-      sendJobProgress(jobId, "preparing", `Đang gắn ${payload.refImages.length} ảnh nhân vật vào Flow`);
+      sendJobProgress(jobId, "preparing", `Đang gắn ${payload.refImages.length} ảnh tham chiếu cần thiết vào Flow`);
     } else {
       sendJobProgress(jobId, "preparing", "Đã tự chuyển tab Flow sang chế độ Video");
       sendJobProgress(
         jobId,
         "preparing",
-        payload.videoSettings.mode === "frames"
+        payload.videoSettings.mode === "first-frame"
+          ? "Đang gắn ảnh scene hiện tại làm Start frame; không gắn End frame"
+          : payload.videoSettings.mode === "frames"
           ? "Đang gắn Start/End frame trong Flow"
-          : "Đang gắn ảnh scene và ảnh neo làm Thành phần trong Flow",
+          : "Đang gắn ảnh scene làm Thành phần trong Flow",
       );
     }
     const response = payload.mediaType === "image"

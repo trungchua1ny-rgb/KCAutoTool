@@ -775,9 +775,9 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         startFramePath: "",
         videoSettings: {
           model: "veo-3.1-lite",
-          mode: "ingredients",
+          mode: "first-frame",
           aspectRatio: visualBible.aspectRatio,
-          durationSeconds: 8,
+          durationSeconds: sourceScene?.durationSeconds || 8,
           outputCount: 1,
           expectedCredits: 0,
         },

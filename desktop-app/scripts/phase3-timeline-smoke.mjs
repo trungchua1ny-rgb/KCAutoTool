@@ -420,8 +420,8 @@ try {
   await waitFor(client, "document.querySelector('.generation-modal')");
   const videoModalText = await client.evaluate("document.querySelector('.generation-modal').innerText");
   assert.match(videoModalText, /Veo 3.1 Lite/);
-  assert.match(videoModalText, /Ảnh thành phần của video/);
-  assert.match(videoModalText, /16:9 · 8 giây/);
+  assert.match(videoModalText, /Khung hình bắt đầu của video/);
+  assert.match(videoModalText, /Khung hình đầu/);
   await client.evaluate("document.querySelector('.generation-modal-header .icon-button').click()");
   await waitFor(client, "document.body.innerText.includes('Đã lưu phiên')");
 
@@ -453,7 +453,7 @@ try {
   console.log("Phase 4 prompt edit and image rerun updated only scene one");
   console.log("Queue action buttons stay inside their cells and the automatic Image-to-Video pipeline is visible");
   console.log("Phase 5 Ref Binding attached @ANCESTOR image bytes to the Flow job");
-  console.log("Phase 6 modal bound the completed scene image as the video ingredient");
+  console.log("Phase 6 modal bound the completed scene image as the only video Start frame");
   console.log("Session deletion requires a second explicit confirmation");
   console.log("Timeline session restored after a renderer reload");
   console.log(`Phase 5 UI screenshot: ${screenshotPath}`);

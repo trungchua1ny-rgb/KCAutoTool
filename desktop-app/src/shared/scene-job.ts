@@ -35,7 +35,7 @@ export interface ImageGenerationSettings {
 
 export interface VideoGenerationSettings {
   model: "veo-3.1-lite";
-  mode: "ingredients" | "frames";
+  mode: "ingredients" | "first-frame" | "frames";
   aspectRatio: ProjectAspectRatio;
   durationSeconds: SceneDurationSeconds;
   outputCount: 1;
@@ -118,9 +118,12 @@ export function normalizeSceneJobInput(value: unknown): SceneJobInput {
   const videoSettings: VideoGenerationSettings = {
     model: "veo-3.1-lite",
     mode: input.videoSettings && typeof input.videoSettings === "object" &&
-      (input.videoSettings as Record<string, unknown>).mode === "frames"
-      ? "frames"
-      : "ingredients",
+      (input.videoSettings as Record<string, unknown>).mode === "first-frame"
+      ? "first-frame"
+      : input.videoSettings && typeof input.videoSettings === "object" &&
+        (input.videoSettings as Record<string, unknown>).mode === "frames"
+        ? "frames"
+        : "ingredients",
     aspectRatio: "16:9",
     durationSeconds: input.videoSettings && typeof input.videoSettings === "object" &&
       [4, 6, 8].includes(Number((input.videoSettings as Record<string, unknown>).durationSeconds))
