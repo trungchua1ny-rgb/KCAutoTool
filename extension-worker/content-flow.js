@@ -1859,36 +1859,12 @@ async function findNewRenderingVideoCard(baselineValues) {
   return { ok: true, cardKey: entry.key };
 }
 
-function renderingVideoCardState(cardKey) {
+async function clickRenderingVideoCard(cardKey) {
   const entry = videoRenderCards().find((candidate) => candidate.key === cardKey);
-  if (!entry) {
-    return { ok: false, cardFound: false, ready: false, error: "Card video đang render không còn trên trang." };
-  }
-  const video = entry.card.querySelector("video");
-  const src = video ? videoSrcKey(video) : "";
-  const disabled = Boolean(
-    entry.trigger.disabled ||
-    entry.trigger.getAttribute("aria-disabled") === "true" ||
-    entry.trigger.hasAttribute("disabled"),
-  );
-  return {
-    ok: true,
-    cardFound: true,
-    ready: Boolean(video && /^(?:https?:|blob:)/i.test(src) && !disabled),
-    src,
-  };
-}
-
-async function openRenderedVideoCard(cardKey) {
-  const state = renderingVideoCardState(cardKey);
-  if (!state.ready) {
-    return { ok: false, error: state.error || "Card video chưa render xong nên chưa thể mở." };
-  }
-  const entry = videoRenderCards().find((candidate) => candidate.key === cardKey);
-  if (!entry) return { ok: false, error: "Không còn tìm thấy card video vừa render xong." };
+  if (!entry) return { ok: false, cardFound: false, error: "Không còn tìm thấy card video đang render." };
   clickFully(entry.trigger);
-  await sleep(350);
-  return { ok: true, cardKey };
+  await sleep(250);
+  return { ok: true, cardFound: true };
 }
 
 function freshCompletedVideos(baselineValues) {
@@ -1950,6 +1926,30 @@ function videoViewerState() {
     ok: true,
     viewerOpen: Boolean(findVideoViewerButton("done")),
     downloadReady: Boolean(downloadButton && !disabled),
+  };
+}
+
+async function clickViewerDownload() {
+  const downloadButton = findVideoViewerButton("download");
+  if (!downloadButton) {
+    return {
+      ok: false,
+      viewerOpen: Boolean(findVideoViewerButton("done")),
+      buttonFound: false,
+      error: "Viewer đang mở nhưng chưa xuất hiện nút Tải xuống.",
+    };
+  }
+  const disabled = Boolean(
+    downloadButton.disabled ||
+    downloadButton.getAttribute("aria-disabled") === "true" ||
+    downloadButton.hasAttribute("disabled"),
+  );
+  clickFully(downloadButton);
+  return {
+    ok: true,
+    viewerOpen: Boolean(findVideoViewerButton("done")),
+    buttonFound: true,
+    disabled,
   };
 }
 
@@ -2118,9 +2118,9 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     startNativeVideoDownload,
     videoRenderCardSnapshot,
     findNewRenderingVideoCard,
-    renderingVideoCardState,
-    openRenderedVideoCard,
+    clickRenderingVideoCard,
     videoViewerState,
+    clickViewerDownload,
     clickViewerDownloadAndClose,
     isDurationControl,
     isLandscapeAspectControl,
@@ -2433,13 +2433,8 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
       return true;
     }
 
-    if (msg.type === "FLOWX_CHECK_RENDERING_VIDEO_CARD") {
-      sendResponse(renderingVideoCardState(String(msg.cardKey || "")));
-      return;
-    }
-
-    if (msg.type === "FLOWX_OPEN_RENDERED_VIDEO_CARD") {
-      openRenderedVideoCard(String(msg.cardKey || ""))
+    if (msg.type === "FLOWX_CLICK_RENDERING_VIDEO_CARD") {
+      clickRenderingVideoCard(String(msg.cardKey || ""))
         .then((result) => sendResponse(result))
         .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true;
@@ -2452,6 +2447,13 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
 
     if (msg.type === "FLOWX_DOWNLOAD_CURRENT_VIDEO_VIEWER") {
       clickViewerDownloadAndClose()
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+
+    if (msg.type === "FLOWX_CLICK_VIDEO_VIEWER_DOWNLOAD") {
+      clickViewerDownload()
         .then((result) => sendResponse(result))
         .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true;

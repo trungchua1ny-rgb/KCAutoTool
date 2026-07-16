@@ -357,25 +357,52 @@ async function downloadNewestVideoThroughFlow(tabId, videoBaseline, payload, job
         ? "Video trong viewer đã render xong; đang bấm Tải xuống"
         : "Đang mở video mới nhất và bấm nút Tải xuống gốc của Flow",
     );
-    const response = await sendImageToFlowTab(tabId, {
-      type: viewerAlreadyOpen
-        ? "FLOWX_DOWNLOAD_CURRENT_VIDEO_VIEWER"
-        : "FLOWX_NATIVE_DOWNLOAD_NEW_VIDEO",
-      videoBaseline,
-    });
-    if (!response?.ok) throw new Error(response?.error || "Flow không mở được nút tải video");
-
-    const timeout = pause(15_000).then(() => null);
-    let item = capturedItem || await Promise.race([createdPromise, timeout]);
+    let item = null;
+    if (viewerAlreadyOpen) {
+      const deadline = Date.now() + 600_000;
+      let attempt = 0;
+      while (!capturedItem && Date.now() < deadline) {
+        if (activeJob?.jobId !== jobId || activeJob?.stopping) {
+          throw new Error("Đã dừng vòng lặp bấm nút Tải xuống Flow");
+        }
+        attempt += 1;
+        const attemptStartedAt = Date.now();
+        const response = await sendImageToFlowTab(tabId, {
+          type: "FLOWX_CLICK_VIDEO_VIEWER_DOWNLOAD",
+        });
+        if (response?.viewerOpen === false) {
+          throw new Error(response?.error || "Viewer video Flow đã đóng trước khi tải xuống");
+        }
+        sendJobProgress(
+          jobId,
+          "downloading",
+          `Đang thử nút Tải xuống trong viewer · lần ${attempt}${response?.disabled ? " · nút còn khóa" : ""}`,
+        );
+        const remaining = Math.max(0, 3_000 - (Date.now() - attemptStartedAt));
+        item = capturedItem || await Promise.race([createdPromise, pause(remaining).then(() => null)]);
+        if (item) break;
+      }
+    } else {
+      const response = await sendImageToFlowTab(tabId, {
+        type: "FLOWX_NATIVE_DOWNLOAD_NEW_VIDEO",
+        videoBaseline,
+      });
+      if (!response?.ok) throw new Error(response?.error || "Flow không mở được nút tải video");
+      item = capturedItem || await Promise.race([createdPromise, pause(15_000).then(() => null)]);
+    }
     if (!item) {
       const recent = await chrome.downloads.search({ orderBy: ["-startTime"], limit: 50 });
       item = recent.find((entry) => isNativeFlowVideoDownload(entry, knownIds, startedAt)) || null;
     }
     if (!item) throw new Error("Chrome không ghi nhận lượt tải video sau khi bấm nút Flow");
-    return await waitForDownload(item.id, 300_000, "video");
+    const resultPath = await waitForDownload(item.id, 300_000, "video");
+    return resultPath;
   } finally {
     chrome.downloads.onCreated.removeListener(onCreated);
     chrome.downloads.onDeterminingFilename.removeListener(onDeterminingFilename);
+    if (viewerAlreadyOpen) {
+      await sendImageToFlowTab(tabId, { type: "FLOWX_CLOSE_VIDEO_VIEWER" }).catch(() => {});
+    }
   }
 }
 
@@ -786,69 +813,34 @@ async function typeAndConfirmFlowPrompt(tabId, prepareType, text) {
   };
 }
 
-async function waitForRenderingVideoInViewer(tabId, jobId) {
-  const deadline = Date.now() + 30_000;
-  let lastProgressAt = 0;
-  while (Date.now() < deadline) {
-    if (activeJob?.jobId !== jobId || activeJob?.stopping) {
-      return { ok: false, stopped: true, code: "STOPPED", error: "Đã dừng chờ video trong viewer Flow." };
-    }
-    let state;
-    try {
-      state = await sendImageToFlowTab(tabId, { type: "FLOWX_CHECK_VIDEO_VIEWER" });
-    } catch (error) {
-      if (Date.now() - lastProgressAt >= 10_000) {
-        lastProgressAt = Date.now();
-        sendJobProgress(jobId, "generating", `Đang nối lại viewer video: ${String(error?.message || error)}`);
-      }
-      await pause(2_000);
-      continue;
-    }
-    if (!state?.viewerOpen) {
-      return { ok: false, code: "FLOW_UI_CHANGED", error: "Viewer video Flow đã đóng khi video còn đang render." };
-    }
-    if (state.downloadReady) return { ok: true };
-    if (Date.now() - lastProgressAt >= 15_000) {
-      lastProgressAt = Date.now();
-      sendJobProgress(jobId, "generating", "Đang theo dõi video ngay trong viewer; chờ nút Tải xuống sẵn sàng");
-    }
-    await pause(2_000);
-  }
-  return { ok: false, timeout: true, code: "TIMEOUT", error: "Đã mở video hoàn tất nhưng nút Tải xuống chưa sẵn sàng sau 30 giây." };
-}
-
-async function waitForRenderingCardReady(tabId, cardKey, jobId) {
+async function openRenderingViewerWithRetries(tabId, cardKey, jobId) {
   const deadline = Date.now() + 600_000;
-  let lastProgressAt = 0;
+  let attempt = 0;
   while (Date.now() < deadline) {
     if (activeJob?.jobId !== jobId || activeJob?.stopping) {
-      return { ok: false, stopped: true, code: "STOPPED", error: "Đã dừng chờ card video render xong." };
+      return { ok: false, stopped: true, code: "STOPPED", error: "Đã dừng vòng lặp mở card video Flow." };
     }
-    let state;
+    const attemptStartedAt = Date.now();
+    attempt += 1;
     try {
-      state = await sendImageToFlowTab(tabId, {
-        type: "FLOWX_CHECK_RENDERING_VIDEO_CARD",
+      const before = await sendImageToFlowTab(tabId, { type: "FLOWX_CHECK_VIDEO_VIEWER" });
+      if (before?.viewerOpen) return { ok: true, attempts: attempt - 1 };
+      const clicked = await sendImageToFlowTab(tabId, {
+        type: "FLOWX_CLICK_RENDERING_VIDEO_CARD",
         cardKey,
       });
-    } catch (error) {
-      if (Date.now() - lastProgressAt >= 10_000) {
-        lastProgressAt = Date.now();
-        sendJobProgress(jobId, "generating", `Đang nối lại bộ theo dõi card render: ${String(error?.message || error)}`);
+      if (clicked?.cardFound === false) {
+        return { ok: false, code: "FLOW_UI_CHANGED", error: clicked.error || "Card video render đã biến mất." };
       }
-      await pause(2_000);
-      continue;
+      const after = await sendImageToFlowTab(tabId, { type: "FLOWX_CHECK_VIDEO_VIEWER" });
+      sendJobProgress(jobId, "generating", `Đang thử mở card video render · lần ${attempt}`);
+      if (after?.viewerOpen) return { ok: true, attempts: attempt };
+    } catch (error) {
+      sendJobProgress(jobId, "generating", `Lần ${attempt} chưa mở được card render: ${String(error?.message || error)}`);
     }
-    if (state?.ready) return { ok: true, src: state.src || "" };
-    if (state?.cardFound === false) {
-      return { ok: false, code: "FLOW_UI_CHANGED", error: state.error || "Card video render đã biến mất." };
-    }
-    if (Date.now() - lastProgressAt >= 15_000) {
-      lastProgressAt = Date.now();
-      sendJobProgress(jobId, "generating", "Đã khóa đúng card video mới; đang chờ render hoàn tất rồi mới mở");
-    }
-    await pause(2_000);
+    await pause(Math.max(0, 3_000 - (Date.now() - attemptStartedAt)));
   }
-  return { ok: false, timeout: true, code: "TIMEOUT", error: "Card video Flow chưa render xong sau 10 phút." };
+  return { ok: false, timeout: true, code: "TIMEOUT", error: "Không mở được card video Flow sau 10 phút thử mỗi 3 giây." };
 }
 
 async function waitForFlowVideo(tabId, videoBaseline, jobId) {
@@ -1328,20 +1320,13 @@ async function generateFlowVideo(tabId, payload, jobId) {
     videoCardBaseline: submitted.videoCardBaseline,
   }).catch((error) => ({ ok: false, error: String(error?.message || error) }));
   if (renderingCard?.ok) {
-    sendJobProgress(jobId, "generating", "Đã nhận diện card video đang render; sẽ chỉ mở sau khi render hoàn tất");
-    const cardReady = await waitForRenderingCardReady(tabId, renderingCard.cardKey, jobId);
-    if (cardReady?.stopped) return cardReady;
-    if (cardReady?.timeout) return cardReady;
-    const openedViewer = cardReady?.ok
-      ? await sendImageToFlowTab(tabId, {
-        type: "FLOWX_OPEN_RENDERED_VIDEO_CARD",
-        cardKey: renderingCard.cardKey,
-      }).catch((error) => ({ ok: false, error: String(error?.message || error) }))
-      : { ok: false, error: cardReady?.error || "Card video chưa sẵn sàng" };
-    const viewerReady = openedViewer?.ok
-      ? await waitForRenderingVideoInViewer(tabId, jobId)
-      : { ok: false, error: openedViewer?.error || "Không mở được video đã render" };
-    if (viewerReady?.ok) {
+    sendJobProgress(jobId, "generating", "Đã khóa card video mới; bắt đầu bấm lại card mỗi 3 giây đến khi viewer mở");
+    const viewerOpened = await openRenderingViewerWithRetries(
+      tabId,
+      renderingCard.cardKey,
+      jobId,
+    );
+    if (viewerOpened?.ok) {
       try {
         const resultPath = await downloadNewestVideoThroughFlow(
           tabId,
@@ -1358,9 +1343,9 @@ async function generateFlowVideo(tabId, payload, jobId) {
           `Tải trực tiếp trong viewer chưa thành công; chuyển sang URL dự phòng: ${String(error?.message || error)}`,
         );
       }
-    } else if (viewerReady?.stopped) return viewerReady;
+    } else if (viewerOpened?.stopped) return viewerOpened;
     await sendImageToFlowTab(tabId, { type: "FLOWX_CLOSE_VIDEO_VIEWER" }).catch(() => {});
-    if (viewerReady?.timeout) return viewerReady;
+    if (viewerOpened?.timeout) return viewerOpened;
   } else {
     sendJobProgress(
       jobId,

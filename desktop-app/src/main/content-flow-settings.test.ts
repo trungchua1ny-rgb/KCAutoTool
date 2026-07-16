@@ -182,9 +182,9 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     startNativeVideoDownload: (baseline: string[]) => Promise<Record<string, unknown>>;
     videoRenderCardSnapshot: () => Set<string>;
     findNewRenderingVideoCard: (baseline: string[]) => Promise<Record<string, unknown>>;
-    renderingVideoCardState: (cardKey: string) => Record<string, unknown>;
-    openRenderedVideoCard: (cardKey: string) => Promise<Record<string, unknown>>;
+    clickRenderingVideoCard: (cardKey: string) => Promise<Record<string, unknown>>;
     videoViewerState: () => Record<string, unknown>;
+    clickViewerDownload: () => Promise<Record<string, unknown>>;
   };
 
   const landscape = new FakeControl(
@@ -390,13 +390,14 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   assert.equal(trackedRenderCard.ok, true);
   assert.equal(trackedRenderCard.cardKey, "fe_id_new");
   assert.equal(newRenderTrigger.clickCount, 0);
-  assert.equal(internals.renderingVideoCardState("fe_id_new").ready, false);
-  newRenderCard.video = newVideo;
-  assert.equal(internals.renderingVideoCardState("fe_id_new").ready, true);
-  const openedRenderCard = await internals.openRenderedVideoCard("fe_id_new");
-  assert.equal(openedRenderCard.ok, true);
+  const clickedRenderCard = await internals.clickRenderingVideoCard("fe_id_new");
+  assert.equal(clickedRenderCard.ok, true);
   assert.equal(newRenderTrigger.clickCount > 0, true);
   assert.equal(internals.videoViewerState().downloadReady, true);
+  nativeDownload.setAttribute("disabled", "");
+  const disabledDownloadAttempt = await internals.clickViewerDownload();
+  assert.equal(disabledDownloadAttempt.ok, true);
+  assert.equal(disabledDownloadAttempt.disabled, true);
 
   const gullitAsset = new FakeControl("asset-card", "", { alt: "Gullit.png" });
   assert.equal(
