@@ -1770,7 +1770,7 @@ function getCompletedVideos() {
 }
 
 function videoSourceCandidates(video) {
-  return [
+  const rawValues = [
     video.currentSrc,
     video.src,
     video.getAttribute("src"),
@@ -1779,7 +1779,18 @@ function videoSourceCandidates(video) {
       source.src,
       source.getAttribute("src"),
     ]),
-  ].filter((value) => typeof value === "string" && /^(?:https?:|blob:)/i.test(value.trim()));
+  ];
+  const resolved = rawValues.flatMap((value) => {
+    if (typeof value !== "string" || !value.trim()) return [];
+    const trimmed = value.trim();
+    if (/^(?:https?:|blob:)/i.test(trimmed)) return [trimmed];
+    try {
+      return [new URL(trimmed, location.href).href];
+    } catch (_) {
+      return [];
+    }
+  });
+  return [...new Set(resolved)];
 }
 
 function videoSrcKey(video) {
@@ -1822,13 +1833,18 @@ function videoBaselineSnapshot() {
   );
 }
 
-function checkForNewVideo(baselineValues) {
+function freshCompletedVideos(baselineValues) {
   const baseline = new Set(Array.isArray(baselineValues) ? baselineValues : []);
   const completed = getCompletedVideos();
   const fresh = completed.filter((video) => {
     const keys = videoIdentityKeys(video);
     return keys.length > 0 && !keys.some((key) => baseline.has(key));
   });
+  return { completed, fresh };
+}
+
+function checkForNewVideo(baselineValues) {
+  const { completed, fresh } = freshCompletedVideos(baselineValues);
   if (fresh.length === 0) {
     return {
       ok: true,
@@ -1848,6 +1864,55 @@ function checkForNewVideo(baselineValues) {
     visibleVideos: completed.length,
     rejectedVideos: completed.length - fresh.length,
   };
+}
+
+function findVideoViewerButton(kind) {
+  const headerButtons = [...document.querySelectorAll("header button")].filter(isVisible);
+  const buttons = headerButtons.length > 0
+    ? headerButtons
+    : [...document.querySelectorAll("button")].filter(isVisible);
+  if (kind === "download") {
+    return buttons.find((button) => {
+      const label = buttonLabel(button).toLocaleLowerCase();
+      const symbol = button.querySelector("i")?.textContent?.trim().toLocaleLowerCase() || "";
+      return symbol === "download" || /download|tải xuống|tai xuong/.test(label);
+    }) || null;
+  }
+  return buttons.find((button) => /^(xong|done)$/i.test(buttonLabel(button).trim())) || null;
+}
+
+async function startNativeVideoDownload(baselineValues) {
+  const { fresh } = freshCompletedVideos(baselineValues);
+  const newest = fresh.at(-1);
+  if (!newest) {
+    return { ok: false, error: "Không còn tìm thấy video mới nhất để mở trình tải Flow." };
+  }
+
+  const trigger = newest.closest?.("button") || newest.closest?.("a") || newest;
+  clickFully(trigger);
+  let viewerOpened = true;
+  try {
+    const downloadButton = await waitUntil(() => findVideoViewerButton("download"), 8_000);
+    if (!downloadButton) {
+      return { ok: false, error: "Đã mở video mới nhưng không tìm thấy nút Tải xuống của Flow." };
+    }
+    clickFully(downloadButton);
+    await sleep(500);
+    return {
+      ok: true,
+      src: videoSrcKey(newest),
+      identity: videoIdentityKeys(newest).join("|"),
+    };
+  } finally {
+    if (viewerOpened) {
+      const doneButton = await waitUntil(() => findVideoViewerButton("done"), 2_000);
+      if (doneButton) {
+        clickFully(doneButton);
+        await sleep(200);
+      }
+      viewerOpened = false;
+    }
+  }
 }
 
 async function waitForNewVideo(baselineSet) {
@@ -1954,6 +2019,7 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     confirmVideoGenerationMode,
     checkForNewVideo,
     videoBaselineSnapshot,
+    startNativeVideoDownload,
     isDurationControl,
     isLandscapeAspectControl,
     selectedFlowTab,
@@ -2248,6 +2314,13 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     if (msg.type === "FLOWX_CHECK_NEW_VIDEO") {
       sendResponse(checkForNewVideo(msg.videoBaseline));
       return;
+    }
+
+    if (msg.type === "FLOWX_NATIVE_DOWNLOAD_NEW_VIDEO") {
+      startNativeVideoDownload(msg.videoBaseline)
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+      return true;
     }
 
     if (msg.type === "TODATAURL") {

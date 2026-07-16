@@ -11,6 +11,8 @@ class FakeControl {
   currentSrc = "";
   src = "";
   parentElement: FakeGroup | null = null;
+  clickCount = 0;
+  onClick: (() => void) | null = null;
   private readonly attributes: Record<string, string>;
 
   constructor(id: string, textContent: string, attributes: Record<string, string>) {
@@ -37,6 +39,19 @@ class FakeControl {
 
   getBoundingClientRect(): Record<string, number> {
     return { left: 10, top: 10, right: 130, bottom: 50, width: 120, height: 40 };
+  }
+
+  querySelector(): null {
+    return null;
+  }
+
+  dispatchEvent(): boolean {
+    return true;
+  }
+
+  click(): void {
+    this.clickCount += 1;
+    this.onClick?.();
   }
 }
 
@@ -89,6 +104,12 @@ class FakeVideo {
 
   querySelectorAll(): [] {
     return [];
+  }
+
+  trigger: FakeControl | null = null;
+
+  closest(): FakeControl | null {
+    return this.trigger;
   }
 }
 
@@ -143,6 +164,7 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     confirmVideoGenerationMode: (mode: "frames" | "ingredients") => Promise<Record<string, unknown>>;
     checkForNewVideo: (baseline: string[]) => Record<string, unknown>;
     videoBaselineSnapshot: () => Set<string>;
+    startNativeVideoDownload: (baseline: string[]) => Promise<Record<string, unknown>>;
   };
 
   const landscape = new FakeControl(
@@ -316,12 +338,27 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     180,
     101,
   );
-  newVideo.src = "https://flow.google/generated/new-video.mp4?token=signed";
+  newVideo.src = "/fx/api/trpc/media.getMediaUrlRedirect?name=881d5c13-8f04-4017-89b3-a6df82a53d78";
   videos.push(newVideo);
   const newVideoResult = internals.checkForNewVideo(videoBaseline);
   assert.equal(newVideoResult.ok, true);
   assert.equal(newVideoResult.found, true);
-  assert.equal(newVideoResult.src, "https://flow.google/generated/new-video.mp4?token=signed");
+  assert.equal(
+    newVideoResult.src,
+    "https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=881d5c13-8f04-4017-89b3-a6df82a53d78",
+  );
+
+  controls.length = 0;
+  const videoTrigger = new FakeControl("latest-video", "", {});
+  const nativeDownload = new FakeControl("native-download", "download Tải xuống", {});
+  const done = new FakeControl("viewer-done", "Xong", {});
+  videoTrigger.onClick = () => controls.push(nativeDownload, done);
+  newVideo.trigger = videoTrigger;
+  const nativeDownloadResult = await internals.startNativeVideoDownload(videoBaseline);
+  assert.equal(nativeDownloadResult.ok, true);
+  assert.equal(videoTrigger.clickCount > 0, true);
+  assert.equal(nativeDownload.clickCount > 0, true);
+  assert.equal(done.clickCount > 0, true);
 
   const gullitAsset = new FakeControl("asset-card", "", { alt: "Gullit.png" });
   assert.equal(

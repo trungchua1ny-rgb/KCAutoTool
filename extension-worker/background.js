@@ -306,6 +306,71 @@ async function waitForDownload(downloadId, timeoutMs = 120000, mediaLabel = "n�
   throw new Error(`Hết thời gian chờ Chrome lưu ${mediaLabel}`);
 }
 
+function isNativeFlowVideoDownload(item, knownIds, startedAt) {
+  if (!item || knownIds.has(item.id)) return false;
+  const itemStartedAt = Date.parse(item.startTime || "");
+  if (Number.isFinite(itemStartedAt) && itemStartedAt < startedAt - 2_000) return false;
+  const urls = `${item.url || ""} ${item.finalUrl || ""}`.toLocaleLowerCase();
+  const filename = String(item.filename || "").toLocaleLowerCase();
+  const mime = String(item.mime || "").toLocaleLowerCase();
+  return mime.startsWith("video/") ||
+    /\.(?:mp4|webm|mov)(?:$|[?#])/.test(`${filename} ${urls}`) ||
+    /(?:labs\.google\/fx|flow\.google|media\.getmediaurlredirect|googlevideo)/.test(urls);
+}
+
+async function downloadNewestVideoThroughFlow(tabId, videoBaseline, payload, jobId) {
+  const existing = await chrome.downloads.search({});
+  const knownIds = new Set(existing.map((item) => item.id));
+  const startedAt = Date.now();
+  let capturedItem = null;
+  let resolveCreated;
+  const createdPromise = new Promise((resolve) => {
+    resolveCreated = resolve;
+  });
+  const capture = (item) => {
+    if (capturedItem || !isNativeFlowVideoDownload(item, knownIds, startedAt)) return false;
+    capturedItem = item;
+    resolveCreated(item);
+    return true;
+  };
+  const onCreated = (item) => {
+    capture(item);
+  };
+  const onDeterminingFilename = (item, suggest) => {
+    if (capturedItem?.id !== item.id && !capture(item)) return;
+    const mimeType = String(item.mime || "").toLocaleLowerCase() === "video/webm"
+      ? "video/webm"
+      : "video/mp4";
+    suggest({
+      filename: safeVideoFileName(payload.sceneId, mimeType),
+      conflictAction: "uniquify",
+    });
+  };
+
+  chrome.downloads.onCreated.addListener(onCreated);
+  chrome.downloads.onDeterminingFilename.addListener(onDeterminingFilename);
+  try {
+    sendJobProgress(jobId, "downloading", "Đang mở video mới nhất và bấm nút Tải xuống gốc của Flow");
+    const response = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_NATIVE_DOWNLOAD_NEW_VIDEO",
+      videoBaseline,
+    });
+    if (!response?.ok) throw new Error(response?.error || "Flow không mở được nút tải video");
+
+    const timeout = pause(15_000).then(() => null);
+    let item = capturedItem || await Promise.race([createdPromise, timeout]);
+    if (!item) {
+      const recent = await chrome.downloads.search({ orderBy: ["-startTime"], limit: 50 });
+      item = recent.find((entry) => isNativeFlowVideoDownload(entry, knownIds, startedAt)) || null;
+    }
+    if (!item) throw new Error("Chrome không ghi nhận lượt tải video sau khi bấm nút Flow");
+    return await waitForDownload(item.id, 300_000, "video");
+  } finally {
+    chrome.downloads.onCreated.removeListener(onCreated);
+    chrome.downloads.onDeterminingFilename.removeListener(onDeterminingFilename);
+  }
+}
+
 async function downloadFlowImage(response, payload) {
   const url = typeof response.dataUrl === "string" && response.dataUrl.startsWith("data:image/")
     ? response.dataUrl
@@ -1186,6 +1251,22 @@ async function generateFlowVideo(tabId, payload, jobId) {
   const video = await waitForFlowVideo(tabId, submitted.videoBaseline, jobId);
   if (!video?.ok) return video;
 
+  try {
+    const resultPath = await downloadNewestVideoThroughFlow(
+      tabId,
+      submitted.videoBaseline,
+      payload,
+      jobId,
+    );
+    return { ok: true, resultPath };
+  } catch (error) {
+    sendJobProgress(
+      jobId,
+      "downloading",
+      `Nút tải gốc Flow chưa dùng được; chuyển sang URL dự phòng: ${String(error?.message || error)}`,
+    );
+  }
+
   let dataUrl = null;
   if (/^https?:/i.test(video.src)) {
     sendJobProgress(jobId, "downloading", "Đã nhận diện video mới; chuyển URL trực tiếp cho Chrome tải về");
@@ -1393,9 +1474,9 @@ async function handleSceneJob(message) {
       return;
     }
     sendJobProgress(jobId, "downloading", `Đang lưu ${payload.mediaType === "image" ? "ảnh" : "video"} vào Downloads/KC Auto Tool`);
-    const resultPath = payload.mediaType === "image"
+    const resultPath = response.resultPath || (payload.mediaType === "image"
       ? await downloadFlowImage(response, payload)
-      : await downloadFlowVideo(response, payload);
+      : await downloadFlowVideo(response, payload));
     if (activeJob !== job || job.stopping) return;
     connection.send({
       type: "JOB_DONE",
