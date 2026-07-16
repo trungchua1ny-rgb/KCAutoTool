@@ -318,7 +318,7 @@ function isNativeFlowVideoDownload(item, knownIds, startedAt) {
     /(?:labs\.google\/fx|flow\.google|media\.getmediaurlredirect|googlevideo)/.test(urls);
 }
 
-async function downloadNewestVideoThroughFlow(tabId, videoBaseline, payload, jobId) {
+async function downloadNewestVideoThroughFlow(tabId, videoBaseline, payload, jobId, viewerAlreadyOpen = false) {
   const existing = await chrome.downloads.search({});
   const knownIds = new Set(existing.map((item) => item.id));
   const startedAt = Date.now();
@@ -350,9 +350,17 @@ async function downloadNewestVideoThroughFlow(tabId, videoBaseline, payload, job
   chrome.downloads.onCreated.addListener(onCreated);
   chrome.downloads.onDeterminingFilename.addListener(onDeterminingFilename);
   try {
-    sendJobProgress(jobId, "downloading", "Đang mở video mới nhất và bấm nút Tải xuống gốc của Flow");
+    sendJobProgress(
+      jobId,
+      "downloading",
+      viewerAlreadyOpen
+        ? "Video trong viewer đã render xong; đang bấm Tải xuống"
+        : "Đang mở video mới nhất và bấm nút Tải xuống gốc của Flow",
+    );
     const response = await sendImageToFlowTab(tabId, {
-      type: "FLOWX_NATIVE_DOWNLOAD_NEW_VIDEO",
+      type: viewerAlreadyOpen
+        ? "FLOWX_DOWNLOAD_CURRENT_VIDEO_VIEWER"
+        : "FLOWX_NATIVE_DOWNLOAD_NEW_VIDEO",
       videoBaseline,
     });
     if (!response?.ok) throw new Error(response?.error || "Flow không mở được nút tải video");
@@ -766,6 +774,7 @@ async function typeAndConfirmFlowPrompt(tabId, prepareType, text) {
         ...lastResult,
         attempt,
         videoBaseline: Array.isArray(target.videoBaseline) ? target.videoBaseline : [],
+        videoCardBaseline: Array.isArray(target.videoCardBaseline) ? target.videoCardBaseline : [],
       };
     }
     await pause(700);
@@ -775,6 +784,37 @@ async function typeAndConfirmFlowPrompt(tabId, prepareType, text) {
     code: "FLOW_SUBMIT_FAILED",
     error: "Google Flow không nhận prompt sau 3 lần thử.",
   };
+}
+
+async function waitForRenderingVideoInViewer(tabId, jobId) {
+  const deadline = Date.now() + 600_000;
+  let lastProgressAt = 0;
+  while (Date.now() < deadline) {
+    if (activeJob?.jobId !== jobId || activeJob?.stopping) {
+      return { ok: false, stopped: true, code: "STOPPED", error: "Đã dừng chờ video trong viewer Flow." };
+    }
+    let state;
+    try {
+      state = await sendImageToFlowTab(tabId, { type: "FLOWX_CHECK_VIDEO_VIEWER" });
+    } catch (error) {
+      if (Date.now() - lastProgressAt >= 10_000) {
+        lastProgressAt = Date.now();
+        sendJobProgress(jobId, "generating", `Đang nối lại viewer video: ${String(error?.message || error)}`);
+      }
+      await pause(2_000);
+      continue;
+    }
+    if (!state?.viewerOpen) {
+      return { ok: false, code: "FLOW_UI_CHANGED", error: "Viewer video Flow đã đóng khi video còn đang render." };
+    }
+    if (state.downloadReady) return { ok: true };
+    if (Date.now() - lastProgressAt >= 15_000) {
+      lastProgressAt = Date.now();
+      sendJobProgress(jobId, "generating", "Đang theo dõi video ngay trong viewer; chờ nút Tải xuống sẵn sàng");
+    }
+    await pause(2_000);
+  }
+  return { ok: false, timeout: true, code: "TIMEOUT", error: "Video trong viewer Flow chưa render xong sau 10 phút." };
 }
 
 async function waitForFlowVideo(tabId, videoBaseline, jobId) {
@@ -1248,6 +1288,44 @@ async function generateFlowVideo(tabId, payload, jobId) {
     "generating",
     `Đã gửi prompt; Google Flow đang tạo video ${payload.videoSettings.durationSeconds} giây`,
   );
+
+  const openedViewer = await sendImageToFlowTab(tabId, {
+    type: "FLOWX_OPEN_NEW_RENDERING_VIDEO",
+    videoCardBaseline: submitted.videoCardBaseline,
+  }).catch((error) => ({ ok: false, error: String(error?.message || error) }));
+  if (openedViewer?.ok) {
+    sendJobProgress(jobId, "generating", "Đã mở card video đang render; theo dõi trực tiếp đến khi tải được");
+    const viewerReady = await waitForRenderingVideoInViewer(tabId, jobId);
+    if (viewerReady?.ok) {
+      try {
+        const resultPath = await downloadNewestVideoThroughFlow(
+          tabId,
+          submitted.videoBaseline,
+          payload,
+          jobId,
+          true,
+        );
+        return { ok: true, resultPath };
+      } catch (error) {
+        sendJobProgress(
+          jobId,
+          "downloading",
+          `Tải trực tiếp trong viewer chưa thành công; chuyển sang URL dự phòng: ${String(error?.message || error)}`,
+        );
+      }
+    } else if (viewerReady?.stopped) {
+      return viewerReady;
+    }
+    await sendImageToFlowTab(tabId, { type: "FLOWX_CLOSE_VIDEO_VIEWER" }).catch(() => {});
+    if (viewerReady?.timeout) return viewerReady;
+  } else {
+    sendJobProgress(
+      jobId,
+      "generating",
+      `Chưa mở được card đang render; tiếp tục bộ dò kết quả ngoài lưới: ${String(openedViewer?.error || "không rõ lỗi")}`,
+    );
+  }
+
   const video = await waitForFlowVideo(tabId, submitted.videoBaseline, jobId);
   if (!video?.ok) return video;
 

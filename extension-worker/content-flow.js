@@ -1163,12 +1163,14 @@ async function prepareVideoPromptForDebugger() {
   }
   const rect = input.getBoundingClientRect();
   const videoBaseline = videoBaselineSnapshot();
+  const videoCardBaseline = videoRenderCardSnapshot();
   window.__flowx_video_baseline = videoBaseline;
   return {
     ok: true,
     x: Math.round(rect.left + rect.width / 2),
     y: Math.round(rect.top + rect.height / 2),
     videoBaseline: [...videoBaseline],
+    videoCardBaseline: [...videoCardBaseline],
   };
 }
 
@@ -1833,6 +1835,32 @@ function videoBaselineSnapshot() {
   );
 }
 
+function videoRenderCards() {
+  return [...document.querySelectorAll('[id^="fe_id_"]')].flatMap((card) => {
+    const trigger = card.querySelector(":scope > a > button") || card.querySelector("a > button");
+    if (!trigger || !isVisible(trigger)) return [];
+    return [{ card, trigger, key: card.id }];
+  });
+}
+
+function videoRenderCardSnapshot() {
+  return new Set(videoRenderCards().map((entry) => entry.key));
+}
+
+async function openNewRenderingVideoCard(baselineValues) {
+  const baseline = new Set(Array.isArray(baselineValues) ? baselineValues : []);
+  const entry = await waitUntil(() => {
+    const fresh = videoRenderCards().filter((candidate) => !baseline.has(candidate.key));
+    return fresh.at(-1) || null;
+  }, 20_000);
+  if (!entry) {
+    return { ok: false, error: "Không tìm thấy card video đang render mới sau khi gửi prompt." };
+  }
+  clickFully(entry.trigger);
+  await sleep(350);
+  return { ok: true, cardKey: entry.key };
+}
+
 function freshCompletedVideos(baselineValues) {
   const baseline = new Set(Array.isArray(baselineValues) ? baselineValues : []);
   const completed = getCompletedVideos();
@@ -1879,6 +1907,44 @@ function findVideoViewerButton(kind) {
     }) || null;
   }
   return buttons.find((button) => /^(xong|done)$/i.test(buttonLabel(button).trim())) || null;
+}
+
+function videoViewerState() {
+  const downloadButton = findVideoViewerButton("download");
+  const disabled = Boolean(
+    downloadButton?.disabled ||
+    downloadButton?.getAttribute("aria-disabled") === "true" ||
+    downloadButton?.hasAttribute("disabled"),
+  );
+  return {
+    ok: true,
+    viewerOpen: Boolean(findVideoViewerButton("done")),
+    downloadReady: Boolean(downloadButton && !disabled),
+  };
+}
+
+async function clickViewerDownloadAndClose() {
+  const downloadButton = findVideoViewerButton("download");
+  if (!downloadButton || videoViewerState().downloadReady !== true) {
+    return { ok: false, error: "Video trong viewer chưa sẵn sàng để tải xuống." };
+  }
+  clickFully(downloadButton);
+  await sleep(500);
+  const doneButton = await waitUntil(() => findVideoViewerButton("done"), 2_000);
+  if (doneButton) {
+    clickFully(doneButton);
+    await sleep(200);
+  }
+  return { ok: true };
+}
+
+async function closeVideoViewer() {
+  const doneButton = findVideoViewerButton("done");
+  if (doneButton) {
+    clickFully(doneButton);
+    await sleep(200);
+  }
+  return { ok: true };
 }
 
 async function startNativeVideoDownload(baselineValues) {
@@ -2020,6 +2086,10 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     checkForNewVideo,
     videoBaselineSnapshot,
     startNativeVideoDownload,
+    videoRenderCardSnapshot,
+    openNewRenderingVideoCard,
+    videoViewerState,
+    clickViewerDownloadAndClose,
     isDurationControl,
     isLandscapeAspectControl,
     selectedFlowTab,
@@ -2039,6 +2109,7 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
 
     if (msg.type === "STOP") {
       STOP = true;
+      void closeVideoViewer();
       sendResponse({ ok: true });
       return;
     }
@@ -2320,6 +2391,30 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
       startNativeVideoDownload(msg.videoBaseline)
         .then((result) => sendResponse(result))
         .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+
+    if (msg.type === "FLOWX_OPEN_NEW_RENDERING_VIDEO") {
+      openNewRenderingVideoCard(msg.videoCardBaseline)
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+
+    if (msg.type === "FLOWX_CHECK_VIDEO_VIEWER") {
+      sendResponse(videoViewerState());
+      return;
+    }
+
+    if (msg.type === "FLOWX_DOWNLOAD_CURRENT_VIDEO_VIEWER") {
+      clickViewerDownloadAndClose()
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+
+    if (msg.type === "FLOWX_CLOSE_VIDEO_VIEWER") {
+      closeVideoViewer().then(sendResponse);
       return true;
     }
 

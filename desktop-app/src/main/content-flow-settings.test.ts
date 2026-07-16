@@ -67,6 +67,14 @@ class FakeGroup {
   }
 }
 
+class FakeVideoCard {
+  constructor(public id: string, private readonly trigger: FakeControl) {}
+
+  querySelector(): FakeControl {
+    return this.trigger;
+  }
+}
+
 class FakeVideo {
   src = "";
   poster = "";
@@ -120,11 +128,16 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   );
   const controls: FakeControl[] = [];
   const videos: FakeVideo[] = [];
+  const videoCards: FakeVideoCard[] = [];
   const windowValue: Record<string, unknown> = {};
   const context = {
     window: windowValue,
     document: {
-      querySelectorAll: (selector: string) => selector === "video" ? videos : controls,
+      querySelectorAll: (selector: string) => selector === "video"
+        ? videos
+        : selector === '[id^="fe_id_"]'
+          ? videoCards
+          : controls,
       querySelector: () => null,
     },
     chrome: {
@@ -165,6 +178,9 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     checkForNewVideo: (baseline: string[]) => Record<string, unknown>;
     videoBaselineSnapshot: () => Set<string>;
     startNativeVideoDownload: (baseline: string[]) => Promise<Record<string, unknown>>;
+    videoRenderCardSnapshot: () => Set<string>;
+    openNewRenderingVideoCard: (baseline: string[]) => Promise<Record<string, unknown>>;
+    videoViewerState: () => Record<string, unknown>;
   };
 
   const landscape = new FakeControl(
@@ -359,6 +375,17 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   assert.equal(videoTrigger.clickCount > 0, true);
   assert.equal(nativeDownload.clickCount > 0, true);
   assert.equal(done.clickCount > 0, true);
+
+  const oldRenderTrigger = new FakeControl("old-render", "", {});
+  videoCards.push(new FakeVideoCard("fe_id_old", oldRenderTrigger));
+  const renderCardBaseline = [...internals.videoRenderCardSnapshot()];
+  const newRenderTrigger = new FakeControl("new-render", "", {});
+  videoCards.push(new FakeVideoCard("fe_id_new", newRenderTrigger));
+  const openedRenderCard = await internals.openNewRenderingVideoCard(renderCardBaseline);
+  assert.equal(openedRenderCard.ok, true);
+  assert.equal(openedRenderCard.cardKey, "fe_id_new");
+  assert.equal(newRenderTrigger.clickCount > 0, true);
+  assert.equal(internals.videoViewerState().downloadReady, true);
 
   const gullitAsset = new FakeControl("asset-card", "", { alt: "Gullit.png" });
   assert.equal(

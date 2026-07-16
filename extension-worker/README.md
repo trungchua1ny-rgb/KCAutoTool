@@ -23,7 +23,7 @@ For `GENERATE_TIMELINE`, keep a logged-in ChatGPT conversation open in the
 Chat worker profile. The worker processes one timeline at a time and supports
 the protocol `STOP` message.
 
-Version `2.34.0` opens the newest completed Flow video card, clicks Flow's native `Tải xuống` action, captures and names that browser download for the active scene, then clicks `Xong` before continuing. Direct HTTPS and blob reads remain fallbacks. It retains 2.33.0's split-screen video-card detection and 2.32.0's policy-safe prompt repair.
+Version `2.35.0` snapshots Flow result cards before submit, opens the newly-created rendering card immediately after submit, monitors that viewer until its native `Tải xuống` action is enabled, captures and names the download, then clicks `Xong` before continuing. Grid detection, direct HTTPS, and blob reads remain fallbacks. It retains 2.34.0's native download capture and 2.32.0's policy-safe prompt repair.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from
