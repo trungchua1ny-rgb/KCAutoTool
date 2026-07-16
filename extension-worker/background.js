@@ -240,7 +240,9 @@ function isMissingContentReceiver(error) {
   const message = String(error?.message || error);
   return (
     message.includes("Could not establish connection") ||
-    message.includes("Receiving end does not exist")
+    message.includes("Receiving end does not exist") ||
+    message.includes("message channel closed") ||
+    message.includes("asynchronous response")
   );
 }
 
@@ -280,17 +282,17 @@ function safeVideoFileName(sceneId, mimeType) {
   return `KC Auto Tool/${sceneId}-${Date.now()}.${extension}`;
 }
 
-async function waitForDownload(downloadId, timeoutMs = 120000) {
+async function waitForDownload(downloadId, timeoutMs = 120000, mediaLabel = "nội dung") {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const [item] = await chrome.downloads.search({ id: downloadId });
     if (item?.state === "complete" && item.filename) return item.filename;
     if (item?.state === "interrupted") {
-      throw new Error(`Tải ảnh bị gián đoạn: ${item.error || "unknown"}`);
+      throw new Error(`Tải ${mediaLabel} bị gián đoạn: ${item.error || "unknown"}`);
     }
     await pause(250);
   }
-  throw new Error("Hết thời gian chờ Chrome lưu ảnh");
+  throw new Error(`Hết thời gian chờ Chrome lưu ${mediaLabel}`);
 }
 
 async function downloadFlowImage(response, payload) {
@@ -307,7 +309,7 @@ async function downloadFlowImage(response, payload) {
     conflictAction: "uniquify",
     saveAs: false,
   });
-  return waitForDownload(downloadId);
+  return waitForDownload(downloadId, 120000, "ảnh");
 }
 
 async function downloadFlowVideo(response, payload) {
@@ -324,7 +326,7 @@ async function downloadFlowVideo(response, payload) {
     conflictAction: "uniquify",
     saveAs: false,
   });
-  return waitForDownload(downloadId, 300000);
+  return waitForDownload(downloadId, 300000, "video");
 }
 
 function stripConflictingRenderPhrases(prompt) {
@@ -683,13 +685,82 @@ async function typeAndConfirmFlowPrompt(tabId, prepareType, text) {
     if (!target?.ok) return target;
     await typeAndSubmit(tabId, target.x, target.y, text);
     lastResult = await sendImageToFlowTab(tabId, { type: "FLOWX_CONFIRM_SUBMIT" });
-    if (lastResult?.ok) return { ...lastResult, attempt };
+    if (lastResult?.ok) {
+      return {
+        ...lastResult,
+        attempt,
+        videoBaseline: Array.isArray(target.videoBaseline) ? target.videoBaseline : [],
+      };
+    }
     await pause(700);
   }
   return lastResult || {
     ok: false,
     code: "FLOW_SUBMIT_FAILED",
     error: "Google Flow không nhận prompt sau 3 lần thử.",
+  };
+}
+
+async function waitForFlowVideo(tabId, videoBaseline, jobId) {
+  const deadline = Date.now() + 600_000;
+  const baseline = Array.isArray(videoBaseline) ? videoBaseline.slice(0, 2_000) : [];
+  let stableIdentity = "";
+  let stablePolls = 0;
+  let lastProgressAt = 0;
+
+  while (Date.now() < deadline) {
+    if (activeJob?.jobId !== jobId || activeJob?.stopping) {
+      return { ok: false, stopped: true, code: "STOPPED", error: "Đã dừng chờ video Google Flow." };
+    }
+    let check;
+    try {
+      check = await sendImageToFlowTab(tabId, {
+        type: "FLOWX_CHECK_NEW_VIDEO",
+        videoBaseline: baseline,
+      });
+    } catch (error) {
+      // A short poll can safely recover after a Flow reload/content-script
+      // reinjection; unlike the old ten-minute message it holds no fragile port.
+      stableIdentity = "";
+      stablePolls = 0;
+      if (Date.now() - lastProgressAt >= 10_000) {
+        lastProgressAt = Date.now();
+        sendJobProgress(jobId, "generating", `Đang nối lại bộ dò video: ${String(error?.message || error)}`);
+      }
+      await pause(2_000);
+      continue;
+    }
+    if (!check?.ok) return check;
+    if (check.found && typeof check.src === "string" && check.src) {
+      const identity = String(check.identity || check.src);
+      if (identity === stableIdentity) {
+        stablePolls += 1;
+      } else {
+        stableIdentity = identity;
+        stablePolls = 1;
+      }
+      if (stablePolls >= 2) {
+        return { ok: true, src: check.src, identity };
+      }
+    } else {
+      stableIdentity = "";
+      stablePolls = 0;
+    }
+    if (Date.now() - lastProgressAt >= 15_000) {
+      lastProgressAt = Date.now();
+      sendJobProgress(
+        jobId,
+        "generating",
+        `Vẫn đang chờ đúng video mới từ Flow; thấy ${Number(check.visibleVideos) || 0} video trên trang`,
+      );
+    }
+    await pause(2_000);
+  }
+  return {
+    ok: false,
+    timeout: true,
+    code: "TIMEOUT",
+    error: "Google Flow không xuất hiện video mới trong 10 phút.",
   };
 }
 
@@ -1101,10 +1172,18 @@ async function generateFlowVideo(tabId, payload, jobId) {
     "generating",
     `Đã gửi prompt; Google Flow đang tạo video ${payload.videoSettings.durationSeconds} giây`,
   );
-  const video = await sendImageToFlowTab(tabId, { type: "WAIT_VIDEO" });
+  const video = await waitForFlowVideo(tabId, submitted.videoBaseline, jobId);
   if (!video?.ok) return video;
 
+  sendJobProgress(jobId, "downloading", "Đã nhận diện đúng video mới; đang lấy dữ liệu để tải về");
   const converted = await sendImageToFlowTab(tabId, { type: "TODATAURL", src: video.src });
+  if (converted?.error) {
+    return {
+      ok: false,
+      code: "FLOW_VIDEO_READ_FAILED",
+      error: `Đã thấy video mới nhưng không đọc được dữ liệu tải về: ${converted.error}`,
+    };
+  }
   return {
     ok: true,
     src: video.src,
@@ -1287,7 +1366,7 @@ async function handleSceneJob(message) {
         jobId,
         response?.error || (response?.timeout ? `Google Flow tạo ${payload.mediaType === "image" ? "ảnh" : "video"} quá thời gian` : `Google Flow không tạo được ${payload.mediaType === "image" ? "ảnh" : "video"}`),
         code,
-        ["TIMEOUT", "FLOW_UI_CHANGED", "FLOW_REF_UPLOAD_FAILED", "FLOW_REF_ATTACH_FAILED", "FLOW_START_FRAME_ATTACH_FAILED", "FLOW_END_FRAME_ATTACH_FAILED", "FLOW_STALE_MEDIA_CLEAR_FAILED", "FLOW_VIDEO_MODE_NOT_FOUND", "FLOW_VIDEO_MODE_CHANGE_FAILED", "FLOW_VIDEO_SETTINGS_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED", "FLOW_VIDEO_DURATION_NOT_FOUND", "FLOW_VIDEO_DURATION_CHANGE_FAILED", "FLOW_SUBMIT_FAILED"].includes(code),
+        ["TIMEOUT", "FLOW_UI_CHANGED", "FLOW_REF_UPLOAD_FAILED", "FLOW_REF_ATTACH_FAILED", "FLOW_START_FRAME_ATTACH_FAILED", "FLOW_END_FRAME_ATTACH_FAILED", "FLOW_STALE_MEDIA_CLEAR_FAILED", "FLOW_VIDEO_MODE_NOT_FOUND", "FLOW_VIDEO_MODE_CHANGE_FAILED", "FLOW_VIDEO_SETTINGS_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED", "FLOW_VIDEO_DURATION_NOT_FOUND", "FLOW_VIDEO_DURATION_CHANGE_FAILED", "FLOW_VIDEO_READ_FAILED", "FLOW_SUBMIT_FAILED"].includes(code),
       );
       return;
     }

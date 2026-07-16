@@ -52,17 +52,46 @@ class FakeGroup {
   }
 }
 
+class FakeVideo {
+  src = "";
+  poster = "";
+
+  constructor(public currentSrc: string, poster = "") {
+    this.src = currentSrc;
+    this.poster = poster;
+  }
+
+  getAttribute(name: string): string | null {
+    if (name === "src") return this.src || null;
+    if (name === "poster") return this.poster || null;
+    return null;
+  }
+
+  getBoundingClientRect(): Record<string, number> {
+    return { left: 10, top: 10, right: 410, bottom: 235, width: 400, height: 225 };
+  }
+
+  querySelector(): null {
+    return null;
+  }
+
+  querySelectorAll(): [] {
+    return [];
+  }
+}
+
 test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () => {
   const source = await readFile(
     resolve(process.cwd(), "../extension-worker/content-flow.js"),
     "utf8",
   );
   const controls: FakeControl[] = [];
+  const videos: FakeVideo[] = [];
   const windowValue: Record<string, unknown> = {};
   const context = {
     window: windowValue,
     document: {
-      querySelectorAll: () => controls,
+      querySelectorAll: (selector: string) => selector === "video" ? videos : controls,
       querySelector: () => null,
     },
     chrome: {
@@ -100,6 +129,8 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     getMediaModeOption: (mediaType: "image" | "video") => Promise<Record<string, unknown>>;
     getVideoGenerationModeOption: (mode: "frames" | "ingredients") => Promise<Record<string, unknown>>;
     confirmVideoGenerationMode: (mode: "frames" | "ingredients") => Promise<Record<string, unknown>>;
+    checkForNewVideo: (baseline: string[]) => Record<string, unknown>;
+    videoBaselineSnapshot: () => Set<string>;
   };
 
   const landscape = new FakeControl(
@@ -255,6 +286,25 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
       identity: "radix-:test:-trigger-8 radix-:test:-content-8",
     },
   );
+
+  videos.length = 0;
+  const oldVideo = new FakeVideo(
+    "blob:https://flow.google/old-video",
+    "https://flow.google/media?name=old-media-id",
+  );
+  videos.push(oldVideo);
+  const videoBaseline = [...internals.videoBaselineSnapshot()];
+  oldVideo.currentSrc = "blob:https://flow.google/remounted-old-video";
+  oldVideo.src = oldVideo.currentSrc;
+  const newVideo = new FakeVideo(
+    "blob:https://flow.google/new-video",
+    "https://flow.google/media?name=new-media-id",
+  );
+  videos.push(newVideo);
+  const newVideoResult = internals.checkForNewVideo(videoBaseline);
+  assert.equal(newVideoResult.ok, true);
+  assert.equal(newVideoResult.found, true);
+  assert.equal(newVideoResult.src, "blob:https://flow.google/new-video");
 
   const gullitAsset = new FakeControl("asset-card", "", { alt: "Gullit.png" });
   assert.equal(

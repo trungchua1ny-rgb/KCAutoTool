@@ -1162,11 +1162,13 @@ async function prepareVideoPromptForDebugger() {
     return { ok: false, code: "FLOW_UI_CHANGED", error: "Không tìm thấy ô prompt video Google Flow." };
   }
   const rect = input.getBoundingClientRect();
-  window.__flowx_video_baseline = new Set(getCompletedVideos().map(videoSrcKey));
+  const videoBaseline = videoBaselineSnapshot();
+  window.__flowx_video_baseline = videoBaseline;
   return {
     ok: true,
     x: Math.round(rect.left + rect.width / 2),
     y: Math.round(rect.top + rect.height / 2),
+    videoBaseline: [...videoBaseline],
   };
 }
 
@@ -1769,6 +1771,59 @@ function videoSrcKey(video) {
   return srcKey(video) || video.querySelector("source")?.src || "";
 }
 
+function videoIdentityKeys(video) {
+  const values = [
+    video.currentSrc,
+    video.src,
+    video.getAttribute("src"),
+    video.poster,
+    video.getAttribute("poster"),
+    ...[...video.querySelectorAll("source")].flatMap((source) => [
+      source.currentSrc,
+      source.src,
+      source.getAttribute("src"),
+    ]),
+  ].filter((value) => typeof value === "string" && value.trim());
+  const keys = new Set();
+  for (const value of values) {
+    keys.add(value);
+    try {
+      const url = new URL(value, location.href);
+      const stableId = url.searchParams.get("name") || url.searchParams.get("id") || url.searchParams.get("mediaId");
+      if (stableId) keys.add(`media:${stableId}`);
+    } catch (_) {}
+  }
+  return [...keys];
+}
+
+function videoBaselineSnapshot() {
+  // Include hidden/virtualized video elements too. A previous result becoming
+  // visible after submit must never be mistaken for the new scene's output.
+  return new Set(
+    [...document.querySelectorAll("video")].flatMap(videoIdentityKeys),
+  );
+}
+
+function checkForNewVideo(baselineValues) {
+  const baseline = new Set(Array.isArray(baselineValues) ? baselineValues : []);
+  const fresh = getCompletedVideos().filter((video) => {
+    const keys = videoIdentityKeys(video);
+    return keys.length > 0 && !keys.some((key) => baseline.has(key));
+  });
+  if (fresh.length === 0) {
+    return { ok: true, found: false, visibleVideos: getCompletedVideos().length };
+  }
+  // Flow appends the newest generation after older result cards. Taking the
+  // final fresh video avoids selecting an older card remounted by virtualization.
+  const newest = fresh.at(-1);
+  return {
+    ok: true,
+    found: true,
+    src: videoSrcKey(newest),
+    identity: videoIdentityKeys(newest).join("|"),
+  };
+}
+
 async function waitForNewVideo(baselineSet) {
   const deadline = Date.now() + 600000;
   while (Date.now() < deadline) {
@@ -1871,6 +1926,8 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     getMediaModeOption,
     getVideoGenerationModeOption,
     confirmVideoGenerationMode,
+    checkForNewVideo,
+    videoBaselineSnapshot,
     isDurationControl,
     isLandscapeAspectControl,
     selectedFlowTab,
@@ -2160,6 +2217,11 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
         else sendResponse({ ok: true, src: res.src });
       });
       return true;
+    }
+
+    if (msg.type === "FLOWX_CHECK_NEW_VIDEO") {
+      sendResponse(checkForNewVideo(msg.videoBaseline));
+      return;
     }
 
     if (msg.type === "TODATAURL") {

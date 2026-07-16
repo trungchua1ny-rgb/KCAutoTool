@@ -23,7 +23,7 @@ For `GENERATE_TIMELINE`, keep a logged-in ChatGPT conversation open in the
 Chat worker profile. The worker processes one timeline at a time and supports
 the protocol `STOP` message.
 
-Version `2.29.0` locks the current video input tabs to `VIDEO_FRAMES` / **Khung hình** and `VIDEO_REFERENCES` / **Thành phần**, and no longer treats the top-level `IMAGE` tab as a frame control. Mode, 16:9, and 4/6/8-second duration are now configured during one popup opening, preventing a later coordinate lookup from switching the whole workspace back to image generation. The popup opener must explicitly expose Video/Veo identity; ambiguous nearby buttons are rejected instead of clicked. It retains 2.28.0's visible diagnostics and retry pauses.
+Version `2.30.0` replaces the fragile ten-minute `tabs.sendMessage` used while Flow renders video with short two-second background polls. Each poll carries the scene's complete video baseline, survives content-script reinjection, and requires the same new result twice before download. Hidden prior videos and stable poster/media IDs are included in the baseline, and the newest fresh DOM result is selected, preventing remounted old clips from being downloaded for a later scene. Download errors now identify the video stage explicitly. It retains 2.29.0's single-popup video configuration and exact `VIDEO_FRAMES` / `VIDEO_REFERENCES` selectors.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from
