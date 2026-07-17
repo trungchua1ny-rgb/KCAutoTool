@@ -98,7 +98,7 @@ function workerVersionNumber(value: string | null): number {
 }
 
 function supportsTimelineWorker(value: string | null): boolean {
-  return workerVersionNumber(value) >= 2_042_000;
+  return workerVersionNumber(value) >= 2_043_000;
 }
 
 function supportsSceneJobs(value: string | null): boolean {
@@ -478,7 +478,7 @@ export class WorkerServer {
     if (!supportsTimelineWorker(client.workerVersion)) {
       return Promise.reject(
         new WorkerJobError(
-          `KC Dev ${client.workerVersion || "cũ"} chưa hỗ trợ Phase 3a Beat & Chain Planning. Hãy Reload extension.`,
+          `KC Dev ${client.workerVersion || "cũ"} chưa hỗ trợ Phase 3 tối ưu prompt nối tiếp. Hãy Reload extension 2.43.0.`,
           "INVALID_JOB",
         ),
       );

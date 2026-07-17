@@ -147,6 +147,14 @@ The hero crosses the hall.`;
     Array.from(plannedBatches[0].boundaries, (boundary) => boundary.durationSeconds),
     [8, 6, 4],
   );
+  const plannedPrompt = internals.buildTimelinePrompt(
+    plannedBatches[0] as TimelineBatch & { index: number },
+    plannedBatches.length,
+    "A continuous walk through one hall.",
+  );
+  assert.match(plannedPrompt, /chainRole=continue \| chainId=hall/);
+  assert.match(plannedPrompt, /For chainRole continue, write ONLY the video prompt/);
+  assert.match(plannedPrompt, /imagePrompt MUST be exactly ""/);
 
   const firstPrompt = internals.buildTimelinePrompt(
     batches[0] as TimelineBatch & { index: number },
@@ -222,6 +230,23 @@ The hero crosses the hall.`;
     { scenes: validationScenes },
     validationBatch,
   ));
+
+  const continuationBatch = {
+    ...plannedBatches[0],
+    index: 1,
+  } as TimelineBatch & { index: number };
+  const continuationScenes: Array<Record<string, unknown>> = continuationBatch.boundaries.map((boundary) => ({
+    timeStart: String(boundary.start || ""),
+    timeEnd: String(boundary.end || ""),
+    ...(boundary.chainRole === "continue" ? {} : { imagePrompt: detailedImagePrompt }),
+    videoPrompt: detailedVideoPrompt,
+  }));
+  assert.doesNotThrow(() => internals.validateBatchResult(
+    { scenes: continuationScenes },
+    continuationBatch,
+  ));
+  assert.equal(continuationScenes[1].imagePrompt, "");
+
   validationScenes[0].imagePrompt = "too short";
   assert.throws(
     () => internals.validateBatchResult({ scenes: validationScenes }, validationBatch),

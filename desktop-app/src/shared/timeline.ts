@@ -286,9 +286,10 @@ export function normalizeTimelineResult(value: unknown): TimelineResult {
       throw new Error(`Scene ${order} must start exactly when scene ${order - 1} ends`);
     }
     previousEnd = timeEnd.milliseconds;
-    const imagePrompt = normalizePromptTokens(
-      requiredString(scene.imagePrompt, "imagePrompt"),
-    );
+    const chain = normalizeChain(scene, order, previousScene);
+    const imagePrompt = chain.chainRole === "continue"
+      ? ""
+      : normalizePromptTokens(requiredString(scene.imagePrompt, "imagePrompt"));
     const videoPrompt = normalizePromptTokens(
       requiredString(scene.videoPrompt, "videoPrompt", true),
     );
@@ -297,7 +298,6 @@ export function normalizeTimelineResult(value: unknown): TimelineResult {
       scene.usedCharacterTokens,
       `${imagePrompt}\n${videoPrompt}`,
     );
-    const chain = normalizeChain(scene, order, previousScene);
     const normalizedScene: Scene = {
       id: `scene-${String(order).padStart(3, "0")}`,
       order,

@@ -168,7 +168,9 @@ Extension version `2.42.0` uses only the native Google Flow download for video. 
 KC Auto Tool also refuses to dispatch video jobs to KC Dev older than `2.42.0`, rejects an older duplicate worker when a newer profile is connected, and sends `STOP` before replacing a worker from the same profile.
 
 Continuation scenes now skip separate still-image generation. After a chain's previous video is downloaded, FFmpeg samples its final image at 0.05 seconds from the end into `.kc-frames`; that exact PNG becomes the next scene's approved opening image and Flow Start frame. The next video prompt animates forward from it without an End frame, reducing one Flow image generation per continuation and preserving pixel-exact boundary continuity.
-Phase 3 timeline generation now also requires KC Dev `2.42.0` or newer so an older ChatGPT worker cannot silently replace Beat & Chain Planning with all-`single` boundaries.
+Phase 3 timeline generation now requires KC Dev `2.43.0` or newer so an older ChatGPT worker cannot silently replace Beat & Chain Planning or keep generating image prompts for continuation scenes.
+
+Extension version `2.43.0` stops writing image prompts for `continue` scenes. Phase 3 returns an empty `imagePrompt` for those boundaries, while Production Queue extracts the preceding downloaded video's frame at `-0.05s`, uses it immediately as Flow's Start frame, and submits only the continuation video prompt. `single` and `start` scenes still generate their own opening image normally.
 
 Extension version `2.32.0` also adds **Sửa chính sách** beside a failed image or video prompt. The action stops both direct Flow work and the production queue, asks ChatGPT for one policy-safe replacement without evasion, validates and saves it, resets the failed scene, then resumes production from that exact prompt. If rewriting or validation fails, the original prompt remains and the queue stays stopped.
 

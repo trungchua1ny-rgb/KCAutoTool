@@ -106,11 +106,11 @@ test("validates chain continuity and recalculates boundaries after manual durati
         durationSeconds: 6,
         chainId: "walk-1",
         chainRole: "continue",
-        imagePrompt: "The walk continues",
         videoPrompt: "Camera follows",
       },
     ],
   });
+  assert.equal(result.scenes[1].imagePrompt, "");
   const edited = recalculateScenePlanning(result.scenes, "scene-001", {
     durationSeconds: 4,
   });
@@ -120,7 +120,7 @@ test("validates chain continuity and recalculates boundaries after manual durati
   const detached = recalculateScenePlanning(edited, "scene-001", { chainRole: "single" });
   assert.equal(detached[0].chainRole, "single");
   assert.equal(detached[1].chainRole, "start");
-  assert.doesNotThrow(() => normalizeStoredScenes(detached));
+  assert.throws(() => normalizeStoredScenes(detached), /imagePrompt/);
   assert.throws(() => normalizeTimelineResult({
     scenes: [{
       timeStart: "00:00:00",

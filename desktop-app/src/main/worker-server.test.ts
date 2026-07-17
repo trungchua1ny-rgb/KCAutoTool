@@ -53,7 +53,7 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
         type: "REGISTER",
         role: "chat-worker",
         profileTag: "isolated-test",
-      workerVersion: "2.42.0",
+      workerVersion: "2.43.0",
       }),
     );
     const orphanReset = await orphanResetPromise;

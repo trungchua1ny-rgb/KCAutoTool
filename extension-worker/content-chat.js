@@ -327,7 +327,9 @@ ${scriptText}
 
   function buildTimelinePrompt(batch, batchCount, scriptText, visualBibleInput = {}, characterRoster = []) {
     const boundaryList = batch.boundaries
-      .map((boundary, index) => `${index + 1}. ${boundary.start} --> ${boundary.end}`)
+      .map((boundary, index) =>
+        `${index + 1}. ${boundary.start} --> ${boundary.end} | chainRole=${boundary.chainRole} | chainId=${boundary.chainId || "null"}`
+      )
       .join("\n");
     const scriptSource =
       batch.index === 0
@@ -365,7 +367,7 @@ ${requestedBibleContract}
     return `You are an animation director, cinematic screenwriter, and expert Prompt Engineer for AI video systems such as Google Veo, Kling, Hailuo, PixVerse, and Seedance.
 
 TASK
-This timeline is generated in ${batchCount} consecutive batches to prevent truncated responses. Process ONLY batch ${batch.index + 1} of ${batchCount}. Read its SRT segment and the supporting script context, then write one image prompt plus one video prompt for each required boundary. The SRT controls timing and spoken-story coverage. The script may clarify characters and visual context but must never override the SRT timeline.
+This timeline is generated in ${batchCount} consecutive batches to prevent truncated responses. Process ONLY batch ${batch.index + 1} of ${batchCount}. Read its SRT segment and the supporting script context. For chainRole single or start, write one image prompt plus one video prompt. For chainRole continue, write ONLY the video prompt and return imagePrompt as an empty string because the desktop app extracts the exact final frame of the preceding video and supplies it as this clip's opening frame. The SRT controls timing and spoken-story coverage. The script may clarify characters and visual context but must never override the SRT timeline.
 The intended finished program is 10-15 minutes long. Always follow the locked Beat & Chain boundary contract exactly; every scene is a supported 4, 6, or 8-second Flow clip.
 
 BATCH CONTRACT
@@ -404,19 +406,20 @@ Before writing each scene, silently build a shot brief from the exact subtitles 
 8. Silently reject any detail that is not supported by the SRT, the script, or necessary physical continuity.
 
 PROMPT RULES
-- Write imagePrompt and videoPrompt in English. They are scene-specific supplements to the Visual Bible, not replacements for it.
-- Each prompt must contain 80-150 words; aim for 90-130 concrete words. Use the detail budget for visible story information, not filler or repeated styling.
+- Write every non-empty imagePrompt and every videoPrompt in English. They are scene-specific supplements to the Visual Bible, not replacements for it.
+- For chainRole single or start, imagePrompt must contain 80-150 words. For chainRole continue, imagePrompt MUST be exactly ""; do not spend response tokens describing a replacement still image.
+- Every videoPrompt must contain 80-150 words; aim for 90-130 concrete words. Use the detail budget for visible story information, not filler or repeated styling.
 - Describe ONLY what the audience can see. Never quote or describe dialogue, narration, internal thoughts, themes, or abstract ideas.
 - Avoid vague phrases such as "a man thinking." Show the idea through specific pose, action, environment, props, composition, and visible emotion.
 - Write every prompt as a shootable film shot, never as a summary, explanation, theme, or list of keywords.
-- imagePrompt must depict the strongest keyframe of the exact story beat covered by this required SRT window. It MUST use these five labels exactly once in this order inside the single prompt string: "SUBJECT AND ACTION:", "EMOTION AND BODY LANGUAGE:", "SETTING AND BACKGROUND:", "DEPTH LAYERS:", and "CAMERA AND COMPOSITION:".
+- For chainRole single or start, imagePrompt must depict the strongest keyframe of the exact story beat covered by this required SRT window. It MUST use these five labels exactly once in this order inside the single prompt string: "SUBJECT AND ACTION:", "EMOTION AND BODY LANGUAGE:", "SETTING AND BACKGROUND:", "DEPTH LAYERS:", and "CAMERA AND COMPOSITION:".
 - SUBJECT AND ACTION identifies every visible subject, their exact pose/action, interaction, and story-relevant object. EMOTION AND BODY LANGUAGE gives a concrete facial expression, eyebrow/eye/mouth state, head angle, posture, and gesture for each visible character. If nobody is visible, explicitly say no character is present and describe the observable environmental mood instead.
 - SETTING AND BACKGROUND must state the source-grounded location, time of day, weather, architecture, and readable environmental objects. A white canvas or minimalist style never permits an empty background unless the source explicitly requires empty space.
 - DEPTH LAYERS must separately identify at least one foreground element, one middle-ground subject/object, and one background element, with concrete spatial relationships. CAMERA AND COMPOSITION gives exactly one shot size, one angle, subject placement, and screen direction.
 - Use precise visual relationships: beside, behind, across the road, framed through a doorway, reflected in glass, partially hidden by smoke. Prefer concrete nouns and observable verbs over decorative adjectives.
 - For abstract narration, translate the meaning into concrete source-grounded visual evidence, objects, behavior, or scenery. Do not fall back to a generic presenter, a random person, or unrelated symbolism.
 - When no character is visible, make the environment carry the story through specific objects, traces, architecture, maps, evidence, damage, weather, or chronological change rather than adding a person.
-- videoPrompt must treat the imagePrompt as the opening frame and use these six labels exactly once in this order: "STARTING STATE:", "PRIMARY MOTION:", "REACTION:", "ENVIRONMENTAL MOTION:", "CAMERA MOTION:", and "END FRAME:".
+- videoPrompt must use these six labels exactly once in this order: "STARTING STATE:", "PRIMARY MOTION:", "REACTION:", "ENVIRONMENTAL MOTION:", "CAMERA MOTION:", and "END FRAME:". For single/start, treat imagePrompt as the opening frame. For continue, treat the exact extracted final frame of the preceding video as the already-visible opening frame: do not redesign, reset, recap, or replace it; describe only the next continuous action from that visible state.
 - Describe one continuous, physically possible shot lasting exactly the required boundary duration without retelling the static image. Give each character ONE coherent primary action with an immediate readable reaction. Add anticipation or follow-through only when the duration budget below permits it. The END FRAME must clearly state the final pose and composition that can connect to the next scene, without requesting a long static hold.
 - Motion must use natural timing: appropriate acceleration and deceleration, visible weight transfer, balanced steps, coordinated joints, and secondary overlap in the head, torso, clothing, hair, props, or environment. Choose a purposeful static, pan, track, dolly, or handheld camera behavior at a speed appropriate to the story beat; do not force every shot to be slow. Avoid crossed or fused limbs, hidden hands during critical actions, full-body spins, acrobatics, detailed finger manipulation, multiple unrelated actions, limb transformation, body morphing, or a camera move that hides the main action.
 - VIDEO PACING BUDGET — infer the exact duration from each required boundary and obey the matching rule. For 4s: begin the primary motion immediately; omit anticipation and final settle, or keep each at no more than 0.3s only when physically necessary; primary motion occupies about 2.5–3.5s and reaction overlaps it. For 6s: anticipation is optional and at most 1s; primary motion occupies about 3.5–4.5s; reaction is brief; settle is optional and at most 1s; setup plus final settle total at most 1.5s. For 8s: anticipation is at most 1.5s; primary motion occupies about 4.5–5.5s; reaction is visible; settle is at most 1.5s; setup plus final settle total at most 2s. Primary motion must visibly occupy at least 60% of every clip. An 8s clip must not stretch one small gesture; extended anticipation or settle requires a source-supported emotional beat or establishing shot.
@@ -424,7 +427,7 @@ PROMPT RULES
 - Do NOT repeat global graphic style, palette, default lighting, aspect ratio, stable character design, wardrobe, or recurring-location rules already present in the Visual Bible. Mention a visual property only when it changes specifically in this scene because the story requires it.
 - Do NOT include meta phrases such as "according to the Visual Bible", "keep consistent", "same style", or lists of negative rendering instructions in scene prompts. The desktop app attaches the Visual Bible separately.
 - Do not leave characters motionless when the source implies an action. Use specific motion such as walking slowly, turning, opening a door, typing, wind moving objects, or rain falling.
-- Before returning JSON, silently audit every scene: it matches the exact timeline, contains no dialogue or internal thought, is not generic, does not invent an event, does not repeat the Visual Bible, and gives the image and video prompts distinct jobs.
+- Before returning JSON, silently audit every scene: it matches the exact timeline, contains no dialogue or internal thought, is not generic, does not invent an event, does not repeat the Visual Bible, gives image and video prompts distinct jobs for single/start, and uses an empty imagePrompt for every continue boundary.
 
 CHARACTER AND SHOT CONTINUITY
 - Keep every recurring character's height, body proportions, colors, hair, clothing, gender, age, and accessories unchanged across the complete timeline.
@@ -450,7 +453,9 @@ ${scriptSource}
 
   function buildTimelineRetryPrompt(batch, batchCount, reason, attempt, visualBibleInput = {}, characterRoster = []) {
     const boundaryList = batch.boundaries
-      .map((boundary, index) => `${index + 1}. ${boundary.start} --> ${boundary.end}`)
+      .map((boundary, index) =>
+        `${index + 1}. ${boundary.start} --> ${boundary.end} | chainRole=${boundary.chainRole} | chainId=${boundary.chainId || "null"}`
+      )
       .join("\n");
     const outputShape = batch.index === 0
       ? '{"visualBible":{"style":"...","palette":"...","lighting":"...","continuityNotes":"...","aspectRatio":"16:9"},"scenes":[{"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","imagePrompt":"...","videoPrompt":"...","usedCharacterTokens":["@TOKEN"]}]}'
@@ -473,7 +478,7 @@ ${characterRosterContract(characterRoster)}
 Return exactly ${batch.boundaries.length} scenes with these exact boundaries in this exact order:
 ${boundaryList}
 
-Keep each imagePrompt and videoPrompt at 80-150 English words, aiming for 90-130 concrete words. Every imagePrompt must use exactly these labels in order: SUBJECT AND ACTION, EMOTION AND BODY LANGUAGE, SETTING AND BACKGROUND, DEPTH LAYERS, CAMERA AND COMPOSITION. Every videoPrompt must use exactly these labels in order: STARTING STATE, PRIMARY MOTION, REACTION, ENVIRONMENTAL MOTION, CAMERA MOTION, END FRAME. Image prompts require a readable source-grounded setting plus foreground, middle-ground, and background even on a white canvas. Video prompts require one coherent primary action with natural acceleration/deceleration, weight transfer, immediate reaction, secondary motion, and camera behavior suited to the story beat. Primary motion visibly occupies at least 60% of the clip. For 4s, begin immediately and omit anticipation/final settle unless physically essential (each at most 0.3s). For 6s, primary motion occupies about 3.5–4.5s and setup plus settle total at most 1.5s. For 8s, primary motion occupies about 4.5–5.5s and setup plus settle total at most 2s; never stretch a small gesture to fill 8s. Motion is natural real-world speed, never slow-motion, floaty, or dreamlike unless explicitly source-supported. Avoid fused or crossed limbs, spins, hidden hands during critical actions, detailed finger manipulation, body morphing, and multiple unrelated actions. Do not repeat style, palette, default lighting, aspect ratio, or stable designs already stored in the Visual Bible. Escape every quote and control character inside JSON strings. Do not truncate the response.
+For chainRole single/start, keep imagePrompt at 80-150 English words and use exactly these labels in order: SUBJECT AND ACTION, EMOTION AND BODY LANGUAGE, SETTING AND BACKGROUND, DEPTH LAYERS, CAMERA AND COMPOSITION. For chainRole continue, imagePrompt must be exactly "" because the preceding video's extracted final frame is the opening frame. Keep every videoPrompt at 80-150 English words and use exactly these labels in order: STARTING STATE, PRIMARY MOTION, REACTION, ENVIRONMENTAL MOTION, CAMERA MOTION, END FRAME. A continue videoPrompt must begin from that already-visible extracted frame and describe only the next continuous action without redesigning or resetting the scene. Image prompts require a readable source-grounded setting plus foreground, middle-ground, and background even on a white canvas. Video prompts require one coherent primary action with natural acceleration/deceleration, weight transfer, immediate reaction, secondary motion, and camera behavior suited to the story beat. Primary motion visibly occupies at least 60% of the clip. For 4s, begin immediately and omit anticipation/final settle unless physically essential (each at most 0.3s). For 6s, primary motion occupies about 3.5–4.5s and setup plus settle total at most 1.5s. For 8s, primary motion occupies about 4.5–5.5s and setup plus settle total at most 2s; never stretch a small gesture to fill 8s. Motion is natural real-world speed, never slow-motion, floaty, or dreamlike unless explicitly source-supported. Avoid fused or crossed limbs, spins, hidden hands during critical actions, detailed finger manipulation, body morphing, and multiple unrelated actions. Do not repeat style, palette, default lighting, aspect ratio, or stable designs already stored in the Visual Bible. Escape every quote and control character inside JSON strings. Do not truncate the response.
 
 Relevant SRT for this batch:
 <SRT_SOURCE>
@@ -709,7 +714,11 @@ ${batch.srtText}
         error.code = "INVALID_JOB";
         throw error;
       }
-      for (const field of ["imagePrompt", "videoPrompt"]) {
+      const isContinuation = boundary.chainRole === "continue";
+      if (isContinuation) {
+        scene.imagePrompt = "";
+      }
+      for (const field of isContinuation ? ["videoPrompt"] : ["imagePrompt", "videoPrompt"]) {
         const prompt = typeof scene?.[field] === "string" ? scene[field].trim() : "";
         const wordCount = prompt ? prompt.split(/\s+/).length : 0;
         if (wordCount < 80 || wordCount > 150) {
