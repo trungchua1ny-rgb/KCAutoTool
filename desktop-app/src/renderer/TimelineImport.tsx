@@ -142,6 +142,12 @@ function errorMessage(error: unknown): string {
   return raw.replace(/^Error invoking remote method '[^']+': Error: /, "");
 }
 
+function isDetectedPolicyError(value: string | undefined): boolean {
+  return /policy|safety|moderation|responsible\s+ai|prohibited|violation|blocked.{0,30}prompt|prompt.{0,30}blocked|vi\s*phạm|chính\s*sách/i.test(
+    value || "",
+  );
+}
+
 function applyQueueSnapshotToScenes(
   scenes: Scene[],
   snapshot: ProductionQueueSnapshot,
@@ -438,12 +444,14 @@ function TimelineTable({
                         type="button"
                         disabled={!chatConnected || Boolean(repairingPromptKey)}
                         title={chatConnected
-                          ? "Dừng hàng đợi, nhờ ChatGPT làm prompt an toàn hơn rồi chạy tiếp từ scene này"
+                          ? isDetectedPolicyError(errors[`${scene.id}:image`])
+                            ? "Đã có lỗi Flow: gửi thẳng lỗi sang ChatGPT, sửa prompt và chạy tiếp"
+                            : "Chưa đọc được lỗi Flow: mở danh sách lý do để bạn chọn"
                           : "ChatGPT worker chưa kết nối"}
                         onClick={() => onRepairPolicy(scene.id, "image")}
                       >
                         {repairingPromptKey === `${scene.id}:image` ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />}
-                        Sửa chính sách
+                        {isDetectedPolicyError(errors[`${scene.id}:image`]) ? "Sửa nhanh theo lỗi Flow" : "Sửa chính sách"}
                       </button>
                     )}
                   </div>
@@ -469,12 +477,14 @@ function TimelineTable({
                         type="button"
                         disabled={!chatConnected || Boolean(repairingPromptKey)}
                         title={chatConnected
-                          ? "Dừng hàng đợi, nhờ ChatGPT làm prompt an toàn hơn rồi chạy tiếp từ scene này"
+                          ? isDetectedPolicyError(errors[`${scene.id}:video`])
+                            ? "Đã có lỗi Flow: gửi thẳng lỗi sang ChatGPT, sửa prompt và chạy tiếp"
+                            : "Chưa đọc được lỗi Flow: mở danh sách lý do để bạn chọn"
                           : "ChatGPT worker chưa kết nối"}
                         onClick={() => onRepairPolicy(scene.id, "video")}
                       >
                         {repairingPromptKey === `${scene.id}:video` ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />}
-                        Sửa chính sách
+                        {isDetectedPolicyError(errors[`${scene.id}:video`]) ? "Sửa nhanh theo lỗi Flow" : "Sửa chính sách"}
                       </button>
                     )}
                   </div>
@@ -1051,16 +1061,6 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     void runQueueCommand(() => bridge.resumeFrom(sceneId, mediaType, activeProjectId));
   };
 
-  const openPolicyRepairModal = (sceneId: string, mediaType: SceneMediaType) => {
-    const key = `${sceneId}:${mediaType}`;
-    const detectedError = sceneErrors[key] || queueSnapshot?.errors.find((item) =>
-      item.sceneId === sceneId && item.mediaType === mediaType
-    )?.message || "";
-    setPolicyReason(detectedError ? "auto" : "other");
-    setPolicyDetail(detectedError);
-    setPolicyRepairModal({ sceneId, mediaType, detectedError });
-  };
-
   const repairPolicyPromptAndResume = async (
     sceneId: string,
     mediaType: SceneMediaType,
@@ -1159,6 +1159,21 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     } finally {
       setRepairingPromptKey("");
     }
+  };
+
+  const openPolicyRepairModal = (sceneId: string, mediaType: SceneMediaType) => {
+    const key = `${sceneId}:${mediaType}`;
+    const queueError = queueSnapshot?.errors.find((item) =>
+      item.sceneId === sceneId && item.mediaType === mediaType
+    );
+    const detectedError = sceneErrors[key] || queueError?.message || "";
+    if (queueError?.category === "flow_policy_violation" || isDetectedPolicyError(detectedError)) {
+      void repairPolicyPromptAndResume(sceneId, mediaType, "auto", detectedError);
+      return;
+    }
+    setPolicyReason("other");
+    setPolicyDetail("");
+    setPolicyRepairModal({ sceneId, mediaType, detectedError: "" });
   };
 
   const approveQueuedScene = (sceneId: string, mediaType: SceneMediaType) => {
