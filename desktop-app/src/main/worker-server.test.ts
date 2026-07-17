@@ -53,7 +53,7 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
         type: "REGISTER",
         role: "chat-worker",
         profileTag: "isolated-test",
-      workerVersion: "2.43.0",
+      workerVersion: "2.44.0",
       }),
     );
     const orphanReset = await orphanResetPromise;
@@ -74,6 +74,11 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
         aspectRatio: "16:9",
       },
       characterRoster: [{ token: "@HERO", name: "Hero" }],
+      styleReference: {
+        name: "reference.png",
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      },
     });
     const job = await jobMessagePromise;
     assert.deepEqual(
@@ -105,7 +110,10 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
     );
     const result = await resultPromise;
     assert.equal(result.scenes[0].imagePrompt, "@HERO enters a room");
-    assert.equal(result.visualBible.style, "locked stickman style");
+    assert.equal(
+      result.visualBible.style,
+      "locked stickman style\nReference-image analysis: cinematic 3D animation",
+    );
     assert.equal(result.visualBible.palette, "locked black, white, and red accents");
     assert.equal(result.visualBible.lighting, "soft directional sunset light");
     assert.equal(result.visualBible.continuityNotes, "locked round heads and single-line limbs");
@@ -150,6 +158,7 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
         aspectRatio: "16:9",
       },
       characterRoster: [],
+      styleReference: null,
     });
     const stoppedAssertion = assert.rejects(stoppedResult, (error: unknown) => {
       assert.ok(error instanceof WorkerJobError);
@@ -183,6 +192,7 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
         aspectRatio: "16:9",
       },
       characterRoster: [],
+      styleReference: null,
     });
     const staleAssertion = assert.rejects(staleResult, /Reload KC Dev/);
     await staleJobMessage;

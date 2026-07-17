@@ -28,6 +28,8 @@ Version `2.41.0` removes duplicate native downloads: while the viewer button is 
 Version `2.42.0` enforces one video download channel. After the Flow viewer route starts, the worker never launches the former direct-URL fallback; it only observes and renames the single download created by Flow. If Chrome cannot confirm that file, the job stops with `FLOW_NATIVE_DOWNLOAD_FAILED` instead of starting a second transfer.
 
 Version `2.43.0` makes Phase 3 continuation-aware: `continue` boundaries return an empty image prompt and only describe the next video action. KC Auto Tool supplies the final frame extracted from the preceding downloaded video directly to Flow's Start-frame slot; independent `single` and chain `start` scenes continue to use generated opening images.
+
+Version `2.44.0` accepts an optional PNG/JPEG/WebP style reference from KC Auto Tool, attaches it to the first Phase 3a ChatGPT message, and instructs ChatGPT to retain the observed drawing system for all prompt batches. The first Visual Bible style keeps the complete user-entered base and adds a production-ready description of the reference image.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from
@@ -39,7 +41,7 @@ sequence: prompt `+`, **Upload media**, intercepted local file selection,
 uploaded thumbnail selection, and **Add to prompt**. It only enters the Visual
 Bible and scene prompt after every selected ingredient thumbnail is visible,
 then saves the result under `Downloads/KC Auto Tool`. `GENERATE_VIDEO` routes to the
-same Flow tab after switching it to Video. Every scene selects Frames, places only the scene's approved image in Start, leaves End empty, selects the planned 4/6/8-second duration, submits the motion prompt, waits for the clip, and downloads it. The extracted prior last frame is reserved only as a continuity reference while creating the next image.
+same Flow tab after switching it to Video. Every scene selects Frames, places only its opening image in Start, leaves End empty, selects the planned 4/6/8-second duration, submits the motion prompt, waits for the clip, and downloads it. A `continue` scene skips image generation and uses the extracted final frame of the preceding downloaded video directly as Start.
 If the asset cannot be matched (for example, an older session or another Flow
 project), the worker falls back to uploading the downloaded image file.
 

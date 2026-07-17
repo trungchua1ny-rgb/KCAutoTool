@@ -15,7 +15,7 @@
     "smoke:scenes": "node scripts/phase3-timeline-smoke.mjs",
     "smoke:phase5": "node scripts/phase3-timeline-smoke.mjs",
     "smoke:workers": "node scripts/phase1-smoke.mjs",
-    "test": "tsx --test src/shared/character.test.ts src/shared/timeline.test.ts src/shared/scene-job.test.ts src/main/character-store.test.ts src/main/project-database.test.ts src/main/production-queue.test.ts src/main/visual-style-store.test.ts src/main/timeline-session-store.test.ts src/main/worker-server.test.ts src/main/content-chat-batching.test.ts src/main/content-flow-settings.test.ts src/main/video-pacing.test.ts",
+    "test": "tsx --test src/shared/character.test.ts src/shared/timeline.test.ts src/shared/scene-job.test.ts src/main/character-store.test.ts src/main/project-database.test.ts src/main/production-queue.test.ts src/main/visual-style-store.test.ts src/main/timeline-session-store.test.ts src/main/legacy-session-recovery.test.ts src/main/worker-server.test.ts src/main/content-chat-batching.test.ts src/main/content-flow-settings.test.ts src/main/video-pacing.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
   "dependencies": {

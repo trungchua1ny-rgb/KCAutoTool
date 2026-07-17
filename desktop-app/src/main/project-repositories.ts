@@ -177,6 +177,10 @@ export class ProjectRepository {
     ).run(images ? 1 : 0, videos ? 1 : 0, projectId);
   }
 
+  rename(id: string, name: string): void {
+    this.database.db.prepare("UPDATE projects SET name = ? WHERE id = ?").run(name.trim(), id);
+  }
+
   remove(id: string): void {
     this.database.db.prepare("DELETE FROM projects WHERE id = ?").run(id);
   }

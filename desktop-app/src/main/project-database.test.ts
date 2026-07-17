@@ -149,7 +149,11 @@ test("creates the complete project schema and logs scene state transitions", asy
 test("migrates the latest LowDB timeline and graphic styles idempotently", async () => {
   const { directory, database, repositories } = await temporaryDatabase();
   const session: TimelineSession = {
+    id: "legacy-default-project",
+    name: "Legacy session",
+    createdAt: "2026-07-15T01:02:03.000Z",
     savedAt: "2026-07-15T01:02:03.000Z",
+    styleReference: null,
     visualBible: {
       style: "Hand-drawn stick figures",
       palette: "black, white, amber",

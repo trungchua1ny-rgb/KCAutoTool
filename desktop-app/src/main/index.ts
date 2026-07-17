@@ -18,6 +18,8 @@ import { ProjectDatabase } from "./project-database";
 import { migrateLegacyProjectData } from "./legacy-project-migration";
 import { ProductionQueue } from "./production-queue";
 import { registerProductionQueueIpcHandlers } from "./production-queue-ipc";
+import { ProjectRepositories } from "./project-repositories";
+import { recoverLegacySessionFromProject } from "./legacy-session-recovery";
 import { QUEUE_CHANGED_CHANNEL, type ProductionQueueSnapshot } from "../shared/production-queue";
 import {
   WORKER_SERVER_HOST,
@@ -111,6 +113,10 @@ app.whenReady().then(async () => {
     await timelineSessionStore.initialize();
     await visualStyleStore.initialize();
     await projectDatabase.initialize();
+    const recoveredSession = await recoverLegacySessionFromProject(
+      projectDatabase,
+      timelineSessionStore,
+    );
     const legacyMigration = migrateLegacyProjectData(
       projectDatabase,
       await timelineSessionStore.load(),
@@ -119,7 +125,6 @@ app.whenReady().then(async () => {
       { initialImportOnly: true },
     );
     registerCharacterIpcHandlers(characterStore);
-    registerTimelineSessionIpcHandlers(timelineSessionStore);
     registerVisualStyleIpcHandlers(visualStyleStore);
     await workerServer.start();
     productionQueue = new ProductionQueue(
@@ -132,12 +137,32 @@ app.whenReady().then(async () => {
     );
     await productionQueue.start();
     registerProductionQueueIpcHandlers(productionQueue);
+    registerTimelineSessionIpcHandlers(timelineSessionStore, {
+      beforeDelete: (id) => {
+        const snapshot = productionQueue?.getSnapshot(id);
+        if (snapshot?.activeJobId) {
+          throw new Error("Phiên vẫn còn công việc đang chạy. Hãy dừng hàng đợi và thử lại.");
+        }
+      },
+      afterDelete: (id) => {
+        if (!projectDatabase) return;
+        new ProjectRepositories(projectDatabase).projects.remove(id);
+      },
+      afterRename: (id, name) => {
+        if (!projectDatabase) return;
+        const projects = new ProjectRepositories(projectDatabase).projects;
+        if (projects.get(id)) projects.rename(id, name);
+      },
+    });
     registerTimelineIpcHandlers(workerServer);
     registerSceneJobIpcHandlers(workerServer, characterStore);
     registerMediaIpcHandlers();
     console.info(
       `[KC Auto Tool] Project DB schema v${projectDatabase.schemaVersion}; legacy migration: ${legacyMigration.migrated ? `${legacyMigration.sceneCount} scenes` : "up to date"}`,
     );
+    if (recoveredSession) {
+      console.info(`[KC Auto Tool] Recovered ${recoveredSession.scenes.length} scenes from the legacy SQLite project.`);
+    }
     console.info(
       `[KC Auto Tool] Worker server listening on ws://${WORKER_SERVER_HOST}:${workerServer.getListeningPort() || WORKER_SERVER_PORT}`,
     );

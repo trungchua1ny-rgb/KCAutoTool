@@ -5,8 +5,13 @@ import {
   PROMPT_POLICY_REWRITE_CHANNEL,
   TIMELINE_PROGRESS_CHANNEL,
   TIMELINE_SESSION_CLEAR_CHANNEL,
+  TIMELINE_SESSION_CREATE_CHANNEL,
+  TIMELINE_SESSION_DELETE_CHANNEL,
+  TIMELINE_SESSION_LIST_CHANNEL,
   TIMELINE_SESSION_LOAD_CHANNEL,
+  TIMELINE_SESSION_RENAME_CHANNEL,
   TIMELINE_SESSION_SAVE_CHANNEL,
+  TIMELINE_SESSION_SELECT_CHANNEL,
   type TimelineProgress,
 } from "../shared/timeline";
 import {
@@ -66,6 +71,11 @@ const bridge: KCAutoToolBridge = {
     loadSession: () => ipcRenderer.invoke(TIMELINE_SESSION_LOAD_CHANNEL),
     saveSession: (input) => ipcRenderer.invoke(TIMELINE_SESSION_SAVE_CHANNEL, input),
     clearSession: () => ipcRenderer.invoke(TIMELINE_SESSION_CLEAR_CHANNEL),
+    listSessions: () => ipcRenderer.invoke(TIMELINE_SESSION_LIST_CHANNEL),
+    createSession: (name) => ipcRenderer.invoke(TIMELINE_SESSION_CREATE_CHANNEL, name),
+    selectSession: (id) => ipcRenderer.invoke(TIMELINE_SESSION_SELECT_CHANNEL, id),
+    renameSession: (id, name) => ipcRenderer.invoke(TIMELINE_SESSION_RENAME_CHANNEL, { id, name }),
+    deleteSession: (id) => ipcRenderer.invoke(TIMELINE_SESSION_DELETE_CHANNEL, id),
     onProgress: (callback) => {
       const listener = (
         _event: Electron.IpcRendererEvent,

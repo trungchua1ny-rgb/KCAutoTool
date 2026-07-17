@@ -98,7 +98,7 @@ function workerVersionNumber(value: string | null): number {
 }
 
 function supportsTimelineWorker(value: string | null): boolean {
-  return workerVersionNumber(value) >= 2_043_000;
+  return workerVersionNumber(value) >= 2_044_000;
 }
 
 function supportsSceneJobs(value: string | null): boolean {
@@ -478,7 +478,7 @@ export class WorkerServer {
     if (!supportsTimelineWorker(client.workerVersion)) {
       return Promise.reject(
         new WorkerJobError(
-          `KC Dev ${client.workerVersion || "cũ"} chưa hỗ trợ Phase 3 tối ưu prompt nối tiếp. Hãy Reload extension 2.43.0.`,
+          `KC Dev ${client.workerVersion || "cũ"} chưa hỗ trợ ảnh phong cách mẫu và Phase 3 mới. Hãy Reload extension 2.44.0.`,
           "INVALID_JOB",
         ),
       );
@@ -755,7 +755,15 @@ export class WorkerServer {
         const lockedBible = input.visualBible;
         for (const field of ["style", "palette", "lighting", "continuityNotes"] as const) {
           if (lockedBible[field]?.trim()) {
-            result.visualBible[field] = lockedBible[field].trim();
+            if (field === "style" && input.styleReference) {
+              const lockedStyle = lockedBible.style.trim();
+              const analyzedStyle = result.visualBible.style.trim();
+              result.visualBible.style = analyzedStyle.startsWith(lockedStyle)
+                ? analyzedStyle
+                : `${lockedStyle}\nReference-image analysis: ${analyzedStyle}`.slice(0, 4_000);
+            } else {
+              result.visualBible[field] = lockedBible[field].trim();
+            }
           }
         }
         validateGeneratedVisualBible(result.visualBible);

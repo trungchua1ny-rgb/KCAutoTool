@@ -178,6 +178,25 @@ body {
   padding: 14px 0;
 }
 
+.workspace-session-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(240px, 1.2fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #d8dee4;
+  border-radius: 7px;
+  background: #f8fafb;
+}
+
+.workspace-session-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+}
+
 .timeline-file {
   position: relative;
   display: grid;
@@ -1296,12 +1315,72 @@ input:focus-visible {
 
 .graphic-style-bar {
   display: grid;
-  grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1.3fr) auto;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1.3fr) minmax(220px, 0.7fr);
   align-items: end;
   gap: 12px;
   padding: 12px 14px;
   border-top: 1px solid #e4e7ec;
   background: #f8fafb;
+}
+
+.graphic-style-bar > small:last-child {
+  grid-column: 1 / -1;
+  max-width: none;
+  padding-bottom: 0;
+}
+
+.style-reference-control {
+  display: grid;
+  align-content: end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.style-reference-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.style-reference-copy strong {
+  color: #475467;
+  font-size: 11px;
+}
+
+.style-reference-copy small {
+  max-width: none;
+  padding: 0;
+}
+
+.style-reference-picker {
+  position: relative;
+  justify-content: center;
+}
+
+.style-reference-preview {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+  border: 1px solid #b8d5cb;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.style-reference-preview img {
+  width: 52px;
+  height: 42px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #eef1f3;
+}
+
+.style-reference-preview span {
+  overflow: hidden;
+  color: #344054;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .visual-bible-guidance {
@@ -1788,6 +1867,10 @@ input:focus-visible {
 }
 
 @media (max-width: 760px) {
+  .workspace-session-bar {
+    grid-template-columns: 1fr;
+  }
+
   .visual-bible-fields {
     grid-template-columns: 1fr;
   }

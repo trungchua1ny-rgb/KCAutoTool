@@ -2,6 +2,7 @@ import {
   Check,
   CircleAlert,
   FileText,
+  FolderPlus,
   Image as ImageIcon,
   LoaderCircle,
   Pause,
@@ -34,6 +35,9 @@ import {
   type SceneChainRole,
   type SceneDurationSeconds,
   type TimelineProgress,
+  type TimelineSession,
+  type TimelineSessionSummary,
+  type TimelineStyleReference,
   type VisualBible,
 } from "../shared/timeline";
 import { ImageGenerationModal } from "./ImageGenerationModal";
@@ -536,6 +540,11 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
   const [scriptFile, setScriptFile] = useState<File | null>(null);
   const [scenes, setScenes] = useState<Scene[]>(loadStoredScenes);
   const [visualBible, setVisualBible] = useState<VisualBible>(() => structuredClone(DEFAULT_VISUAL_BIBLE));
+  const [styleReference, setStyleReference] = useState<TimelineStyleReference | null>(null);
+  const [sessions, setSessions] = useState<TimelineSessionSummary[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState(DEFAULT_PROJECT_ID);
+  const [sessionNameDraft, setSessionNameDraft] = useState("Phiên làm việc");
+  const [switchingSession, setSwitchingSession] = useState(false);
   const [characters, setCharacters] = useState<CharacterView[]>([]);
   const [stylePresets, setStylePresets] = useState<GraphicStylePreset[]>([]);
   const [stylePresetError, setStylePresetError] = useState("");
@@ -559,7 +568,30 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
   const [repairingPromptKey, setRepairingPromptKey] = useState("");
   const sessionSaveVersion = useRef(0);
   const settledSceneJobs = useRef(new Set<string>());
+  const sceneJobSessions = useRef(new Map<string, string>());
+  const activeSessionIdRef = useRef(activeSessionId);
   const loadedThumbnailPaths = useRef(new Set<string>());
+  const activeProjectId = activeSessionId || DEFAULT_PROJECT_ID;
+
+  const applySession = (session: TimelineSession) => {
+    activeSessionIdRef.current = session.id;
+    setActiveSessionId(session.id);
+    setSessionNameDraft(session.name);
+    setScenes(session.scenes);
+    setVisualBible(session.visualBible);
+    setStyleReference(session.styleReference);
+    setSrtFile(null);
+    setScriptFile(null);
+    setProgress(null);
+    setError("");
+    setSceneErrors({});
+    setThumbnails({});
+    setImageModal(null);
+    setVideoModal(null);
+    loadedThumbnailPaths.current.clear();
+    settledSceneJobs.current.clear();
+    sceneJobSessions.current.clear();
+  };
 
   useEffect(() => {
     let active = true;
@@ -614,23 +646,30 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
       }
 
       try {
-        const stored = await bridge.loadSession();
+        let availableSessions = await bridge.listSessions();
+        let stored = await bridge.loadSession();
+        if (!stored) {
+          stored = await bridge.createSession("Phiên 1");
+          availableSessions = await bridge.listSessions();
+        }
         if (!active) return;
-        if (stored?.scenes.length) {
-          setScenes(stored.scenes);
-          setVisualBible(stored.visualBible);
+        if (stored.scenes.length) {
+          applySession(stored);
         } else {
           const legacyScenes = loadStoredScenes();
           if (legacyScenes.length > 0) {
             const migrated = await bridge.saveSession({
               scenes: legacyScenes,
               visualBible: structuredClone(DEFAULT_VISUAL_BIBLE),
+              styleReference: null,
             });
             if (!active) return;
-            setScenes(migrated.scenes);
-            setVisualBible(migrated.visualBible);
+            applySession(migrated);
+          } else {
+            applySession(stored);
           }
         }
+        setSessions(availableSessions);
         localStorage.removeItem(TIMELINE_STORAGE_KEY);
         setSessionStatus("saved");
       } catch {
@@ -656,7 +695,11 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     const bridge = window.flowx?.sceneJobs;
     if (!bridge) return undefined;
     return bridge.onProgress((job: SceneJobProgress) => {
-      if (settledSceneJobs.current.has(`${job.sceneId}:${job.mediaType}`)) return;
+      const key = `${job.sceneId}:${job.mediaType}`;
+      if (
+        settledSceneJobs.current.has(key) ||
+        sceneJobSessions.current.get(key) !== activeSessionIdRef.current
+      ) return;
       setScenes((current) =>
         current.map((scene) => {
           if (scene.id !== job.sceneId) return scene;
@@ -673,6 +716,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     const bridge = window.flowx?.productionQueue;
     if (!bridge) return undefined;
     const applySnapshot = (snapshot: ProductionQueueSnapshot) => {
+      if (snapshot.projectId !== activeProjectId) return;
       setQueueSnapshot(snapshot);
       setScenes((current) => applyQueueSnapshotToScenes(current, snapshot));
       setSceneErrors((current) => {
@@ -687,9 +731,9 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         return next;
       });
     };
-    void bridge.getSnapshot(DEFAULT_PROJECT_ID).then(applySnapshot, () => {});
+    void bridge.getSnapshot(activeProjectId).then(applySnapshot, () => {});
     return bridge.onChanged(applySnapshot);
-  }, []);
+  }, [activeProjectId]);
 
   useEffect(() => {
     // Clearing generated media performs its own ordered session writes. Pause
@@ -701,12 +745,13 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     const timer = window.setTimeout(() => {
       const bridge = window.flowx?.timeline;
       if (!bridge) return;
-      const operation = scenes.length > 0
-        ? bridge.saveSession({ scenes, visualBible })
-        : bridge.clearSession();
+      const operation = bridge.saveSession({ scenes, visualBible, styleReference });
       void operation.then(
-        () => {
+        (saved) => {
           localStorage.removeItem(TIMELINE_STORAGE_KEY);
+          setSessions((current) => current.map((entry) => entry.id === saved.id
+            ? { ...entry, name: saved.name, sceneCount: saved.scenes.length, savedAt: saved.savedAt, active: true }
+            : { ...entry, active: false }));
           if (sessionSaveVersion.current === saveVersion) {
             setSessionStatus("saved");
           }
@@ -719,7 +764,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
       );
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [scenes, visualBible, sessionReady, clearingGeneratedMedia]);
+  }, [scenes, visualBible, styleReference, sessionReady, clearingGeneratedMedia]);
 
   const validateFile = (
     file: File | null,
@@ -776,6 +821,8 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     characterTokens: string[] = [],
   ) => {
     const key = `${sceneId}:${mediaType}`;
+    const jobSessionId = activeSessionIdRef.current;
+    sceneJobSessions.current.set(key, jobSessionId);
     settledSceneJobs.current.delete(key);
     setSceneErrors((current) => ({ ...current, [key]: "" }));
     if (!flowConnected || !window.flowx?.sceneJobs) {
@@ -822,6 +869,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
           expectedCredits: 0,
         },
       });
+      if (activeSessionIdRef.current !== jobSessionId) return;
       settledSceneJobs.current.add(key);
       setScenes((current) => current.map((scene) => scene.id === sceneId
         ? mediaType === "image"
@@ -838,6 +886,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
           : { ...scene, videoStatus: "done", videoResultPath: result.resultPath, videoApproved: false }
         : scene));
     } catch (caught) {
+      if (activeSessionIdRef.current !== jobSessionId) return;
       settledSceneJobs.current.add(key);
       setSceneErrors((current) => ({ ...current, [key]: errorMessage(caught) }));
       setScenes((current) => current.map((scene) => scene.id === sceneId
@@ -901,15 +950,18 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     operation: () => Promise<ProductionQueueSnapshot>,
     flushSession = true,
   ) => {
+    const commandSessionId = activeSessionIdRef.current;
     setQueueCommandError("");
     try {
       if (flushSession && scenes.length > 0) {
-        await window.flowx?.timeline.saveSession({ scenes, visualBible });
+        await window.flowx?.timeline.saveSession({ scenes, visualBible, styleReference });
       }
       const snapshot = await operation();
+      if (activeSessionIdRef.current !== commandSessionId) return;
       setQueueSnapshot(snapshot);
       setScenes((current) => applyQueueSnapshotToScenes(current, snapshot));
     } catch (caught) {
+      if (activeSessionIdRef.current !== commandSessionId) return;
       setQueueCommandError(errorMessage(caught));
     }
   };
@@ -917,13 +969,13 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
   const regenerateQueuedScene = (sceneId: string, mediaType: SceneMediaType) => {
     const bridge = window.flowx?.productionQueue;
     if (!bridge) return;
-    void runQueueCommand(() => bridge.regenerateScene(sceneId, mediaType, DEFAULT_PROJECT_ID));
+    void runQueueCommand(() => bridge.regenerateScene(sceneId, mediaType, activeProjectId));
   };
 
   const resumeQueueFromScene = (sceneId: string, mediaType: SceneMediaType) => {
     const bridge = window.flowx?.productionQueue;
     if (!bridge) return;
-    void runQueueCommand(() => bridge.resumeFrom(sceneId, mediaType, DEFAULT_PROJECT_ID));
+    void runQueueCommand(() => bridge.resumeFrom(sceneId, mediaType, activeProjectId));
   };
 
   const repairPolicyPromptAndResume = async (
@@ -993,13 +1045,13 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         };
       });
       setScenes(nextScenes);
-      await timeline.saveSession({ scenes: nextScenes, visualBible });
+      await timeline.saveSession({ scenes: nextScenes, visualBible, styleReference });
       setSceneErrors((current) => {
         const next = { ...current };
         delete next[key];
         return next;
       });
-      const resumed = await queue.resumeFrom(sceneId, mediaType, DEFAULT_PROJECT_ID);
+      const resumed = await queue.resumeFrom(sceneId, mediaType, activeProjectId);
       setQueueSnapshot(resumed);
       setScenes((current) => applyQueueSnapshotToScenes(current, resumed));
     } catch (caught) {
@@ -1016,7 +1068,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     const bridge = window.flowx?.productionQueue;
     if (!bridge) return;
     void runQueueCommand(
-      () => bridge.approveScene(sceneId, mediaType, DEFAULT_PROJECT_ID),
+      () => bridge.approveScene(sceneId, mediaType, activeProjectId),
       true,
     );
   };
@@ -1025,7 +1077,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     const bridge = window.flowx?.productionQueue;
     if (!bridge) return;
     void runQueueCommand(
-      () => bridge.rejectScene(sceneId, mediaType, DEFAULT_PROJECT_ID),
+      () => bridge.rejectScene(sceneId, mediaType, activeProjectId),
       true,
     );
   };
@@ -1037,9 +1089,9 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
       await bridge.setApprovalPolicy(
         true,
         queueSnapshot?.autoApproveVideos || false,
-        DEFAULT_PROJECT_ID,
+        activeProjectId,
       );
-      return bridge.generateAllImages(DEFAULT_PROJECT_ID);
+      return bridge.generateAllImages(activeProjectId);
     });
   };
 
@@ -1050,8 +1102,8 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     setQueueCommandError("");
     setClearMediaNotice("");
     try {
-      await window.flowx?.timeline.saveSession({ scenes, visualBible });
-      const result = await bridge.clearGeneratedMedia(DEFAULT_PROJECT_ID);
+      await window.flowx?.timeline.saveSession({ scenes, visualBible, styleReference });
+      const result = await bridge.clearGeneratedMedia(activeProjectId);
       setQueueSnapshot(result.snapshot);
       setScenes((current) => applyQueueSnapshotToScenes(current, result.snapshot));
       setSceneErrors({});
@@ -1103,6 +1155,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         scriptText,
         visualBible,
         characterRoster,
+        styleReference,
       });
       setScenes(result.scenes.map((scene) => {
         const detectedTokens = matchCharacterNames(
@@ -1137,20 +1190,104 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     }
   };
 
-  const resetSession = () => {
-    void window.flowx?.productionQueue.stopQueue();
-    setSrtFile(null);
-    setScriptFile(null);
-    setScenes([]);
-    setVisualBible(structuredClone(DEFAULT_VISUAL_BIBLE));
-    setProgress(null);
+  const stopProductionForSessionChange = async () => {
+    await window.flowx?.sceneJobs.cancel().catch(() => false);
+    const queue = window.flowx?.productionQueue;
+    if (!queue) return;
+    let snapshot = await queue.stopQueue();
+    const deadline = Date.now() + 12_000;
+    while (snapshot.activeJobId && Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+      snapshot = await queue.getSnapshot(snapshot.projectId || activeProjectId);
+    }
+    if (snapshot.activeJobId) {
+      throw new Error("Công việc hiện tại chưa dừng xong. Hãy thử chuyển phiên lại sau vài giây.");
+    }
+  };
+
+  const switchSession = async (id: string) => {
+    const timeline = window.flowx?.timeline;
+    if (!timeline || id === activeSessionId || switchingSession || clearingGeneratedMedia) return;
+    setSwitchingSession(true);
+    setSessionReady(false);
     setError("");
-    setSceneErrors({});
-    setThumbnails({});
-    setImageModal(null);
-    setVideoModal(null);
-    setResetConfirmOpen(false);
-    loadedThumbnailPaths.current.clear();
+    try {
+      if (running) await timeline.cancel();
+      await stopProductionForSessionChange();
+      await timeline.saveSession({ scenes, visualBible, styleReference });
+      const selected = await timeline.selectSession(id);
+      applySession(selected);
+      setSessions(await timeline.listSessions());
+      const snapshot = await window.flowx?.productionQueue.getSnapshot(selected.id);
+      if (snapshot) setQueueSnapshot(snapshot);
+      setSessionStatus("saved");
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setSessionStatus("error");
+    } finally {
+      setSessionReady(true);
+      setSwitchingSession(false);
+    }
+  };
+
+  const createSession = async () => {
+    const timeline = window.flowx?.timeline;
+    if (!timeline || switchingSession || clearingGeneratedMedia) return;
+    setSwitchingSession(true);
+    setSessionReady(false);
+    try {
+      if (running) await timeline.cancel();
+      await stopProductionForSessionChange();
+      await timeline.saveSession({ scenes, visualBible, styleReference });
+      const created = await timeline.createSession(`Phiên ${sessions.length + 1}`);
+      applySession(created);
+      setSessions(await timeline.listSessions());
+      const snapshot = await window.flowx?.productionQueue.getSnapshot(created.id);
+      if (snapshot) setQueueSnapshot(snapshot);
+      setSessionStatus("saved");
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setSessionStatus("error");
+    } finally {
+      setSessionReady(true);
+      setSwitchingSession(false);
+    }
+  };
+
+  const renameActiveSession = async () => {
+    const timeline = window.flowx?.timeline;
+    const name = sessionNameDraft.trim();
+    if (!timeline || !name || switchingSession || clearingGeneratedMedia) return;
+    try {
+      setSessions(await timeline.renameSession(activeSessionId, name));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  };
+
+  const deleteActiveSession = async () => {
+    const timeline = window.flowx?.timeline;
+    if (!timeline || switchingSession || clearingGeneratedMedia) return;
+    setSwitchingSession(true);
+    setSessionReady(false);
+    try {
+      if (running) await timeline.cancel();
+      await stopProductionForSessionChange();
+      const deleted = await timeline.deleteSession(activeSessionId);
+      const next = deleted.activeSession || await timeline.createSession("Phiên 1");
+      applySession(next);
+      setSessions(await timeline.listSessions());
+      const snapshot = await window.flowx?.productionQueue.getSnapshot(next.id);
+      if (snapshot) setQueueSnapshot(snapshot);
+      setResetConfirmOpen(false);
+      setSessionStatus("saved");
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setSessionStatus("error");
+    } finally {
+      setSessionReady(true);
+      setSwitchingSession(false);
+    }
   };
 
   const saveStylePreset = (name: string) => {
@@ -1188,6 +1325,48 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         </div>
       </header>
 
+      <section className="workspace-session-bar" aria-label="Quản lý phiên làm việc">
+        <label className="field workspace-session-select">
+          <span>Phiên đang mở</span>
+          <select
+            value={activeSessionId}
+            disabled={switchingSession || running || clearingGeneratedMedia}
+            onChange={(event) => void switchSession(event.target.value)}
+          >
+            {sessions.map((session) => (
+              <option key={session.id} value={session.id}>
+                {session.name} · {session.sceneCount} scene
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field workspace-session-name">
+          <span>Tên phiên</span>
+          <input
+            value={sessionNameDraft}
+            maxLength={100}
+            disabled={switchingSession || clearingGeneratedMedia}
+            onChange={(event) => setSessionNameDraft(event.target.value)}
+            onBlur={() => void renameActiveSession()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void renameActiveSession();
+                event.currentTarget.blur();
+              }
+            }}
+          />
+        </label>
+        <div className="workspace-session-actions">
+          <button className="button secondary compact" type="button" disabled={switchingSession || running || clearingGeneratedMedia} onClick={() => void createSession()}>
+            <FolderPlus size={15} /> Phiên mới
+          </button>
+          <button className="icon-button" type="button" title="Xóa phiên đang mở" disabled={switchingSession || running || clearingGeneratedMedia} onClick={() => setResetConfirmOpen(true)}>
+            <Trash2 size={16} />
+          </button>
+        </div>
+      </section>
+
       <div className="timeline-file-grid">
         <FilePicker
           id="timeline-srt-file"
@@ -1212,6 +1391,8 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         presetError={stylePresetError}
         onSavePreset={saveStylePreset}
         onDeletePreset={deleteStylePreset}
+        styleReference={styleReference}
+        onStyleReferenceChange={setStyleReference}
       />
 
       <div className="timeline-command-bar">
@@ -1234,11 +1415,6 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
           )}
         </div>
         <div className="timeline-actions">
-          {scenes.length > 0 && !running && (
-            <button className="icon-button" type="button" title="Xóa phiên làm việc" onClick={() => setResetConfirmOpen(true)}>
-              <RotateCcw size={16} aria-hidden="true" />
-            </button>
-          )}
           {running ? (
             <button className="button secondary" type="button" onClick={cancel}>
               <Square size={14} aria-hidden="true" />
@@ -1288,7 +1464,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
                     () => bridge.setApprovalPolicy(
                       event.target.checked,
                       queueSnapshot?.autoApproveVideos || false,
-                      DEFAULT_PROJECT_ID,
+                      activeProjectId,
                     ),
                     false,
                   );
@@ -1311,7 +1487,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
               disabled={!flowConnected}
               onClick={() => {
                 const bridge = window.flowx?.productionQueue;
-                if (bridge) void runQueueCommand(() => bridge.generateAllImages(DEFAULT_PROJECT_ID));
+                if (bridge) void runQueueCommand(() => bridge.generateAllImages(activeProjectId));
               }}
             >
               <ImageIcon size={15} /> Tạo toàn bộ ảnh
@@ -1322,7 +1498,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
               disabled={!flowConnected}
               onClick={() => {
                 const bridge = window.flowx?.productionQueue;
-                if (bridge) void runQueueCommand(() => bridge.generateAllVideos(DEFAULT_PROJECT_ID, { onlyApprovedImages: true }));
+                if (bridge) void runQueueCommand(() => bridge.generateAllVideos(activeProjectId, { onlyApprovedImages: true }));
               }}
             >
               <Play size={15} /> Tạo video đã duyệt
@@ -1365,7 +1541,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         errors={queueSnapshot?.errors || []}
         onRetry={(sceneIds) => {
           const bridge = window.flowx?.productionQueue;
-          if (bridge) void runQueueCommand(() => bridge.retryFailed(sceneIds, DEFAULT_PROJECT_ID));
+          if (bridge) void runQueueCommand(() => bridge.retryFailed(sceneIds, activeProjectId));
         }}
       />
       {scenes.length > 0 ? (
@@ -1447,16 +1623,19 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
             <header>
               <div>
                 <p className="eyebrow">Xác nhận xóa phiên</p>
-                <h3 id="session-reset-title">Xóa toàn bộ phiên làm việc hiện tại?</h3>
+                <h3 id="session-reset-title">Xóa phiên “{sessionNameDraft}”?</h3>
               </div>
               <button className="icon-button" type="button" title="Đóng" onClick={() => setResetConfirmOpen(false)}>
                 <X size={18} />
               </button>
             </header>
-            <p>Timeline, trạng thái scene, prompt và Visual Bible trong app sẽ bị xóa. Các ảnh hoặc video đã tải xuống máy vẫn được giữ nguyên.</p>
+            <p>Timeline, trạng thái scene, prompt, Visual Bible và ảnh phong cách mẫu của riêng phiên này sẽ bị xóa. Những phiên khác và các ảnh hoặc video đã tải xuống máy vẫn được giữ nguyên.</p>
             <footer>
               <button className="button secondary" type="button" onClick={() => setResetConfirmOpen(false)}>Giữ phiên</button>
-              <button className="button danger" type="button" onClick={resetSession}>Xác nhận xóa phiên</button>
+              <button className="button danger" type="button" disabled={switchingSession} onClick={() => void deleteActiveSession()}>
+                {switchingSession && <LoaderCircle className="spin" size={15} />}
+                Xác nhận xóa phiên
+              </button>
             </footer>
           </section>
         </div>

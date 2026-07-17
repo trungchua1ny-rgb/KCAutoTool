@@ -11,8 +11,14 @@ export const PROMPT_POLICY_REWRITE_CHANNEL = "timeline:rewrite-policy-prompt";
 export const TIMELINE_SESSION_LOAD_CHANNEL = "timeline-session:load";
 export const TIMELINE_SESSION_SAVE_CHANNEL = "timeline-session:save";
 export const TIMELINE_SESSION_CLEAR_CHANNEL = "timeline-session:clear";
+export const TIMELINE_SESSION_LIST_CHANNEL = "timeline-session:list";
+export const TIMELINE_SESSION_CREATE_CHANNEL = "timeline-session:create";
+export const TIMELINE_SESSION_SELECT_CHANNEL = "timeline-session:select";
+export const TIMELINE_SESSION_RENAME_CHANNEL = "timeline-session:rename";
+export const TIMELINE_SESSION_DELETE_CHANNEL = "timeline-session:delete";
 
 export const MAX_TIMELINE_FILE_BYTES = 2 * 1024 * 1024;
+export const MAX_STYLE_REFERENCE_BYTES = 8 * 1024 * 1024;
 
 export type SceneStatus = "pending" | "queued" | "generating" | "done" | "review" | "error";
 export type CharacterPolicy = "none" | "selected";
@@ -71,6 +77,13 @@ export interface TimelineGenerateInput {
   scriptText: string;
   visualBible: VisualBible;
   characterRoster: CharacterRosterEntry[];
+  styleReference: TimelineStyleReference | null;
+}
+
+export interface TimelineStyleReference {
+  name: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  dataUrl: string;
 }
 
 export interface PolicyPromptRewriteInput {
@@ -94,14 +107,33 @@ export interface TimelineResult {
 }
 
 export interface TimelineSession {
+  id: string;
+  name: string;
+  createdAt: string;
   scenes: Scene[];
   visualBible: VisualBible;
+  styleReference: TimelineStyleReference | null;
   savedAt: string;
 }
 
 export interface TimelineSessionInput {
   scenes: Scene[];
   visualBible: VisualBible;
+  styleReference?: TimelineStyleReference | null;
+}
+
+export interface TimelineSessionSummary {
+  id: string;
+  name: string;
+  sceneCount: number;
+  createdAt: string;
+  savedAt: string;
+  active: boolean;
+}
+
+export interface TimelineSessionDeleteResult {
+  sessions: TimelineSessionSummary[];
+  activeSession: TimelineSession | null;
 }
 
 export interface TimelineProgress {
@@ -119,6 +151,11 @@ export interface TimelineBridge {
   loadSession: () => Promise<TimelineSession | null>;
   saveSession: (input: TimelineSessionInput) => Promise<TimelineSession>;
   clearSession: () => Promise<void>;
+  listSessions: () => Promise<TimelineSessionSummary[]>;
+  createSession: (name?: string) => Promise<TimelineSession>;
+  selectSession: (id: string) => Promise<TimelineSession>;
+  renameSession: (id: string, name: string) => Promise<TimelineSessionSummary[]>;
+  deleteSession: (id: string) => Promise<TimelineSessionDeleteResult>;
   onProgress: (callback: (progress: TimelineProgress) => void) => () => void;
 }
 
@@ -234,6 +271,25 @@ export function normalizeVisualBible(value: unknown): VisualBible {
     continuityNotes: optionalText(bible.continuityNotes, 8_000),
     aspectRatio: "16:9",
   };
+}
+
+export function normalizeStyleReference(value: unknown): TimelineStyleReference | null {
+  if (!value || typeof value !== "object") return null;
+  const reference = value as Record<string, unknown>;
+  const mimeType = reference.mimeType === "image/png" ||
+    reference.mimeType === "image/jpeg" ||
+    reference.mimeType === "image/webp"
+    ? reference.mimeType
+    : null;
+  const name = typeof reference.name === "string"
+    ? reference.name.trim().slice(0, 160)
+    : "";
+  const dataUrl = typeof reference.dataUrl === "string" ? reference.dataUrl.trim() : "";
+  if (!mimeType || !name || !dataUrl.startsWith(`data:${mimeType};base64,`)) return null;
+  const encoded = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  const estimatedBytes = Math.floor(encoded.length * 3 / 4);
+  if (!encoded || estimatedBytes > MAX_STYLE_REFERENCE_BYTES) return null;
+  return { name, mimeType, dataUrl };
 }
 
 export function validateGeneratedVisualBible(value: VisualBible): void {

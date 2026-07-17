@@ -46,7 +46,12 @@ test("splits a long SRT into batches of six 8-second scenes", async () => {
 
   const internals = windowValue.__FLOWX_CHAT_INTERNALS__ as {
     createTimelineBatches: (srtText: string) => TimelineBatch[];
-    buildBeatPlanningPrompt: (srtText: string, scriptText: string) => string;
+    buildBeatPlanningPrompt: (
+      srtText: string,
+      scriptText: string,
+      previousError?: string,
+      hasStyleReference?: boolean,
+    ) => string;
     parseBeatPlanningResponse: (text: string) => Array<Record<string, unknown>>;
     validateBeatPlanningResult: (
       beats: Array<Record<string, unknown>>,
@@ -64,12 +69,16 @@ test("splits a long SRT into batches of six 8-second scenes", async () => {
         aspectRatio: "16:9";
       },
       characterRoster?: Array<{ token: string; name: string }>,
+      hasStyleReference?: boolean,
     ) => string;
     buildTimelineRetryPrompt: (
       batch: TimelineBatch & { index: number },
       batchCount: number,
       reason: string,
       attempt: number,
+      visualBible?: Record<string, string>,
+      characterRoster?: Array<{ token: string; name: string }>,
+      hasStyleReference?: boolean,
     ) => string;
     validateBatchResult: (
       result: { scenes: Array<Record<string, unknown>>; visualBible?: unknown },
@@ -107,6 +116,14 @@ The hero crosses the hall.`;
   const beatPrompt = internals.buildBeatPlanningPrompt(beatSrt, "A continuous walk through one hall.");
   assert.match(beatPrompt, /JOB TYPE: beat_planning/);
   assert.match(beatPrompt, /sum of durationSeconds MUST equal exactly 18 seconds/);
+  const referenceBeatPrompt = internals.buildBeatPlanningPrompt(
+    beatSrt,
+    "A continuous walk through one hall.",
+    "",
+    true,
+  );
+  assert.match(referenceBeatPrompt, /style reference image is attached/i);
+  assert.match(referenceBeatPrompt, /Retain that analysis for all later batches/);
   const beatPlan = internals.validateBeatPlanningResult(
     internals.parseBeatPlanningResponse(JSON.stringify({ beats: [
       { timeStart: "00:00:00,000", timeEnd: "00:00:08,000", durationSeconds: 8, chainId: "hall", chainRole: "start" },
@@ -155,6 +172,22 @@ The hero crosses the hall.`;
   assert.match(plannedPrompt, /chainRole=continue \| chainId=hall/);
   assert.match(plannedPrompt, /For chainRole continue, write ONLY the video prompt/);
   assert.match(plannedPrompt, /imagePrompt MUST be exactly ""/);
+  const referencedStylePrompt = internals.buildTimelinePrompt(
+    plannedBatches[0] as TimelineBatch & { index: number },
+    plannedBatches.length,
+    "A continuous walk through one hall.",
+    {
+      style: "User-locked stickman base",
+      palette: "",
+      lighting: "",
+      continuityNotes: "",
+      aspectRatio: "16:9",
+    },
+    [],
+    true,
+  );
+  assert.match(referencedStylePrompt, /append a concise production-ready analysis/);
+  assert.match(referencedStylePrompt, /Never replace or contradict the user's base style/);
 
   const firstPrompt = internals.buildTimelinePrompt(
     batches[0] as TimelineBatch & { index: number },

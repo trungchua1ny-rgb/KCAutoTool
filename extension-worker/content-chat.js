@@ -171,7 +171,7 @@ if (!window.__FLOWX_CHAT_WORKER__) {
     };
   }
 
-  function buildBeatPlanningPrompt(srtText, scriptText, previousError = "") {
+  function buildBeatPlanningPrompt(srtText, scriptText, previousError = "", hasStyleReference = false) {
     const contract = beatPlanningContract(srtText);
     const correction = previousError
       ? `\nYour previous beat plan was invalid: ${previousError}\nRegenerate the complete plan from scratch.`
@@ -195,6 +195,11 @@ CHAIN RULES
 - continue: only when the same setting, characters, physical action, and story time continue directly from the immediately preceding beat. It must reuse that preceding beat's chainId.
 - Start a new chain or use single whenever location, time, subject, or action continuity breaks.
 - Never join unrelated moments merely because the narration topic is similar.
+
+${hasStyleReference ? `STYLE REFERENCE IMAGE
+- A graphic style reference image is attached to this first message.
+- Silently analyze its medium, line quality, shape language, character construction, facial simplification, palette behavior, shading, texture, background treatment, composition, and explicit visual exclusions.
+- Retain that analysis for all later batches in this conversation. Do not return the style analysis in this beat-planning JSON.` : ""}
 
 Do not write imagePrompt or videoPrompt in this job. Do not add events absent from the sources.${correction}
 
@@ -325,7 +330,7 @@ ${scriptText}
       : "KNOWN RECURRING CHARACTER ROSTER\n- No library character name met the automatic two-mention threshold. Preserve only explicit @TOKENS found in the source.";
   }
 
-  function buildTimelinePrompt(batch, batchCount, scriptText, visualBibleInput = {}, characterRoster = []) {
+  function buildTimelinePrompt(batch, batchCount, scriptText, visualBibleInput = {}, characterRoster = [], hasStyleReference = false) {
     const boundaryList = batch.boundaries
       .map((boundary, index) =>
         `${index + 1}. ${boundary.start} --> ${boundary.end} | chainRole=${boundary.chainRole} | chainId=${boundary.chainId || "null"}`
@@ -344,7 +349,8 @@ ${scriptText}
     const blankFields = bibleFields.filter((field) => !requestedBible[field]);
     const requestedBibleContract = `USER VISUAL BIBLE INPUT
 ${JSON.stringify(requestedBible)}
-- Non-empty user fields are locked. Copy them into the returned visualBible EXACTLY, without rewriting, translating, shortening, or expanding them: ${lockedFields.length ? lockedFields.join(", ") : "none"}.
+- Non-empty user fields are locked. Copy them into the returned visualBible EXACTLY, without rewriting, translating, shortening, or expanding them: ${lockedFields.filter((field) => field !== "style" || !hasStyleReference).length ? lockedFields.filter((field) => field !== "style" || !hasStyleReference).join(", ") : "none"}.
+- ${hasStyleReference ? "A style reference image was attached in Phase 3a. For visualBible.style only, preserve the complete non-empty user style as the opening base, then append a concise production-ready analysis of the image's observable drawing system. Never replace or contradict the user's base style. Do not mention the file, attachment, ChatGPT, or analysis process in the final style text." : "No style reference image was supplied; preserve a non-empty user style exactly."}
 - Only analyze the complete story and generate values for these blank fields: ${blankFields.length ? blankFields.join(", ") : "none"}.
 - Even when every field is already filled, return the complete visualBible object in batch 1.`;
     const visualBibleContract = batch.index === 0
@@ -451,7 +457,7 @@ ${scriptSource}
 </SCRIPT_SOURCE>`;
   }
 
-  function buildTimelineRetryPrompt(batch, batchCount, reason, attempt, visualBibleInput = {}, characterRoster = []) {
+  function buildTimelineRetryPrompt(batch, batchCount, reason, attempt, visualBibleInput = {}, characterRoster = [], hasStyleReference = false) {
     const boundaryList = batch.boundaries
       .map((boundary, index) =>
         `${index + 1}. ${boundary.start} --> ${boundary.end} | chainRole=${boundary.chainRole} | chainId=${boundary.chainId || "null"}`
@@ -462,7 +468,7 @@ ${scriptSource}
       : '{"scenes":[{"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","imagePrompt":"...","videoPrompt":"...","usedCharacterTokens":["@TOKEN"]}]}';
     const requestedBible = normalizeRequestedVisualBible(visualBibleInput);
     const bibleRequirement = batch.index === 0
-      ? `Return a complete non-empty visualBible. Preserve every non-empty field from this user input EXACTLY and generate only its blank fields: ${JSON.stringify(requestedBible)}. Its aspectRatio must be exactly 16:9. Do not invent characters absent from the source.`
+      ? `Return a complete non-empty visualBible. Preserve every non-empty field from this user input EXACTLY and generate only its blank fields: ${JSON.stringify(requestedBible)}. ${hasStyleReference ? "Exception for style only: keep the complete user style as the opening base and append the production-ready visual analysis retained from the attached Phase 3a reference image." : ""} Its aspectRatio must be exactly 16:9. Do not invent characters absent from the source.`
       : "Keep the exact Visual Bible established in batch 1 and do not return a replacement visualBible.";
     return `Your previous response for batch ${batch.index + 1} of ${batchCount} was invalid: ${reason}
 
@@ -536,6 +542,92 @@ ${batch.srtText}
         data: prompt,
       }),
     );
+  }
+
+  function attachmentMarkers(scope = document) {
+    return scope.querySelectorAll([
+      "[data-testid*='attachment']",
+      "[data-testid*='file-preview']",
+      "button[aria-label*='Remove attachment']",
+      "button[aria-label*='Xóa tệp đính kèm']",
+      "img[src^='blob:']",
+    ].join(",")).length;
+  }
+
+  async function styleReferenceFile(reference) {
+    const response = await fetch(reference.dataUrl);
+    const blob = await response.blob();
+    const extension = reference.mimeType === "image/png"
+      ? ".png"
+      : reference.mimeType === "image/webp" ? ".webp" : ".jpg";
+    const base = String(reference.name || "style-reference")
+      .replace(/[^A-Za-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "style-reference";
+    const name = /\.(png|jpe?g|webp)$/i.test(base) ? base : `${base}${extension}`;
+    return new File([blob], name, { type: reference.mimeType });
+  }
+
+  function assignFileInput(input, file) {
+    try {
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      input.files = transfer.files;
+      input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function pasteFileIntoComposer(composer, file) {
+    try {
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      const event = new Event("paste", { bubbles: true, cancelable: true, composed: true });
+      Object.defineProperty(event, "clipboardData", { value: transfer });
+      composer.focus();
+      composer.dispatchEvent(event);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function attachStyleReference(composer, reference, signal) {
+    const file = await styleReferenceFile(reference);
+    const scope = composer.closest("form")?.parentElement || document;
+    const before = attachmentMarkers(scope);
+    const inputs = [...document.querySelectorAll("input[type='file']")]
+      .filter((input) => {
+        const accept = String(input.getAttribute("accept") || "").toLowerCase();
+        return !accept || accept.includes("image") || accept.includes("png") || accept.includes("jpeg") || accept.includes("webp");
+      });
+    let dispatched = false;
+    const localInput = inputs.find((input) => composer.closest("form")?.contains(input));
+    if (localInput) dispatched = assignFileInput(localInput, file);
+    if (!dispatched) dispatched = pasteFileIntoComposer(composer, file);
+    if (!dispatched && inputs[0]) dispatched = assignFileInput(inputs[0], file);
+    if (!dispatched) {
+      const error = new Error("Không thể đưa ảnh phong cách mẫu vào ChatGPT");
+      error.code = "INTERNAL_ERROR";
+      throw error;
+    }
+
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      if (signal.aborted) throw stoppedError();
+      const activeInputHasFile = inputs.some((input) => input.files?.length > 0);
+      if (activeInputHasFile || attachmentMarkers(scope) > before) {
+        await delay(600, signal);
+        return;
+      }
+      await delay(200, signal);
+    }
+    const error = new Error("ChatGPT chưa xác nhận ảnh phong cách mẫu đã được đính kèm");
+    error.code = "INTERNAL_ERROR";
+    throw error;
   }
 
   function findSendButton(composer) {
@@ -760,6 +852,7 @@ ${batch.srtText}
 
   async function planTimelineBeats(jobId, payload, signal) {
     let lastInvalidError = null;
+    let styleReferenceAttached = false;
     for (let attempt = 1; attempt <= MAX_BEAT_PLANNING_ATTEMPTS; attempt += 1) {
       try {
         const composer = findComposer();
@@ -770,6 +863,11 @@ ${batch.srtText}
           error.code = "NOT_LOGGED_IN";
           error.retryable = true;
           throw error;
+        }
+        if (payload.styleReference && !styleReferenceAttached) {
+          notifyProgress(jobId, "Đang đính kèm ảnh phong cách mẫu vào tin nhắn Phase 3a đầu tiên");
+          await attachStyleReference(composer, payload.styleReference, signal);
+          styleReferenceAttached = true;
         }
         const messages = assistantMessages();
         const baseline = {
@@ -786,6 +884,7 @@ ${batch.srtText}
             payload.srtText,
             payload.scriptText,
             lastInvalidError?.message || "",
+            styleReferenceAttached,
           ),
           signal,
         );
@@ -855,6 +954,7 @@ ${batch.srtText}
                   payload.scriptText,
                   payload.visualBible,
                   payload.characterRoster,
+                  Boolean(payload.styleReference),
                 )
               : buildTimelineRetryPrompt(
                   batch,
@@ -863,6 +963,7 @@ ${batch.srtText}
                   attempt,
                   payload.visualBible,
                   payload.characterRoster,
+                  Boolean(payload.styleReference),
                 );
           const attemptLabel =
             attempt === 1 ? label : `${label}, lần thử ${attempt}/${MAX_BATCH_ATTEMPTS}`;

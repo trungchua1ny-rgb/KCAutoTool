@@ -6,8 +6,6 @@ import { DEFAULT_PROJECT_ID } from "../shared/production-queue";
 import type { ProjectDatabase } from "./project-database";
 import { ProjectRepositories } from "./project-repositories";
 
-const VISUAL_BIBLE_ID = `${DEFAULT_PROJECT_ID}:visual-bible:1`;
-
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -36,11 +34,12 @@ export function syncTimelineSessionToProject(
   projectId = DEFAULT_PROJECT_ID,
 ): void {
   const repositories = new ProjectRepositories(database);
+  const visualBibleId = `${projectId}:visual-bible:1`;
   database.transaction(() => {
     if (!repositories.projects.get(projectId)) {
       repositories.projects.create({
         id: projectId,
-        name: "Dự án KC Auto Tool hiện tại",
+        name: session.name || "Dự án KC Auto Tool hiện tại",
         createdAt: session.savedAt,
       });
     }
@@ -54,8 +53,8 @@ export function syncTimelineSessionToProject(
       ON CONFLICT(id) DO UPDATE SET
         payload_json = excluded.payload_json,
         content_hash = excluded.content_hash
-    `).run(VISUAL_BIBLE_ID, projectId, visualBibleJson, hash(visualBibleJson), session.savedAt);
-    repositories.projects.setActiveVisualBible(projectId, VISUAL_BIBLE_ID);
+    `).run(visualBibleId, projectId, visualBibleJson, hash(visualBibleJson), session.savedAt);
+    repositories.projects.setActiveVisualBible(projectId, visualBibleId);
 
     const incomingTokens = new Set(characters.map((character) => character.token));
     for (const character of repositories.characters.listByProject(projectId)) {
@@ -135,7 +134,7 @@ export function syncTimelineSessionToProject(
           videoPrompt: scene.videoPrompt,
           usedCharacterTokens: selectedTokens,
           narrationSrtRange: null,
-          visualBibleId: VISUAL_BIBLE_ID,
+          visualBibleId,
           chainId: scene.chainId,
           chainRole: scene.chainRole,
           durationSeconds: scene.durationSeconds,
@@ -162,7 +161,7 @@ export function syncTimelineSessionToProject(
           Math.floor(index / 6), index, scene.timeStart, scene.timeEnd,
           scene.imagePrompt, scene.videoPrompt,
           JSON.stringify(selectedTokens),
-          VISUAL_BIBLE_ID, scene.chainId, scene.chainRole, scene.durationSeconds,
+          visualBibleId, scene.chainId, scene.chainRole, scene.durationSeconds,
           nextStatus, scene.imageResultPath || null,
           scene.imageFlowAssetKey || null, scene.videoResultPath || null,
           approvedImage ? 1 : 0,

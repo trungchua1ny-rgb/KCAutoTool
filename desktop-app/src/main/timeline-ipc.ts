@@ -6,6 +6,7 @@ import {
   TIMELINE_GENERATE_CHANNEL,
   TIMELINE_PROGRESS_CHANNEL,
   normalizeVisualBible,
+  normalizeStyleReference,
   type TimelineGenerateInput,
   type PolicyPromptRewriteInput,
   type TimelineProgress,
@@ -50,6 +51,7 @@ function validateInput(value: unknown): TimelineGenerateInput {
     scriptText: validateText(input.scriptText, "File kịch bản"),
     visualBible: normalizeVisualBible(input.visualBible),
     characterRoster,
+    styleReference: normalizeStyleReference(input.styleReference),
   };
 }
 

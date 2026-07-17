@@ -505,12 +505,13 @@ export class ProductionQueue {
       deletedDirectories += 1;
     }
 
-    const session = await this.sessionStore.load();
+    const session = await this.sessionStore.load(projectId);
     if (!session?.scenes.length) {
       throw new Error("Không còn kết quả Phase 3 để giữ lại.");
     }
     await this.sessionStore.save({
       visualBible: session.visualBible,
+      styleReference: session.styleReference,
       scenes: session.scenes.map((scene) => ({
         ...scene,
         imageStatus: "pending" as const,
@@ -521,7 +522,7 @@ export class ProductionQueue {
         videoResultPath: "",
         videoApproved: false,
       })),
-    });
+    }, projectId);
 
     const deletedRoots = [...roots.values()];
     this.database.transaction(() => {
@@ -722,7 +723,7 @@ export class ProductionQueue {
   }
 
   private async syncProject(projectId: string): Promise<void> {
-    const session = await this.sessionStore.load();
+    const session = await this.sessionStore.load(projectId);
     if (!session?.scenes.length) throw new Error("Chưa có timeline để đưa vào hàng đợi");
     syncTimelineSessionToProject(
       this.database,
