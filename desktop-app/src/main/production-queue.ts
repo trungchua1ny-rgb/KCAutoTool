@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { access, mkdir, readdir, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import type { CharacterStore } from "./character-store";
@@ -68,7 +68,11 @@ function payloadHash(scene: SceneRecord, mediaType: SceneMediaType): string {
     prompt: mediaType === "image" ? scene.imagePrompt : scene.videoPrompt,
     characters: scene.usedCharacterTokens,
     visualBibleId: scene.visualBibleId,
-    sourceImage: mediaType === "video" ? scene.imageAssetPath : null,
+    sourceImage: mediaType === "video"
+      ? scene.chainRole === "continue"
+        ? scene.startFrameAssetPath
+        : scene.imageAssetPath
+      : null,
   })).digest("hex");
 }
 
@@ -88,7 +92,7 @@ async function runFfmpegLastFrame(videoPath: string, outputPath: string): Promis
   await mkdir(dirname(outputPath), { recursive: true });
   await new Promise<void>((resolve, reject) => {
     const child = spawn("ffmpeg", [
-      "-hide_banner", "-loglevel", "error", "-sseof", "-0.08", "-i", videoPath,
+      "-hide_banner", "-loglevel", "error", "-sseof", "-0.05", "-i", videoPath,
       "-frames:v", "1", "-y", outputPath,
     ], { windowsHide: true });
     let stderr = "";
@@ -99,26 +103,6 @@ async function runFfmpegLastFrame(videoPath: string, outputPath: string): Promis
       : reject(new Error(`ffmpeg extract_last_frame failed (${code}): ${stderr.slice(-500)}`)));
   });
   await access(outputPath);
-}
-
-async function referenceFromPath(
-  path: string,
-  token: string,
-  name: string,
-) {
-  const extension = extname(path).toLowerCase();
-  const mimeType = extension === ".png"
-    ? "image/png" as const
-    : extension === ".webp"
-      ? "image/webp" as const
-      : "image/jpeg" as const;
-  return {
-    token,
-    name,
-    mimeType,
-    imageBase64: (await readFile(path)).toString("base64"),
-    localPath: path,
-  };
 }
 
 function serializeError(error: StoredQueueError): string {
@@ -390,9 +374,19 @@ export class ProductionQueue {
     const statuses = new Set<SceneState>(options.onlyStatuses || ["prompt_ready", "image_failed"]);
     for (const scene of this.repositories.scenes.listByProject(projectId)) {
       if (scene.orderIndex < (options.fromSceneIndex || 0) || !statuses.has(scene.status)) continue;
-      // A continuation image must be generated only after the previous clip has
-      // produced its last frame. executeExtractLastFrame queues it when ready.
-      if (scene.chainRole === "continue" && !scene.startFrameAssetPath) continue;
+      // Continuations no longer synthesize a separate still image. The exact
+      // last frame of the preceding clip becomes their approved opening image
+      // and is attached directly to Flow's Start frame slot.
+      if (scene.chainRole === "continue") {
+        if (scene.startFrameAssetPath) {
+          const continued = this.repositories.scenes.useContinuationFrameAsOpeningImage(
+            scene.id,
+            scene.startFrameAssetPath,
+          );
+          if (automaticPipeline) this.enqueueScene(continued, "video");
+        }
+        continue;
+      }
       this.enqueueScene(scene, "image");
     }
     if (automaticPipeline) {
@@ -1039,21 +1033,14 @@ export class ProductionQueue {
       await mkdir(dirname(outputPath), { recursive: true });
       await this.extractLastFrame(previous.videoAssetPath, outputPath);
       this.database.transaction(() => {
-        this.repositories.scenes.setStartFrameAssetPath(target.id, outputPath);
+        this.repositories.scenes.useContinuationFrameAsOpeningImage(target.id, outputPath);
         this.repositories.jobs.updateStatus(job.id, "succeeded", {
           heartbeatAt: now(),
           error: null,
         });
       });
-      const project = this.repositories.projects.get(job.projectId);
       const refreshed = this.repositories.scenes.get(target.id);
-      if (
-        project?.autoApproveImages &&
-        refreshed &&
-        (refreshed.status === "prompt_ready" || refreshed.status === "image_failed")
-      ) {
-        this.enqueueScene(refreshed, "image", job.id);
-      }
+      if (refreshed) this.enqueueScene(refreshed, "video", job.id);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       const classified = classifyQueueError(
@@ -1089,14 +1076,10 @@ export class ProductionQueue {
     const characterRefs = mediaType === "image"
       ? await this.characterStore.resolveReferences(scene.usedCharacterTokens)
       : [];
-    const chainFrameRefs = mediaType === "image" && scene.chainRole === "continue" && scene.startFrameAssetPath
-      ? [await referenceFromPath(scene.startFrameAssetPath, "@CHAIN_START_FRAME", "Previous clip final frame")]
-      : [];
-    // Keep every image request bounded and scene-specific. Generated scene
-    // images are not cumulative style anchors: they quickly bury the actual
-    // character reference and make later scenes drift. A continuation receives
-    // only the previous clip's final frame in addition to its own characters.
-    const refImages = [...characterRefs, ...chainFrameRefs];
+    const refImages = characterRefs;
+    const continuationOpeningFrame = mediaType === "video" && scene.chainRole === "continue"
+      ? scene.startFrameAssetPath || ""
+      : "";
     return {
       sceneId: publicSceneId(scene.projectId, scene.id),
       mediaType,
@@ -1109,8 +1092,12 @@ export class ProductionQueue {
         outputCount: 1,
         expectedCredits: 0,
       },
-      sourceImagePath: mediaType === "video" ? scene.imageAssetPath || "" : "",
-      sourceFlowAssetKey: mediaType === "video" ? scene.flowImageAssetId || "" : "",
+      sourceImagePath: mediaType === "video"
+        ? continuationOpeningFrame || scene.imageAssetPath || ""
+        : "",
+      sourceFlowAssetKey: mediaType === "video" && !continuationOpeningFrame
+        ? scene.flowImageAssetId || ""
+        : "",
       startFramePath: "",
       videoSettings: {
         model: "veo-3.1-lite",

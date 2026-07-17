@@ -98,7 +98,7 @@ function workerVersionNumber(value: string | null): number {
 }
 
 function supportsTimelineWorker(value: string | null): boolean {
-  return workerVersionNumber(value) >= 2_021_000;
+  return workerVersionNumber(value) >= 2_042_000;
 }
 
 function supportsSceneJobs(value: string | null): boolean {

@@ -276,6 +276,23 @@ export class SceneRepository {
     return this.get(id)!;
   }
 
+  useContinuationFrameAsOpeningImage(id: string, path: string): SceneRecord {
+    const current = this.get(id);
+    if (!current) throw new Error(`Scene ${id} does not exist`);
+    if (current.chainRole !== "continue") {
+      throw new Error(`Scene ${id} is not a continuation`);
+    }
+    this.database.db.prepare(`
+      UPDATE scenes SET
+        start_frame_asset_path = ?, status = 'image_approved',
+        image_asset_path = ?, flow_image_asset_id = NULL,
+        approved_image = 1, approved_video = 0,
+        last_error = NULL, updated_at = ?
+      WHERE id = ?
+    `).run(path, path, now(), id);
+    return this.get(id)!;
+  }
+
   resetPendingQueueState(id: string): SceneRecord {
     const current = this.get(id);
     if (!current) throw new Error(`Scene ${id} does not exist`);

@@ -194,7 +194,7 @@ test("syncs Beat & Chain planning metadata from the saved timeline into SQLite",
   }
 });
 
-test("keeps continuation references bounded and generates every video from its own first frame", async () => {
+test("uses the previous clip final frame directly for continuation video", async () => {
   const context = await fixture();
   const worker = new FakeQueueWorker();
   worker.resultDirectory = context.directory;
@@ -234,23 +234,20 @@ test("keeps continuation references bounded and generates every video from its o
     assert.deepEqual(worker.calls, [
       "scene-001:image",
       "scene-001:video",
-      "scene-002:image",
       "scene-002:video",
     ]);
     const firstVideo = worker.inputs.find((input) =>
       input.sceneId === "scene-001" && input.mediaType === "video");
-    const continuedImage = worker.inputs.find((input) =>
-      input.sceneId === "scene-002" && input.mediaType === "image");
     const continuedVideo = worker.inputs.find((input) =>
       input.sceneId === "scene-002" && input.mediaType === "video");
     assert.equal(firstVideo?.videoSettings.mode, "first-frame");
     assert.equal(firstVideo?.videoSettings.durationSeconds, 6);
-    assert.ok(continuedImage?.refImages.some((reference) => reference.token === "@CHAIN_START_FRAME"));
-    assert.ok(!continuedImage?.refImages.some((reference) => reference.token.startsWith("@STYLE_ANCHOR_")));
     assert.equal(continuedVideo?.videoSettings.mode, "first-frame");
     assert.equal(continuedVideo?.videoSettings.durationSeconds, 4);
     assert.equal(continuedVideo?.startFramePath, "");
     assert.equal(continuedVideo?.refImages.length, 0);
+    assert.match(continuedVideo?.sourceImagePath || "", /\.kc-frames[\\/].+-last-frame\.png$/);
+    assert.equal(continuedVideo?.sourceFlowAssetKey, "");
 
     const extractJob = context.database.db.prepare(
       "SELECT status FROM jobs WHERE job_type = 'extract_last_frame'",
