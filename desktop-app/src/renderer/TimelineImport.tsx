@@ -371,12 +371,14 @@ function TimelineTable({
                 <td>
                   <div className="scene-prompt-cell">
                     <textarea className="scene-prompt" aria-label={`Prompt ảnh scene ${scene.order}`} value={scene.imagePrompt} onChange={(event) => onPromptChange(scene.id, "image", event.target.value)} />
-                    {(scene.imageStatus === "error" || errors[`${scene.id}:image`]) && (
+                    {Boolean(scene.imagePrompt.trim()) && (
                       <button
                         className="button secondary compact policy-repair-button"
                         type="button"
                         disabled={!chatConnected || Boolean(repairingPromptKey)}
-                        title={chatConnected ? "Dừng hàng đợi, nhờ ChatGPT sửa prompt rồi chạy tiếp từ scene này" : "ChatGPT worker chưa kết nối"}
+                        title={chatConnected
+                          ? "Dừng hàng đợi, nhờ ChatGPT làm prompt an toàn hơn rồi chạy tiếp từ scene này"
+                          : "ChatGPT worker chưa kết nối"}
                         onClick={() => onRepairPolicy(scene.id, "image")}
                       >
                         {repairingPromptKey === `${scene.id}:image` ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />}
@@ -400,12 +402,14 @@ function TimelineTable({
                 <td>
                   <div className="scene-prompt-cell">
                     <textarea className="scene-prompt" aria-label={`Prompt video scene ${scene.order}`} value={scene.videoPrompt} onChange={(event) => onPromptChange(scene.id, "video", event.target.value)} />
-                    {(scene.videoStatus === "error" || errors[`${scene.id}:video`]) && (
+                    {Boolean(scene.videoPrompt.trim()) && (
                       <button
                         className="button secondary compact policy-repair-button"
                         type="button"
                         disabled={!chatConnected || Boolean(repairingPromptKey)}
-                        title={chatConnected ? "Dừng hàng đợi, nhờ ChatGPT sửa prompt rồi chạy tiếp từ scene này" : "ChatGPT worker chưa kết nối"}
+                        title={chatConnected
+                          ? "Dừng hàng đợi, nhờ ChatGPT làm prompt an toàn hơn rồi chạy tiếp từ scene này"
+                          : "ChatGPT worker chưa kết nối"}
                         onClick={() => onRepairPolicy(scene.id, "video")}
                       >
                         {repairingPromptKey === `${scene.id}:video` ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />}
