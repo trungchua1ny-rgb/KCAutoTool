@@ -174,6 +174,8 @@ Extension version `2.43.0` stops writing image prompts for `continue` scenes. Ph
 
 Extension version `2.44.0` adds an optional graphic-style reference image. KC Auto Tool persists the selected PNG/JPEG/WebP with the workspace and attaches it to the first Phase 3a ChatGPT message. ChatGPT retains a visual analysis across later batches and appends it to the user-entered base style; the desktop server preserves the complete user base before accepting that expansion. Timeline storage version 3 also supports multiple named workspaces with isolated SQLite project IDs, create/switch/rename/delete controls, confirmation before deletion, and automatic migration of the former single session.
 
+Extension version `2.45.0` isolates generated image and video downloads in a stable folder for each workspace under `Downloads/KC Auto Tool/session-<workspace-id>`. Queue snapshots are also rejected unless they belong to the workspace currently open in the renderer, preventing old `scene-001` results from appearing in a newly created workspace. Clearing generated results now protects paths shared by migrated workspaces and retries Windows `EBUSY`/permission locks before reporting which file is still open in Chrome or Flow.
+
 Extension version `2.32.0` also adds **Sửa chính sách** beside a failed image or video prompt. The action stops both direct Flow work and the production queue, asks ChatGPT for one policy-safe replacement without evasion, validates and saves it, resets the failed scene, then resumes production from that exact prompt. If rewriting or validation fails, the original prompt remains and the queue stays stopped.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without

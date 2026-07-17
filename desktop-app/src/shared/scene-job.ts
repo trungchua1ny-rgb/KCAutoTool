@@ -16,6 +16,7 @@ export type SceneMediaType = (typeof SCENE_MEDIA_TYPES)[number];
 
 export interface SceneJobInput {
   sceneId: string;
+  outputFolder?: string;
   mediaType: SceneMediaType;
   prompt: string;
   characterTokens: string[];
@@ -25,6 +26,15 @@ export interface SceneJobInput {
   sourceFlowAssetKey: string;
   startFramePath: string;
   videoSettings: VideoGenerationSettings;
+}
+
+export function projectOutputFolder(projectId: string, _projectName = ""): string {
+  const normalized = String(projectId || "default")
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "default";
+  const id = (normalized.startsWith("session-") ? normalized.slice(8) : normalized)
+    .slice(-64) || "default";
+  return `session-${id}`;
 }
 
 export interface ImageGenerationSettings {
@@ -83,6 +93,9 @@ export function normalizeSceneJobInput(value: unknown): SceneJobInput {
   const input = value as Record<string, unknown>;
   const sceneId = typeof input.sceneId === "string" ? input.sceneId.trim() : "";
   const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
+  const outputFolder = typeof input.outputFolder === "string"
+    ? input.outputFolder.trim().replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 80)
+    : "default-session";
   if (!/^scene-\d{3,4}$/.test(sceneId)) {
     throw new Error("Scene job requires a valid scene id");
   }
@@ -149,6 +162,7 @@ export function normalizeSceneJobInput(value: unknown): SceneJobInput {
   }
   return {
     sceneId,
+    outputFolder: outputFolder || "default-session",
     mediaType: input.mediaType as SceneMediaType,
     prompt,
     characterTokens,

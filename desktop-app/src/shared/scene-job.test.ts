@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   normalizeSceneJobInput,
   normalizeSceneJobResult,
+  projectOutputFolder,
 } from "./scene-job";
 
 test("normalizes matching Phase 4 scene jobs", () => {
@@ -13,6 +14,7 @@ test("normalizes matching Phase 4 scene jobs", () => {
   });
   assert.deepEqual(input, {
     sceneId: "scene-104",
+    outputFolder: "default-session",
     mediaType: "image",
     prompt: "A revised visible scene",
     characterTokens: [],
@@ -58,6 +60,14 @@ test("normalizes matching Phase 4 scene jobs", () => {
       flowAssetKey: "path:https://flow.google/assets/scene-104",
     },
   );
+});
+
+test("builds a stable and safe output folder for each workspace", () => {
+  assert.equal(
+    projectOutputFolder("session-993c45e9-e4ed-4cec-9a02-c3e7fa0bb84d", "Phiên 2"),
+    "session-993c45e9-e4ed-4cec-9a02-c3e7fa0bb84d",
+  );
+  assert.equal(projectOutputFolder("legacy-default-project"), "session-legacy-default-project");
 });
 
 test("rejects mismatched scene results", () => {

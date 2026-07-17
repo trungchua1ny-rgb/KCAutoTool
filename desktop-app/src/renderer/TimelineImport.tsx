@@ -24,7 +24,11 @@ import {
   recurringCharacterRoster,
   type CharacterView,
 } from "../shared/character";
-import type { SceneMediaType, SceneJobProgress } from "../shared/scene-job";
+import {
+  projectOutputFolder,
+  type SceneMediaType,
+  type SceneJobProgress,
+} from "../shared/scene-job";
 import {
   DEFAULT_VISUAL_BIBLE,
   MAX_TIMELINE_FILE_BYTES,
@@ -716,7 +720,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     const bridge = window.flowx?.productionQueue;
     if (!bridge) return undefined;
     const applySnapshot = (snapshot: ProductionQueueSnapshot) => {
-      if (snapshot.projectId !== activeProjectId) return;
+      if (snapshot.projectId !== activeSessionIdRef.current) return;
       setQueueSnapshot(snapshot);
       setScenes((current) => applyQueueSnapshotToScenes(current, snapshot));
       setSceneErrors((current) => {
@@ -847,6 +851,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
       const sourceScene = scenes.find((scene) => scene.id === sceneId);
       const result = await window.flowx.sceneJobs.run({
         sceneId,
+        outputFolder: projectOutputFolder(activeProjectId, sessionNameDraft),
         mediaType,
         prompt: prompt.trim(),
         characterTokens: mediaType === "image" ? characterTokens : [],

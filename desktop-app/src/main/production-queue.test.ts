@@ -11,7 +11,7 @@ import { syncTimelineSessionToProject } from "./production-session-sync";
 import { TimelineSessionStore } from "./timeline-session-store";
 import { WorkerJobError } from "./worker-server";
 import { DEFAULT_PROJECT_ID } from "../shared/production-queue";
-import type { BoundSceneJobInput, SceneJobProgress } from "../shared/scene-job";
+import { projectOutputFolder, type BoundSceneJobInput, type SceneJobProgress } from "../shared/scene-job";
 import type { TimelineSessionInput } from "../shared/timeline";
 import type { WorkerConnectionStatus } from "../shared/worker-status";
 
@@ -629,12 +629,13 @@ test("deletes all generated files and jobs while preserving Phase 3 prompts", as
   const context = await fixture();
   const worker = new FakeQueueWorker();
   const generatedRoot = join(context.directory, "Downloads", "KC Auto Tool");
-  const frameDirectory = join(generatedRoot, ".kc-frames");
+  const projectDirectory = join(generatedRoot, projectOutputFolder(DEFAULT_PROJECT_ID));
+  const frameDirectory = join(projectDirectory, ".kc-frames");
   await mkdir(frameDirectory, { recursive: true });
-  const imagePath = join(generatedRoot, "scene-001-100.png");
-  const videoPath = join(generatedRoot, "scene-001-200.mp4");
+  const imagePath = join(projectDirectory, "scene-001-100.png");
+  const videoPath = join(projectDirectory, "scene-001-200.mp4");
   const framePath = join(frameDirectory, "scene-001-200-last-frame.png");
-  const orphanPath = join(generatedRoot, "scene-001-old-copy.png");
+  const orphanPath = join(projectDirectory, "scene-001-old-copy.png");
   await Promise.all([
     writeFile(imagePath, "image"),
     writeFile(videoPath, "video"),
@@ -698,7 +699,8 @@ test("deletes all generated files and jobs while preserving Phase 3 prompts", as
     assert.equal(result.deletedFiles, 4);
     assert.equal(result.deletedDirectories, 1);
     assert.equal(result.retainedScenes, 2);
-    await assert.rejects(access(generatedRoot));
+    await assert.rejects(access(projectDirectory));
+    await access(generatedRoot);
     assert.equal(result.snapshot.jobs.length, 0);
     assert.ok(result.snapshot.scenes.every((scene) =>
       scene.status === "prompt_ready" &&
@@ -722,6 +724,64 @@ test("deletes all generated files and jobs while preserving Phase 3 prompts", as
     const resetScenes = repositories.scenes.listByProject(DEFAULT_PROJECT_ID);
     assert.ok(resetScenes.every((scene) => !scene.startFrameAssetPath));
     assert.deepEqual(repositories.visualBibles.get(bible.id)?.anchorImagePaths, []);
+  } finally {
+    queue.shutdown();
+    context.database.close();
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
+test("clears stale results from one workspace without deleting media shared by another", async () => {
+  const context = await fixture();
+  const worker = new FakeQueueWorker();
+  const generatedRoot = join(context.directory, "Downloads", "KC Auto Tool");
+  await mkdir(generatedRoot, { recursive: true });
+  const sharedImagePath = join(generatedRoot, "scene-001-legacy.png");
+  await writeFile(sharedImagePath, "legacy-image");
+
+  const original = await context.sessionStore.load(DEFAULT_PROJECT_ID);
+  assert.ok(original);
+  const staleScenes = original.scenes.map((scene, index) => index === 0
+    ? {
+        ...scene,
+        imageStatus: "done" as const,
+        imageResultPath: sharedImagePath,
+        imageFlowAssetKey: "flow:legacy-scene-001",
+        imageApproved: true,
+      }
+    : scene);
+  const savedOriginal = await context.sessionStore.save({
+    visualBible: original.visualBible,
+    scenes: staleScenes,
+  }, DEFAULT_PROJECT_ID);
+  syncTimelineSessionToProject(context.database, savedOriginal, []);
+
+  const second = await context.sessionStore.create("Phiên bị dính kết quả cũ");
+  const contaminated = await context.sessionStore.save({
+    visualBible: original.visualBible,
+    scenes: staleScenes,
+  }, second.id);
+  syncTimelineSessionToProject(context.database, contaminated, []);
+
+  const queue = new ProductionQueue(
+    context.database,
+    worker,
+    context.characterStore,
+    context.sessionStore,
+    () => {},
+    { generatedMediaRoot: generatedRoot },
+  );
+  try {
+    const result = await queue.clearGeneratedMedia(second.id);
+    assert.equal(result.deletedFiles, 0);
+    await access(sharedImagePath);
+    assert.equal(
+      (await context.sessionStore.load(DEFAULT_PROJECT_ID))?.scenes[0].imageResultPath,
+      sharedImagePath,
+    );
+    const resetSecond = await context.sessionStore.load(second.id);
+    assert.equal(resetSecond?.scenes[0].imageStatus, "pending");
+    assert.equal(resetSecond?.scenes[0].imageResultPath, "");
   } finally {
     queue.shutdown();
     context.database.close();

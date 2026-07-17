@@ -30,6 +30,8 @@ Version `2.42.0` enforces one video download channel. After the Flow viewer rout
 Version `2.43.0` makes Phase 3 continuation-aware: `continue` boundaries return an empty image prompt and only describe the next video action. KC Auto Tool supplies the final frame extracted from the preceding downloaded video directly to Flow's Start-frame slot; independent `single` and chain `start` scenes continue to use generated opening images.
 
 Version `2.44.0` accepts an optional PNG/JPEG/WebP style reference from KC Auto Tool, attaches it to the first Phase 3a ChatGPT message, and instructs ChatGPT to retain the observed drawing system for all prompt batches. The first Visual Bible style keeps the complete user-entered base and adds a production-ready description of the reference image.
+
+Version `2.45.0` receives a stable workspace output-folder key with every scene job. Images and videos are saved under `Downloads/KC Auto Tool/session-<workspace-id>` so repeated public IDs such as `scene-001` cannot mix files between workspaces.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from

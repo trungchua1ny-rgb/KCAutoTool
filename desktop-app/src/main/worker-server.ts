@@ -102,7 +102,7 @@ function supportsTimelineWorker(value: string | null): boolean {
 }
 
 function supportsSceneJobs(value: string | null): boolean {
-  return workerVersionNumber(value) >= 2_021_000;
+  return workerVersionNumber(value) >= 2_045_000;
 }
 
 function supportsPolicyPromptRewrite(value: string | null): boolean {
@@ -624,7 +624,7 @@ export class WorkerServer {
     if (!supportsSceneJobs(client.workerVersion)) {
       return Promise.reject(
         new WorkerJobError(
-          `KC Dev ${client.workerVersion || "cũ"} chưa hỗ trợ heartbeat cho hàng đợi tự động. Hãy Reload extension.`,
+          `KC Dev ${client.workerVersion || "cũ"} chưa hỗ trợ thư mục media riêng cho từng phiên. Hãy Reload extension 2.45.0.`,
           "INVALID_JOB",
         ),
       );

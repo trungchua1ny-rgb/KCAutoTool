@@ -283,14 +283,21 @@ async function sendImageToFlowTab(tabId, message) {
   }
 }
 
-function safeSceneFileName(sceneId, mimeType) {
-  const extension = mimeType === "image/webp" ? "webp" : mimeType === "image/jpeg" ? "jpg" : "png";
-  return `KC Auto Tool/${sceneId}-${Date.now()}.${extension}`;
+function safeOutputFolder(value) {
+  return String(value || "default-session")
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || "default-session";
 }
 
-function safeVideoFileName(sceneId, mimeType) {
+function safeSceneFileName(sceneId, mimeType, outputFolder) {
+  const extension = mimeType === "image/webp" ? "webp" : mimeType === "image/jpeg" ? "jpg" : "png";
+  return `KC Auto Tool/${safeOutputFolder(outputFolder)}/${sceneId}-${Date.now()}.${extension}`;
+}
+
+function safeVideoFileName(sceneId, mimeType, outputFolder) {
   const extension = mimeType === "video/webm" ? "webm" : "mp4";
-  return `KC Auto Tool/${sceneId}-${Date.now()}.${extension}`;
+  return `KC Auto Tool/${safeOutputFolder(outputFolder)}/${sceneId}-${Date.now()}.${extension}`;
 }
 
 async function waitForDownload(downloadId, timeoutMs = 120000, mediaLabel = "nội dung") {
@@ -342,7 +349,7 @@ async function downloadNewestVideoThroughFlow(tabId, videoBaseline, payload, job
       ? "video/webm"
       : "video/mp4";
     suggest({
-      filename: safeVideoFileName(payload.sceneId, mimeType),
+      filename: safeVideoFileName(payload.sceneId, mimeType, payload.outputFolder),
       conflictAction: "uniquify",
     });
   };
@@ -431,7 +438,7 @@ async function downloadFlowImage(response, payload) {
   const mimeType = response.dataUrl?.match(/^data:(image\/(?:png|jpeg|webp));/)?.[1] || "image/png";
   const downloadId = await chrome.downloads.download({
     url,
-    filename: safeSceneFileName(payload.sceneId, mimeType),
+    filename: safeSceneFileName(payload.sceneId, mimeType, payload.outputFolder),
     conflictAction: "uniquify",
     saveAs: false,
   });

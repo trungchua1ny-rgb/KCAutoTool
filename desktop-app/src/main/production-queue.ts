@@ -18,11 +18,12 @@ import {
   type QueueVideoOptions,
 } from "../shared/production-queue";
 import type { JobRecord, SceneRecord, SceneState } from "../shared/project";
-import type {
-  BoundSceneJobInput,
-  SceneJobProgress,
-  SceneJobResult,
-  SceneMediaType,
+import {
+  projectOutputFolder,
+  type BoundSceneJobInput,
+  type SceneJobProgress,
+  type SceneJobResult,
+  type SceneMediaType,
 } from "../shared/scene-job";
 import { normalizeVisualBible, type VisualBible } from "../shared/timeline";
 import { WorkerJobError, type WorkerServer } from "./worker-server";
@@ -213,6 +214,25 @@ async function countFilesInDirectory(path: string): Promise<number> {
     }
   }
   return count;
+}
+
+async function removeGeneratedPathWithRetry(path: string, recursive = false): Promise<void> {
+  const retryable = new Set(["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"]);
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      await rm(path, { recursive, force: true, maxRetries: 0 });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code || "";
+      if (code === "ENOENT") return;
+      lastError = error;
+      if (!retryable.has(code) || attempt === 7) break;
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 150 * (attempt + 1)));
+    }
+  }
+  const detail = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`File vẫn đang được Chrome/Flow sử dụng nên chưa thể xóa: ${path}. ${detail}`);
 }
 
 export class ProductionQueue {
@@ -473,11 +493,34 @@ export class ProductionQueue {
       scene.videoAssetPath,
     ]).filter((path): path is string => Boolean(path?.trim())))];
 
+    // A stale renderer snapshot from an older workspace may reference the same
+    // legacy flat file. Never delete a path still owned by another workspace.
+    const sharedPathKeys = new Set<string>();
+    const otherRows = this.database.db.prepare(`
+      SELECT start_frame_asset_path, image_asset_path, video_asset_path
+      FROM scenes WHERE project_id <> ?
+    `).all(projectId) as Array<Record<string, unknown>>;
+    for (const row of otherRows) {
+      for (const value of [row.start_frame_asset_path, row.image_asset_path, row.video_asset_path]) {
+        if (typeof value === "string" && value.trim()) sharedPathKeys.add(normalizedPath(value));
+      }
+    }
+    for (const summary of await this.sessionStore.list()) {
+      if (summary.id === projectId) continue;
+      const otherSession = await this.sessionStore.load(summary.id);
+      for (const scene of otherSession?.scenes || []) {
+        for (const value of [scene.imageResultPath, scene.videoResultPath]) {
+          if (value?.trim()) sharedPathKeys.add(normalizedPath(value));
+        }
+      }
+    }
+    const deletablePaths = trackedPaths.filter((path) => !sharedPathKeys.has(normalizedPath(path)));
+
     const roots = new Map<string, string>();
     if (this.generatedMediaRoot) {
       roots.set(normalizedPath(this.generatedMediaRoot), this.generatedMediaRoot);
     }
-    for (const path of trackedPaths) {
+    for (const path of deletablePaths) {
       const root = generatedMediaRootFromPath(path);
       if (root) roots.set(normalizedPath(root), validateGeneratedMediaRoot(root));
     }
@@ -495,14 +538,32 @@ export class ProductionQueue {
 
     let deletedFiles = 0;
     let deletedDirectories = 0;
-    for (const root of roots.values()) {
-      const exists = await access(root).then(() => true, () => false);
+    const deletedDirectoryPaths: string[] = [];
+    const project = this.repositories.projects.get(projectId);
+    if (this.generatedMediaRoot && project) {
+      const projectDirectory = join(
+        this.generatedMediaRoot,
+        projectOutputFolder(project.id, project.name),
+      );
+      const sharedInsideProjectDirectory = [...sharedPathKeys].some((path) =>
+        isInsideDirectory(path, projectDirectory)
+      );
+      const exists = await access(projectDirectory).then(() => true, () => false);
+      if (exists && !sharedInsideProjectDirectory) {
+        deletedFiles += await countFilesInDirectory(projectDirectory);
+        await removeGeneratedPathWithRetry(projectDirectory, true);
+        deletedDirectories += 1;
+        deletedDirectoryPaths.push(projectDirectory);
+      }
+    }
+    const deletedFileKeys = new Set<string>();
+    for (const path of deletablePaths) {
+      if (deletedDirectoryPaths.some((directory) => isInsideDirectory(path, directory))) continue;
+      const exists = await access(path).then(() => true, () => false);
       if (!exists) continue;
-      deletedFiles += await countFilesInDirectory(root);
-      // root is verified above to be an absolute directory named exactly
-      // "KC Auto Tool". Never recursively remove a computed parent folder.
-      await rm(root, { recursive: true, force: true });
-      deletedDirectories += 1;
+      await removeGeneratedPathWithRetry(path);
+      deletedFiles += 1;
+      deletedFileKeys.add(normalizedPath(path));
     }
 
     const session = await this.sessionStore.load(projectId);
@@ -524,7 +585,6 @@ export class ProductionQueue {
       })),
     }, projectId);
 
-    const deletedRoots = [...roots.values()];
     this.database.transaction(() => {
       this.database.db.prepare("DELETE FROM jobs WHERE project_id = ?").run(projectId);
       this.database.db.prepare(`
@@ -542,7 +602,8 @@ export class ProductionQueue {
       `).run(now(), projectId);
       for (const bible of this.repositories.visualBibles.listByProject(projectId)) {
         const retainedAnchors = bible.anchorImagePaths.filter((path) =>
-          !deletedRoots.some((root) => isInsideDirectory(path, root))
+          !deletedFileKeys.has(normalizedPath(path)) &&
+          !deletedDirectoryPaths.some((directory) => isInsideDirectory(path, directory))
         );
         this.repositories.visualBibles.setAnchors(bible.id, retainedAnchors, bible.locked);
       }
@@ -1083,6 +1144,10 @@ export class ProductionQueue {
       : "";
     return {
       sceneId: publicSceneId(scene.projectId, scene.id),
+      outputFolder: projectOutputFolder(
+        scene.projectId,
+        this.repositories.projects.get(scene.projectId)?.name || "Phiên làm việc",
+      ),
       mediaType,
       prompt: mediaType === "image" ? scene.imagePrompt : scene.videoPrompt,
       characterTokens: mediaType === "image" ? scene.usedCharacterTokens : [],
