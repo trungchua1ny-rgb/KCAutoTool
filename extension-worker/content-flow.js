@@ -1149,6 +1149,7 @@ async function preparePromptForDebugger() {
   }
   const rect = input.getBoundingClientRect();
   window.__h2dev_flow_baseline = new Set(getCompletedImages().map(srcKey));
+  window.__flowx_generation_error_baseline = generationFailureSnapshot();
   return {
     ok: true,
     x: Math.round(rect.left + rect.width / 2),
@@ -1167,6 +1168,7 @@ async function prepareVideoPromptForDebugger() {
   window.__flowx_active_render_parent = null;
   window.__flowx_active_render_href = "";
   window.__flowx_video_baseline = videoBaseline;
+  window.__flowx_generation_error_baseline = generationFailureSnapshot();
   return {
     ok: true,
     x: Math.round(rect.left + rect.width / 2),
@@ -1732,12 +1734,65 @@ function getCompletedImages() {
 }
 
 // ---------- 5. Canh tới khi có ảnh MỚI xuất hiện ----------
+const FLOW_POLICY_ERROR_PATTERN = /(?:safety|content|responsible\s+ai|prohibited\s+use)\s*(?:policy|policies|filter)?|(?:policy|safety)\s+(?:violation|blocked|restriction)|(?:may|might|could)\s+violate|violat(?:e|es|ed|ion)|vi\s*phạm|chính\s*sách|an\s*toàn\s*nội\s*dung/i;
+const FLOW_GENERATION_ERROR_PATTERN = /couldn['’]?t\s+generate|could\s+not\s+generate|unable\s+to\s+generate|generation\s+failed|not\s+generated|prompt\s+(?:was\s+)?blocked|try\s+(?:a\s+)?(?:different|another)\s+prompt|something\s+went\s+wrong|không\s+thể\s+tạo|không\s+tạo\s+được|bị\s+chặn|thử\s+(?:một\s+)?câu\s+lệnh\s+khác/i;
+
+function normalizedGenerationFailureText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function visibleGenerationFailures() {
+  const failures = [];
+  for (const element of document.querySelectorAll('[role="alert"], span, span > div')) {
+    if (!isVisible(element)) continue;
+    const text = normalizedGenerationFailureText(element.textContent);
+    if (text.length < 8 || text.length > 600) continue;
+    const policy = FLOW_POLICY_ERROR_PATTERN.test(text);
+    if (!policy && !FLOW_GENERATION_ERROR_PATTERN.test(text)) continue;
+    const hasSameTextChild = [...(element.querySelectorAll?.('[role="alert"], span, span > div') || [])]
+      .some((child) => child !== element && normalizedGenerationFailureText(child.textContent) === text);
+    if (hasSameTextChild) continue;
+    failures.push({ element, text, policy });
+  }
+  return failures.sort((left, right) =>
+    Number(right.policy) - Number(left.policy) || left.text.length - right.text.length
+  );
+}
+
+function generationFailureSnapshot() {
+  const counts = new Map();
+  for (const entry of visibleGenerationFailures()) {
+    counts.set(entry.text, (counts.get(entry.text) || 0) + 1);
+  }
+  return counts;
+}
+
+function newGenerationFailure() {
+  const baseline = window.__flowx_generation_error_baseline instanceof Map
+    ? window.__flowx_generation_error_baseline
+    : new Map();
+  const currentCounts = new Map();
+  const failure = visibleGenerationFailures().find((entry) => {
+    const count = (currentCounts.get(entry.text) || 0) + 1;
+    currentCounts.set(entry.text, count);
+    return count > (baseline.get(entry.text) || 0);
+  });
+  if (!failure) return null;
+  return {
+    error: failure.text,
+    code: failure.policy ? "FLOW_POLICY_VIOLATION" : "FLOW_GENERATION_FAILED",
+    policyViolation: failure.policy,
+  };
+}
+
 async function waitForNewImage(baselineSet) {
   const start = Date.now();
   console.log("[KC Dev] Đang chờ ảnh mới... (số ảnh nền ban đầu:", baselineSet.size, ")");
   let lastLog = 0;
   while (Date.now() - start < CONFIG.maxWaitMs) {
     if (STOP) return { stopped: true };
+    const failure = newGenerationFailure();
+    if (failure) return { failure };
     const all = getCompletedImages();
     const fresh = all.filter((i) => !baselineSet.has(srcKey(i)));
     if (fresh.length) {
@@ -1876,6 +1931,10 @@ function activeRenderAnchor() {
 }
 
 async function clickActiveRenderingVideoCard() {
+  const failure = newGenerationFailure();
+  if (failure) {
+    return { ok: false, cardFound: true, ...failure };
+  }
   const rendering = renderingProgressCards()[0] || null;
   if (rendering) {
     window.__flowx_active_render_anchor = rendering.anchor;
@@ -1962,6 +2021,14 @@ function videoViewerState() {
 }
 
 async function clickViewerDownload() {
+  const failure = newGenerationFailure();
+  if (failure) {
+    return {
+      ok: false,
+      viewerOpen: Boolean(findVideoViewerButton("done")),
+      ...failure,
+    };
+  }
   const downloadButton = findVideoViewerButton("download");
   if (!downloadButton) {
     return {
@@ -2084,6 +2151,7 @@ async function runOne(prompt, references = []) {
   console.log("[KC Dev] ✓ Ô prompt:", input.tagName, input.getAttribute("role"));
 
   const baseline = new Set(getCompletedImages().map(srcKey));
+  window.__flowx_generation_error_baseline = generationFailureSnapshot();
   const disabledBefore = new Set(
     [...document.querySelectorAll('button, [role="button"]')].filter((b) =>
       isBtnDisabled(b)
@@ -2120,6 +2188,7 @@ async function runOne(prompt, references = []) {
   // chờ ảnh mới
   const res = await waitForNewImage(baseline);
   if (res.stopped) return { ok: false, stopped: true };
+  if (res.failure) return { ok: false, ...res.failure };
   if (res.timeout) return { ok: false, timeout: true };
   return { ok: true, src: res.src };
 }
@@ -2158,6 +2227,8 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     videoViewerState,
     clickViewerDownload,
     clickViewerDownloadAndClose,
+    generationFailureSnapshot,
+    newGenerationFailure,
     isDurationControl,
     isLandscapeAspectControl,
     selectedFlowTab,
@@ -2429,6 +2500,7 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
       const baseline = window.__h2dev_flow_baseline || new Set();
       waitForNewImage(baseline).then((res) => {
         if (res.stopped) sendResponse({ ok: false, stopped: true });
+        else if (res.failure) sendResponse({ ok: false, ...res.failure });
         else if (res.timeout) sendResponse({ ok: false, timeout: true });
         else sendResponse({
           ok: true,

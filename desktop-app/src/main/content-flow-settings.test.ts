@@ -221,6 +221,8 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     clickActiveRenderingVideoCard: () => Promise<Record<string, unknown>>;
     videoViewerState: () => Record<string, unknown>;
     clickViewerDownload: () => Promise<Record<string, unknown>>;
+    generationFailureSnapshot: () => Map<string, number>;
+    newGenerationFailure: () => Record<string, unknown> | null;
   };
 
   const landscape = new FakeControl(
@@ -443,6 +445,29 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   const enabledDownloadAttempt = await internals.clickViewerDownload();
   assert.equal(enabledDownloadAttempt.clicked, true);
   assert.equal(nativeDownload.clickCount, downloadCountBeforeDisabledCheck + 1);
+
+  controls.length = 0;
+  const previousFailure = new FakeControl(
+    "old-policy-error",
+    "This generation might violate our safety policy.",
+    { role: "alert" },
+  );
+  controls.push(previousFailure);
+  windowValue.__flowx_generation_error_baseline = internals.generationFailureSnapshot();
+  assert.equal(internals.newGenerationFailure(), null);
+  controls.push(new FakeControl(
+    "new-policy-error",
+    "Video could not be generated because it might violate our safety policy.",
+    { role: "alert" },
+  ));
+  assert.deepEqual(
+    { ...internals.newGenerationFailure() },
+    {
+      error: "Video could not be generated because it might violate our safety policy.",
+      code: "FLOW_POLICY_VIOLATION",
+      policyViolation: true,
+    },
+  );
 
   const gullitAsset = new FakeControl("asset-card", "", { alt: "Gullit.png" });
   assert.equal(

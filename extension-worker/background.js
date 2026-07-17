@@ -378,6 +378,9 @@ async function downloadNewestVideoThroughFlow(tabId, videoBaseline, payload, job
         const response = await sendImageToFlowTab(tabId, {
           type: "FLOWX_CLICK_VIDEO_VIEWER_DOWNLOAD",
         });
+        if (response?.error && (response.code === "FLOW_POLICY_VIOLATION" || response.code === "FLOW_GENERATION_FAILED")) {
+          throw new Error(response.error);
+        }
         if (response?.viewerOpen === false) {
           throw new Error(response?.error || "Viewer video Flow đã đóng trước khi tải xuống");
         }
@@ -832,6 +835,9 @@ async function openLatestViewerWithRetries(tabId, jobId) {
       const clicked = await sendImageToFlowTab(tabId, {
         type: "FLOWX_CLICK_ACTIVE_RENDER_VIDEO",
       });
+      if (clicked?.error && (clicked.code === "FLOW_POLICY_VIOLATION" || clicked.code === "FLOW_GENERATION_FAILED")) {
+        return clicked;
+      }
       const after = await sendImageToFlowTab(tabId, { type: "FLOWX_CHECK_VIDEO_VIEWER" });
       sendJobProgress(
         jobId,

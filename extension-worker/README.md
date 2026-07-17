@@ -32,6 +32,8 @@ Version `2.43.0` makes Phase 3 continuation-aware: `continue` boundaries return 
 Version `2.44.0` accepts an optional PNG/JPEG/WebP style reference from KC Auto Tool, attaches it to the first Phase 3a ChatGPT message, and instructs ChatGPT to retain the observed drawing system for all prompt batches. The first Visual Bible style keeps the complete user-entered base and adds a production-ready description of the reference image.
 
 Version `2.45.0` receives a stable workspace output-folder key with every scene job. Images and videos are saved under `Downloads/KC Auto Tool/session-<workspace-id>` so repeated public IDs such as `scene-001` cannot mix files between workspaces.
+
+Version `2.46.0` snapshots visible Flow generation errors before each submit and detects newly appearing policy/failure text on the render card or viewer. The exact message is returned to KC Auto Tool instead of waiting for a generic ten-minute timeout, where it can pre-fill the policy-repair dialog.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from

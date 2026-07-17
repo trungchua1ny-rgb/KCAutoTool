@@ -1824,6 +1824,145 @@ input:focus-visible {
   justify-content: flex-end;
 }
 
+.policy-repair-modal {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(820px, calc(100vh - 40px));
+  overflow: hidden;
+  border: 1px solid #bfc7cf;
+  border-radius: 9px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgb(16 24 40 / 24%);
+}
+
+.policy-repair-modal > header,
+.policy-repair-modal > footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+}
+
+.policy-repair-modal > header {
+  justify-content: space-between;
+  border-bottom: 1px solid #e4e7ec;
+}
+
+.policy-repair-modal h3,
+.policy-repair-modal p {
+  margin: 0;
+}
+
+.policy-detected-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 14px 18px 0;
+  padding: 10px 12px;
+  border: 1px solid #f2c7a5;
+  border-radius: 6px;
+  background: #fff8f0;
+  color: #8a451f;
+}
+
+.policy-detected-error svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.policy-detected-error div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.policy-detected-error p {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.policy-reason-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 18px;
+}
+
+.policy-reason-list label {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #d9dee3;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.policy-reason-list label.is-selected {
+  border-color: #16815e;
+  background: #edf8f4;
+  box-shadow: inset 0 0 0 1px #16815e;
+}
+
+.policy-reason-list input {
+  margin: 3px 0 0;
+}
+
+.policy-reason-list span {
+  display: grid;
+  gap: 3px;
+}
+
+.policy-reason-list strong {
+  color: #344054;
+  font-size: 12px;
+}
+
+.policy-reason-list small,
+.policy-detail-field small {
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.policy-detail-field {
+  margin: 0 18px 14px;
+}
+
+.policy-detail-field textarea {
+  min-height: 82px;
+  resize: vertical;
+}
+
+.policy-repair-modal > footer {
+  justify-content: flex-end;
+  border-top: 1px solid #e4e7ec;
+}
+
+.policy-selected-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  color: #126b4e;
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .policy-reason-list {
+    grid-template-columns: 1fr;
+  }
+
+  .policy-selected-summary {
+    display: none;
+  }
+}
+
 .button.danger {
   border-color: #b42318;
   background: #b42318;

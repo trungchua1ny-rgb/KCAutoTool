@@ -61,6 +61,67 @@ interface TimelineImportProps {
 
 const TIMELINE_STORAGE_KEY = "flowx.timeline.scenes.v1";
 
+const POLICY_REASON_OPTIONS = [
+  {
+    value: "auto",
+    label: "Tự nhận diện từ Flow",
+    description: "Ưu tiên nguyên văn thông báo vừa xuất hiện trên card render.",
+  },
+  {
+    value: "violence",
+    label: "Bạo lực hoặc gây hại",
+    description: "Thương tích, máu me, đe dọa, hành hung hoặc kích động bạo lực.",
+  },
+  {
+    value: "sexual",
+    label: "Tình dục hoặc khỏa thân",
+    description: "Nội dung tình dục rõ ràng, gợi dục hoặc hình ảnh thân mật không đồng thuận.",
+  },
+  {
+    value: "child_safety",
+    label: "An toàn trẻ em",
+    description: "Trẻ vị thành niên trong ngữ cảnh tình dục, bóc lột, bạo lực hoặc nguy hiểm.",
+  },
+  {
+    value: "hate_harassment",
+    label: "Thù ghét hoặc quấy rối",
+    description: "Lăng mạ, đe dọa, bắt nạt hoặc nhắm tới một nhóm được bảo vệ.",
+  },
+  {
+    value: "self_harm",
+    label: "Tự làm hại bản thân",
+    description: "Tự sát, tự gây thương tích hoặc hành vi nguy hiểm với bản thân.",
+  },
+  {
+    value: "illegal_dangerous",
+    label: "Phi pháp hoặc nguy hiểm",
+    description: "Vũ khí, chất cấm, phạm tội, khủng bố hoặc hướng dẫn hành vi nguy hiểm.",
+  },
+  {
+    value: "rights_identity",
+    label: "Quyền riêng tư hoặc danh tính",
+    description: "Người thật, mạo danh, sinh trắc học, quyền riêng tư hoặc tài sản trí tuệ.",
+  },
+  {
+    value: "deception",
+    label: "Lừa đảo hoặc thông tin sai lệch",
+    description: "Gian lận, lừa đảo, tuyên bố gây hiểu nhầm hoặc nội dung chính trị nhạy cảm.",
+  },
+  {
+    value: "other",
+    label: "Khác / không rõ",
+    description: "Dùng ô chi tiết để nhập đúng nội dung Flow hiển thị.",
+  },
+] as const;
+
+type PolicyReason = (typeof POLICY_REASON_OPTIONS)[number]["value"];
+
+interface PolicyRepairModalState {
+  sceneId: string;
+  mediaType: SceneMediaType;
+  detectedError: string;
+}
+
 function loadStoredScenes(): Scene[] {
   try {
     const value = JSON.parse(localStorage.getItem(TIMELINE_STORAGE_KEY) || "[]");
@@ -574,6 +635,9 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
   const [queueSnapshot, setQueueSnapshot] = useState<ProductionQueueSnapshot | null>(null);
   const [queueCommandError, setQueueCommandError] = useState("");
   const [repairingPromptKey, setRepairingPromptKey] = useState("");
+  const [policyRepairModal, setPolicyRepairModal] = useState<PolicyRepairModalState | null>(null);
+  const [policyReason, setPolicyReason] = useState<PolicyReason>("auto");
+  const [policyDetail, setPolicyDetail] = useState("");
   const sessionSaveVersion = useRef(0);
   const settledSceneJobs = useRef(new Set<string>());
   const sceneJobSessions = useRef(new Map<string, string>());
@@ -987,9 +1051,21 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     void runQueueCommand(() => bridge.resumeFrom(sceneId, mediaType, activeProjectId));
   };
 
+  const openPolicyRepairModal = (sceneId: string, mediaType: SceneMediaType) => {
+    const key = `${sceneId}:${mediaType}`;
+    const detectedError = sceneErrors[key] || queueSnapshot?.errors.find((item) =>
+      item.sceneId === sceneId && item.mediaType === mediaType
+    )?.message || "";
+    setPolicyReason(detectedError ? "auto" : "other");
+    setPolicyDetail(detectedError);
+    setPolicyRepairModal({ sceneId, mediaType, detectedError });
+  };
+
   const repairPolicyPromptAndResume = async (
     sceneId: string,
     mediaType: SceneMediaType,
+    selectedReason: PolicyReason,
+    detail: string,
   ) => {
     const key = `${sceneId}:${mediaType}`;
     if (repairingPromptKey) return;
@@ -1016,11 +1092,22 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
       const queueError = queueSnapshot?.errors.find((item) =>
         item.sceneId === sceneId && item.mediaType === mediaType
       )?.message || "";
+      const detectedError = sceneErrors[key] || queueError;
+      const selectedOption = POLICY_REASON_OPTIONS.find((option) => option.value === selectedReason);
+      const policyReasonText = selectedReason === "auto"
+        ? detectedError || "Google Flow rejected this prompt under its safety policy."
+        : `${selectedOption?.label || "Không rõ loại vi phạm"}: ${selectedOption?.description || ""}`;
+      const normalizedDetail = detail.trim();
+      const additionalDetail = normalizedDetail && (
+        selectedReason !== "auto" || normalizedDetail !== detectedError
+      )
+        ? `Chi tiết hoặc thông báo Flow: ${normalizedDetail}`
+        : "";
       const rewritten = await timeline.rewritePolicyPrompt({
         sceneId,
         mediaType,
         prompt: originalPrompt,
-        policyError: sceneErrors[key] || queueError || "Google Flow rejected this prompt under its safety policy.",
+        policyError: [policyReasonText, additionalDetail].filter(Boolean).join("\n"),
         timeStart: scene.timeStart,
         timeEnd: scene.timeEnd,
         pairedPrompt,
@@ -1063,6 +1150,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
       const resumed = await queue.resumeFrom(sceneId, mediaType, activeProjectId);
       setQueueSnapshot(resumed);
       setScenes((current) => applyQueueSnapshotToScenes(current, resumed));
+      setPolicyRepairModal(null);
     } catch (caught) {
       setSceneErrors((current) => ({
         ...current,
@@ -1565,13 +1653,118 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
             onResumeFrom={resumeQueueFromScene}
             onApprove={approveQueuedScene}
             onReject={rejectQueuedScene}
-            onRepairPolicy={(sceneId, mediaType) => void repairPolicyPromptAndResume(sceneId, mediaType)}
+            onRepairPolicy={openPolicyRepairModal}
             repairingPromptKey={repairingPromptKey}
             chatConnected={chatConnected}
           />
       ) : (
         <p className="empty-state timeline-empty">Chưa có dữ liệu scene.</p>
       )}
+
+      {policyRepairModal && (() => {
+        const scene = scenes.find((entry) => entry.id === policyRepairModal.sceneId);
+        const selectedOption = POLICY_REASON_OPTIONS.find((option) => option.value === policyReason);
+        return (
+          <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !repairingPromptKey) {
+              setPolicyRepairModal(null);
+            }
+          }}>
+            <section className="policy-repair-modal" role="dialog" aria-modal="true" aria-labelledby="policy-repair-title">
+              <header>
+                <div>
+                  <p className="eyebrow">Google Flow safety</p>
+                  <h3 id="policy-repair-title">
+                    Sửa prompt {policyRepairModal.mediaType === "image" ? "ảnh" : "video"}
+                    {scene ? ` · Scene ${scene.order}` : ""}
+                  </h3>
+                </div>
+                <button
+                  className="icon-button"
+                  type="button"
+                  title="Đóng"
+                  disabled={Boolean(repairingPromptKey)}
+                  onClick={() => setPolicyRepairModal(null)}
+                >
+                  <X size={18} />
+                </button>
+              </header>
+
+              {policyRepairModal.detectedError && (
+                <div className="policy-detected-error" role="status">
+                  <CircleAlert size={16} />
+                  <div>
+                    <strong>App đọc được từ Flow</strong>
+                    <p>{policyRepairModal.detectedError}</p>
+                  </div>
+                </div>
+              )}
+
+              <div className="policy-reason-list" role="radiogroup" aria-label="Loại vi phạm chính sách">
+                {POLICY_REASON_OPTIONS.map((option) => (
+                  <label key={option.value} className={policyReason === option.value ? "is-selected" : ""}>
+                    <input
+                      type="radio"
+                      name="policy-reason"
+                      value={option.value}
+                      checked={policyReason === option.value}
+                      onChange={() => setPolicyReason(option.value)}
+                    />
+                    <span>
+                      <strong>{option.label}</strong>
+                      <small>{option.description}</small>
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              <label className="field policy-detail-field">
+                <span>Thông báo hoặc lý do bổ sung</span>
+                <textarea
+                  value={policyDetail}
+                  maxLength={2_000}
+                  placeholder="Dán nguyên văn thông báo trên card render, hoặc mô tả chi tiết nào cần làm nhẹ đi…"
+                  onChange={(event) => setPolicyDetail(event.target.value)}
+                />
+                <small>
+                  ChatGPT chỉ làm mềm phần có nguy cơ vi phạm; vẫn phải giữ nguyên câu chuyện, nhân vật, bối cảnh và chuyển động.
+                </small>
+              </label>
+
+              <footer>
+                <div className="policy-selected-summary">
+                  <ShieldCheck size={15} />
+                  <span>{selectedOption?.label}</span>
+                </div>
+                <button
+                  className="button secondary"
+                  type="button"
+                  disabled={Boolean(repairingPromptKey)}
+                  onClick={() => setPolicyRepairModal(null)}
+                >
+                  Hủy
+                </button>
+                <button
+                  className="button primary"
+                  type="button"
+                  disabled={!chatConnected || Boolean(repairingPromptKey)}
+                  onClick={() => void repairPolicyPromptAndResume(
+                    policyRepairModal.sceneId,
+                    policyRepairModal.mediaType,
+                    policyReason,
+                    policyDetail,
+                  )}
+                >
+                  {repairingPromptKey
+                    ? <LoaderCircle className="spin" size={15} />
+                    : <ShieldCheck size={15} />}
+                  Sửa và chạy tiếp
+                </button>
+              </footer>
+            </section>
+          </div>
+        );
+      })()}
 
       {clearMediaConfirmOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
