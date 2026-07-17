@@ -36,6 +36,8 @@ Version `2.45.0` receives a stable workspace output-folder key with every scene 
 Version `2.46.0` snapshots visible Flow generation errors before each submit and detects newly appearing policy/failure text on the render card or viewer. The exact message is returned to KC Auto Tool instead of waiting for a generic ten-minute timeout, where it can pre-fill the policy-repair dialog.
 
 Version `2.47.0` adds slow-machine checkpoints for character attachment and prompt submission. A picker closing by itself no longer counts as a successful character attachment; a new or matching prompt thumbnail must remain stable across three polls. The worker then types without submitting, reads the complete prompt back from Flow across three polls, and only then presses Enter. Failed prompt insertion is retried without accidentally treating an editor that was always empty as a successful submit.
+
+Version `2.48.0` recognizes the visible Google Flow `cancel` material-symbol overlay as direct proof that a character image is attached to the prompt. This stops repeated uploads when Flow renders the ingredient as a button/background instead of an `img`. Character-assisted image jobs immediately type and submit after that marker appears; jobs without character references retain the guarded prompt-verification path.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from

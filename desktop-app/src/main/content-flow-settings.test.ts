@@ -224,6 +224,7 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     generationFailureSnapshot: () => Map<string, number>;
     newGenerationFailure: () => Record<string, unknown> | null;
     promptTextMatches: (actual: string, expected: string) => boolean;
+    isPromptIngredientCancelIcon: (control: FakeControl) => boolean;
   };
 
   const landscape = new FakeControl(
@@ -482,6 +483,17 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   );
   assert.equal(
     internals.promptTextMatches("A partial prompt", "A complete prompt that must be inserted before submit"),
+    false,
+  );
+
+  const attachedCharacterMarker = new FakeControl(
+    "character-attachment-marker",
+    "cancel",
+    { class: "sc-a39c2a59-0 lkKicR google-symbols sc-272106cb-3 husQRa" },
+  );
+  assert.equal(internals.isPromptIngredientCancelIcon(attachedCharacterMarker), true);
+  assert.equal(
+    internals.isPromptIngredientCancelIcon(new FakeControl("unrelated-cancel", "cancel", { class: "dialog-action" })),
     false,
   );
 

@@ -180,6 +180,8 @@ Extension version `2.46.0` captures newly appearing Google Flow render errors fr
 
 Extension version `2.47.0` removes a slow-machine race in character-assisted image generation. Attaching a character now requires a stable prompt ingredient thumbnail for three consecutive DOM polls and retries the picker sequence twice. Prompt submission is split into type, verify, and submit checkpoints: the worker must read back the expected prompt from Flow for three consecutive polls before it is allowed to press Enter, and an empty editor is no longer accepted as proof of submission unless a verified prompt existed immediately beforehand.
 
+Extension version `2.48.0` treats the `cancel` material-symbol overlay on a prompt attachment as authoritative evidence that Google Flow accepted a character image. The worker no longer uploads the same character repeatedly when Flow represents the ingredient without a detectable `img`; after this marker appears, character-assisted image jobs paste and submit immediately. Non-character jobs keep the existing prompt read-back checkpoint.
+
 Extension version `2.32.0` also adds **Sửa chính sách** beside a failed image or video prompt. The action stops both direct Flow work and the production queue, asks ChatGPT for one policy-safe replacement without evasion, validates and saves it, resets the failed scene, then resumes production from that exact prompt. If rewriting or validation fails, the original prompt remains and the queue stays stopped.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without

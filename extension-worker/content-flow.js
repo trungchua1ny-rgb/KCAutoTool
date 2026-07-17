@@ -195,6 +195,38 @@ function promptIngredientElements() {
     });
 }
 
+function isPromptIngredientCancelIcon(element) {
+  if (!element) return false;
+  const label = String(element.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const className = typeof element.className === "string"
+    ? element.className
+    : String(element.getAttribute?.("class") || "");
+  return label === "cancel" && /(?:google|material)-symbols/i.test(className);
+}
+
+function promptIngredientCancelMarkers() {
+  const prompt = findPromptInput();
+  if (!prompt) return [];
+  const promptRect = prompt.getBoundingClientRect();
+  return [...document.querySelectorAll("i")]
+    .filter(isVisible)
+    .filter(isPromptIngredientCancelIcon)
+    .filter((icon) => {
+      const control = icon.closest?.('button, [role="button"]') || icon.parentElement;
+      if (!control) return false;
+      const rect = control.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      return (
+        rect.width >= 24 && rect.height >= 24 && rect.width <= 320 && rect.height <= 320 &&
+        centerX >= promptRect.left - 140 &&
+        centerX <= promptRect.right + 140 &&
+        centerY >= promptRect.top - 180 &&
+        centerY <= promptRect.bottom + 120
+      );
+    });
+}
+
 function promptIngredientSnapshot() {
   return new Set(
     promptIngredientElements()
@@ -211,6 +243,7 @@ function promptMediaRemoveControl(mediaElement) {
   for (let depth = 0; current && depth < 5 && current !== document.body; depth += 1) {
     const rect = current.getBoundingClientRect();
     if (rect.width <= 420 && rect.height <= 320) {
+      if (current.matches?.('button, [role="button"], [tabindex="0"]')) controls.push(current);
       controls.push(...current.querySelectorAll('button, [role="button"], [tabindex="0"]'));
     }
     current = current.parentElement;
@@ -237,10 +270,11 @@ async function clearPromptMedia() {
   let removed = 0;
   for (let pass = 0; pass < 12; pass += 1) {
     const media = promptIngredientElements();
-    if (media.length === 0) return { ok: true, removed };
+    const cancelMarkers = promptIngredientCancelMarkers();
+    if (media.length === 0 && cancelMarkers.length === 0) return { ok: true, removed };
 
     let removedThisPass = false;
-    for (const element of media) {
+    for (const element of [...media, ...cancelMarkers]) {
       element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, composed: true }));
       element.parentElement?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true, composed: true }));
       await sleep(120);
@@ -255,10 +289,10 @@ async function clearPromptMedia() {
     if (!removedThisPass) {
       // Nearby generated-result thumbnails can fall inside the broad prompt
       // geometry but do not have a Remove control. They are not attachments.
-      return { ok: true, removed, ignoredNearbyMedia: media.length };
+      return { ok: true, removed, ignoredNearbyMedia: media.length, attachmentMarkers: cancelMarkers.length };
     }
   }
-  const remaining = promptIngredientElements().length;
+  const remaining = Math.max(promptIngredientElements().length, promptIngredientCancelMarkers().length);
   return remaining === 0
     ? { ok: true, removed }
     : {
@@ -317,6 +351,7 @@ async function getPromptAddButton() {
   }
   window.__flowx_ingredient_baseline = promptIngredientSnapshot();
   window.__flowx_ingredient_baseline_elements = new Set(promptIngredientElements());
+  window.__flowx_ingredient_cancel_baseline = new Set(promptIngredientCancelMarkers());
   const button = await waitUntil(findPromptAddButton, 8000);
   return button
     ? { ok: true, ...centerOf(button) }
@@ -1048,6 +1083,7 @@ async function prepareIngredientDrop() {
 async function confirmIngredientDrop(expectedCount, assetLocator = null, filenameHint = "") {
   const baseline = window.__flowx_ingredient_baseline || new Set();
   const baselineElements = window.__flowx_ingredient_baseline_elements || new Set();
+  const baselineCancelMarkers = window.__flowx_ingredient_cancel_baseline || new Set();
   let stableElement = null;
   let stablePolls = 0;
   const accepted = await waitUntil(() => {
@@ -1058,6 +1094,16 @@ async function confirmIngredientDrop(expectedCount, assetLocator = null, filenam
       stableElement = null;
       stablePolls = 0;
       return null;
+    }
+    const cancelMarkers = promptIngredientCancelMarkers();
+    const freshCancelMarkers = cancelMarkers.filter((marker) => !baselineCancelMarkers.has(marker));
+    if (freshCancelMarkers.length >= expectedCount) {
+      return {
+        verification: "prompt-attachment-cancel-marker",
+        ingredientCount: Math.max(promptIngredientElements().length, cancelMarkers.length),
+        attachmentMarkerCount: cancelMarkers.length,
+        stablePolls: 1,
+      };
     }
     const elements = promptIngredientElements();
     const matched = assetLocator
@@ -2322,6 +2368,7 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     generationFailureSnapshot,
     newGenerationFailure,
     promptTextMatches,
+    isPromptIngredientCancelIcon,
     isDurationControl,
     isLandscapeAspectControl,
     selectedFlowTab,

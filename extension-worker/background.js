@@ -864,6 +864,25 @@ async function typeAndConfirmFlowPrompt(tabId, prepareType, text, jobId = "") {
   };
 }
 
+async function typeAndSubmitFlowPromptDirectly(tabId, prepareType, text, jobId = "") {
+  if (jobId) {
+    sendJobProgress(
+      jobId,
+      "preparing",
+      "Ảnh nhân vật đã xuất hiện trong ô prompt; đang dán prompt và Gửi ngay",
+    );
+  }
+  const target = await sendImageToFlowTab(tabId, { type: prepareType });
+  if (!target?.ok) return target;
+  await typeAndSubmit(tabId, target.x, target.y, text);
+  return {
+    ok: true,
+    attempt: 1,
+    verification: "debugger-type-and-submit-dispatched",
+    videoBaseline: Array.isArray(target.videoBaseline) ? target.videoBaseline : [],
+  };
+}
+
 async function openLatestViewerWithRetries(tabId, jobId) {
   const deadline = Date.now() + 600_000;
   let attempt = 0;
@@ -1028,12 +1047,20 @@ async function generateFlowImage(tabId, payload, jobId) {
     );
   }
 
-  const submitted = await typeAndConfirmFlowPrompt(
-    tabId,
-    "FLOWX_PREPARE_PROMPT",
-    promptWithReferences(payload),
-    jobId,
-  );
+  const imagePrompt = promptWithReferences(payload);
+  const submitted = payload.refImages.length > 0
+    ? await typeAndSubmitFlowPromptDirectly(
+      tabId,
+      "FLOWX_PREPARE_PROMPT",
+      imagePrompt,
+      jobId,
+    )
+    : await typeAndConfirmFlowPrompt(
+      tabId,
+      "FLOWX_PREPARE_PROMPT",
+      imagePrompt,
+      jobId,
+    );
   if (!submitted?.ok) return submitted;
   sendJobProgress(jobId, "generating", "Đã gửi prompt; Google Flow đang tạo ảnh scene");
   const image = await sendImageToFlowTab(tabId, { type: "WAIT_IMAGE" });
