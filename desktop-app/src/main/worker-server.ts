@@ -102,7 +102,7 @@ function supportsTimelineWorker(value: string | null): boolean {
 }
 
 function supportsSceneJobs(value: string | null): boolean {
-  return workerVersionNumber(value) >= 2_046_000;
+  return workerVersionNumber(value) >= 2_047_000;
 }
 
 function supportsPolicyPromptRewrite(value: string | null): boolean {
@@ -624,7 +624,7 @@ export class WorkerServer {
     if (!supportsSceneJobs(client.workerVersion)) {
       return Promise.reject(
         new WorkerJobError(
-          `KC Dev ${client.workerVersion || "cũ"} chưa hỗ trợ thư mục media riêng và đọc lỗi trực tiếp từ card Flow. Hãy Reload extension 2.46.0.`,
+          `KC Dev ${client.workerVersion || "cũ"} chưa hỗ trợ checkpoint xác nhận ảnh nhân vật và prompt trước khi Gửi. Hãy Reload extension 2.47.0.`,
           "INVALID_JOB",
         ),
       );

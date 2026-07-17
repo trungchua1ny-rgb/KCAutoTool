@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "KC Dev",
-  "version": "2.46.0",
+  "version": "2.47.0",
   "minimum_chrome_version": "120",
   "description": "KC Dev browser worker for KC Auto Tool.",
   "permissions": ["alarms", "downloads", "storage", "tabs", "scripting", "debugger"],

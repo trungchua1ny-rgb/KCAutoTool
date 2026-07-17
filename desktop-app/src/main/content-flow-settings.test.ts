@@ -223,6 +223,7 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     clickViewerDownload: () => Promise<Record<string, unknown>>;
     generationFailureSnapshot: () => Map<string, number>;
     newGenerationFailure: () => Record<string, unknown> | null;
+    promptTextMatches: (actual: string, expected: string) => boolean;
   };
 
   const landscape = new FakeControl(
@@ -467,6 +468,21 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
       code: "FLOW_POLICY_VIOLATION",
       policyViolation: true,
     },
+  );
+  assert.equal(
+    internals.promptTextMatches(
+      "STARTING STATE: a figure waits.\nPRIMARY MOTION: the figure walks forward.",
+      "STARTING STATE: a figure waits. PRIMARY MOTION: the figure walks forward.",
+    ),
+    true,
+  );
+  assert.equal(
+    internals.promptTextMatches("", "A complete prompt that must be inserted before submit"),
+    false,
+  );
+  assert.equal(
+    internals.promptTextMatches("A partial prompt", "A complete prompt that must be inserted before submit"),
+    false,
   );
 
   const gullitAsset = new FakeControl("asset-card", "", { alt: "Gullit.png" });

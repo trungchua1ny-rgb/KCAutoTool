@@ -178,6 +178,8 @@ Extension version `2.45.0` isolates generated image and video downloads in a sta
 
 Extension version `2.46.0` captures newly appearing Google Flow render errors from visible alert/span content before image or video timeouts. Policy failures are stored verbatim in the production Error Center. The desktop policy-repair action now opens a reason picker based on Google's published prohibited-use categories, pre-fills the captured Flow message, accepts operator detail, then stops the queue, asks ChatGPT for a policy-safe rewrite, and resumes from that scene.
 
+Extension version `2.47.0` removes a slow-machine race in character-assisted image generation. Attaching a character now requires a stable prompt ingredient thumbnail for three consecutive DOM polls and retries the picker sequence twice. Prompt submission is split into type, verify, and submit checkpoints: the worker must read back the expected prompt from Flow for three consecutive polls before it is allowed to press Enter, and an empty editor is no longer accepted as proof of submission unless a verified prompt existed immediately beforehand.
+
 Extension version `2.32.0` also adds **Sửa chính sách** beside a failed image or video prompt. The action stops both direct Flow work and the production queue, asks ChatGPT for one policy-safe replacement without evasion, validates and saves it, resets the failed scene, then resumes production from that exact prompt. If rewriting or validation fails, the original prompt remains and the queue stays stopped.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without

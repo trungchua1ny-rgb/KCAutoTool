@@ -680,17 +680,19 @@ function storedFlowAssetIdentity(imageResult) {
   return String(imageResult?.flowAssetKey || "").slice(0, 4_096);
 }
 
-async function addSelectedAssetToPrompt(tabId) {
+async function addSelectedAssetToPrompt(tabId, assetLocator = null, filenameHint = "") {
   const addToPrompt = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_ADD_TO_PROMPT_BUTTON" });
   if (!addToPrompt?.ok) return addToPrompt;
   await clickAt(tabId, addToPrompt.x, addToPrompt.y);
   return sendImageToFlowTab(tabId, {
     type: "FLOWX_CONFIRM_INGREDIENT_DROP",
     expectedCount: 1,
+    assetLocator,
+    filenameHint,
   });
 }
 
-async function attachReferenceWithPicker(tabId, reference) {
+async function attachReferenceWithPickerOnce(tabId, reference) {
   const cached = await cachedCharacterAsset(tabId, reference);
   const filenameHint = localFileName(reference.localPath);
   if (cached.assetLocator) {
@@ -716,7 +718,7 @@ async function attachReferenceWithPicker(tabId, reference) {
     });
     if (existing?.ok && existing.found) {
       await clickAt(tabId, existing.x, existing.y);
-      const confirmed = await addSelectedAssetToPrompt(tabId);
+      const confirmed = await addSelectedAssetToPrompt(tabId, existing.assetLocator || cached.assetLocator, filenameHint);
       if (confirmed?.ok && existing.assetLocator) {
         await rememberCharacterAsset(cached.identity, existing.assetLocator);
       }
@@ -732,7 +734,7 @@ async function attachReferenceWithPicker(tabId, reference) {
   if (!asset?.ok) return asset;
   await clickAt(tabId, asset.x, asset.y);
 
-  const confirmed = await addSelectedAssetToPrompt(tabId);
+  const confirmed = await addSelectedAssetToPrompt(tabId, asset.assetLocator || null, filenameHint);
   if (!confirmed?.ok) return confirmed;
   const latest = asset.assetLocator
     ? { assetLocator: asset.assetLocator }
@@ -743,6 +745,22 @@ async function attachReferenceWithPicker(tabId, reference) {
     reusedProjectAsset: false,
     cachedAssetKey: latest?.assetLocator?.assetKey || "",
     cachedAssetLocator: Boolean(latest?.assetLocator),
+  };
+}
+
+async function attachReferenceWithPicker(tabId, reference) {
+  let lastResult = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    lastResult = await attachReferenceWithPickerOnce(tabId, reference);
+    if (lastResult?.ok) return { ...lastResult, attachAttempt: attempt };
+    await pressEscape(tabId).catch(() => {});
+    await pause(900 + attempt * 500);
+  }
+  return {
+    ...(lastResult || {}),
+    ok: false,
+    code: lastResult?.code || "FLOW_REF_ATTACH_FAILED",
+    error: `${lastResult?.error || "Không gắn được ảnh nhân vật vào prompt"} Đã kiểm tra lại sau 2 lần.`,
   };
 }
 
@@ -777,6 +795,8 @@ async function attachVideoIngredient(tabId, payload) {
     const confirmed = await sendImageToFlowTab(tabId, {
       type: "FLOWX_CONFIRM_INGREDIENT_DROP",
       expectedCount: 1,
+      assetLocator: existing.assetLocator || sourceLocator,
+      filenameHint: localFileName(payload.sourceImagePath),
     });
     return confirmed?.ok ? { ...confirmed, reusedProjectAsset: true } : confirmed;
   }
@@ -793,25 +813,49 @@ async function attachVideoIngredient(tabId, payload) {
   const confirmed = await sendImageToFlowTab(tabId, {
     type: "FLOWX_CONFIRM_INGREDIENT_DROP",
     expectedCount: 1,
+    assetLocator: asset.assetLocator || null,
+    filenameHint: localFileName(payload.sourceImagePath),
   });
   return confirmed?.ok ? { ...confirmed, reusedProjectAsset: false } : confirmed;
 }
 
-async function typeAndConfirmFlowPrompt(tabId, prepareType, text) {
+async function typeAndConfirmFlowPrompt(tabId, prepareType, text, jobId = "") {
   let lastResult = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
+    if (jobId) sendJobProgress(jobId, "preparing", `Đang dán prompt vào Flow · lần ${attempt}/3`);
     const target = await sendImageToFlowTab(tabId, { type: prepareType });
     if (!target?.ok) return target;
-    await typeAndSubmit(tabId, target.x, target.y, text);
+    await typePrompt(tabId, target.x, target.y, text);
+    const filled = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_CONFIRM_PROMPT_TEXT",
+      expectedText: text,
+    });
+    if (!filled?.ok) {
+      lastResult = filled;
+      if (jobId) {
+        sendJobProgress(
+          jobId,
+          "preparing",
+          `Prompt chưa nằm ổn định trong ô Flow (${Number(filled?.actualLength) || 0}/${Number(filled?.expectedLength) || text.length} ký tự); chưa gửi và sẽ thử lại`,
+        );
+      }
+      await pause(900 + attempt * 350);
+      continue;
+    }
+    if (jobId) {
+      sendJobProgress(jobId, "preparing", `Đã xác nhận đủ ${Number(filled.actualLength) || text.length} ký tự trong ô prompt; đang bấm Gửi`);
+    }
+    await submitPrompt(tabId);
     lastResult = await sendImageToFlowTab(tabId, { type: "FLOWX_CONFIRM_SUBMIT" });
     if (lastResult?.ok) {
       return {
         ...lastResult,
         attempt,
+        verifiedPromptLength: Number(filled.actualLength) || text.length,
         videoBaseline: Array.isArray(target.videoBaseline) ? target.videoBaseline : [],
       };
     }
-    await pause(700);
+    await pause(900 + attempt * 350);
   }
   return lastResult || {
     ok: false,
@@ -988,6 +1032,7 @@ async function generateFlowImage(tabId, payload, jobId) {
     tabId,
     "FLOWX_PREPARE_PROMPT",
     promptWithReferences(payload),
+    jobId,
   );
   if (!submitted?.ok) return submitted;
   sendJobProgress(jobId, "generating", "Đã gửi prompt; Google Flow đang tạo ảnh scene");
@@ -1317,6 +1362,7 @@ async function generateFlowVideo(tabId, payload, jobId) {
       : payload.videoSettings.mode === "frames"
         ? videoPromptFromFrames(payload)
         : videoPromptFromComponent(payload),
+    jobId,
   );
   if (!submitted?.ok) return submitted;
   sendJobProgress(
@@ -1532,7 +1578,7 @@ async function handleSceneJob(message) {
         jobId,
         response?.error || (response?.timeout ? `Google Flow tạo ${payload.mediaType === "image" ? "ảnh" : "video"} quá thời gian` : `Google Flow không tạo được ${payload.mediaType === "image" ? "ảnh" : "video"}`),
         code,
-        ["TIMEOUT", "FLOW_UI_CHANGED", "FLOW_REF_UPLOAD_FAILED", "FLOW_REF_ATTACH_FAILED", "FLOW_START_FRAME_ATTACH_FAILED", "FLOW_END_FRAME_ATTACH_FAILED", "FLOW_STALE_MEDIA_CLEAR_FAILED", "FLOW_VIDEO_MODE_NOT_FOUND", "FLOW_VIDEO_MODE_CHANGE_FAILED", "FLOW_VIDEO_SETTINGS_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED", "FLOW_VIDEO_DURATION_NOT_FOUND", "FLOW_VIDEO_DURATION_CHANGE_FAILED", "FLOW_VIDEO_READ_FAILED", "FLOW_SUBMIT_FAILED"].includes(code),
+        ["TIMEOUT", "FLOW_UI_CHANGED", "FLOW_REF_UPLOAD_FAILED", "FLOW_REF_ATTACH_FAILED", "FLOW_START_FRAME_ATTACH_FAILED", "FLOW_END_FRAME_ATTACH_FAILED", "FLOW_STALE_MEDIA_CLEAR_FAILED", "FLOW_VIDEO_MODE_NOT_FOUND", "FLOW_VIDEO_MODE_CHANGE_FAILED", "FLOW_VIDEO_SETTINGS_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED", "FLOW_VIDEO_DURATION_NOT_FOUND", "FLOW_VIDEO_DURATION_CHANGE_FAILED", "FLOW_VIDEO_READ_FAILED", "FLOW_PROMPT_NOT_FILLED", "FLOW_PROMPT_NOT_VERIFIED", "FLOW_SUBMIT_FAILED"].includes(code),
       );
       return;
     }
@@ -1729,7 +1775,7 @@ async function detachDebugger() {
   attachedTab = null;
 }
 
-async function typeAndSubmit(tabId, x, y, prompt) {
+async function typePrompt(tabId, x, y, prompt) {
   await ensureAttached(tabId);
 
   await sendCommand(tabId, "Input.dispatchMouseEvent", {
@@ -1771,8 +1817,10 @@ async function typeAndSubmit(tabId, x, y, prompt) {
   await wait(60);
 
   await sendCommand(tabId, "Input.insertText", { text: prompt });
-  // Leave the filled prompt visible long enough to verify it before Submit.
-  await wait(900);
+}
+
+async function submitPrompt(tabId) {
+  await ensureAttached(tabId);
 
   await sendCommand(tabId, "Input.dispatchKeyEvent", {
     type: "rawKeyDown",
@@ -1788,6 +1836,12 @@ async function typeAndSubmit(tabId, x, y, prompt) {
     windowsVirtualKeyCode: 13,
     nativeVirtualKeyCode: 13,
   });
+}
+
+async function typeAndSubmit(tabId, x, y, prompt) {
+  await typePrompt(tabId, x, y, prompt);
+  await wait(900);
+  await submitPrompt(tabId);
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

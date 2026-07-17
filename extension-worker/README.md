@@ -34,6 +34,8 @@ Version `2.44.0` accepts an optional PNG/JPEG/WebP style reference from KC Auto 
 Version `2.45.0` receives a stable workspace output-folder key with every scene job. Images and videos are saved under `Downloads/KC Auto Tool/session-<workspace-id>` so repeated public IDs such as `scene-001` cannot mix files between workspaces.
 
 Version `2.46.0` snapshots visible Flow generation errors before each submit and detects newly appearing policy/failure text on the render card or viewer. The exact message is returned to KC Auto Tool instead of waiting for a generic ten-minute timeout, where it can pre-fill the policy-repair dialog.
+
+Version `2.47.0` adds slow-machine checkpoints for character attachment and prompt submission. A picker closing by itself no longer counts as a successful character attachment; a new or matching prompt thumbnail must remain stable across three polls. The worker then types without submitting, reads the complete prompt back from Flow across three polls, and only then presses Enter. Failed prompt insertion is retried without accidentally treating an editor that was always empty as a successful submit.
 5.1 image preflight. The image preflight accepts an account preset when Flow
 does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from

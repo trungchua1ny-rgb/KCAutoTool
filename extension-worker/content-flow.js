@@ -1045,33 +1045,49 @@ async function prepareIngredientDrop() {
   };
 }
 
-async function confirmIngredientDrop(expectedCount) {
+async function confirmIngredientDrop(expectedCount, assetLocator = null, filenameHint = "") {
   const baseline = window.__flowx_ingredient_baseline || new Set();
   const baselineElements = window.__flowx_ingredient_baseline_elements || new Set();
-  let pickerClosedSince = 0;
+  let stableElement = null;
+  let stablePolls = 0;
   const accepted = await waitUntil(() => {
-    const elements = promptIngredientElements();
-    const freshElements = elements.filter((element) => !baselineElements.has(element));
-    if (freshElements.length >= expectedCount) {
-      return { verification: "new-prompt-thumbnail", ingredientCount: elements.length };
-    }
-    const current = promptIngredientSnapshot();
-    const fresh = [...current].filter((entry) => !baseline.has(entry));
-    if (fresh.length >= expectedCount) {
-      return { verification: "new-prompt-signature", ingredientCount: elements.length };
-    }
-
     const pickerOpen = Boolean(findVisibleControl(
       /thêm\s*vào\s*câu\s*lệnh|add\s*to\s*prompt|tải\s*nội\s*dung\s*nghe\s*nhìn|upload\s*media/i,
     ));
     if (pickerOpen) {
-      pickerClosedSince = 0;
+      stableElement = null;
+      stablePolls = 0;
       return null;
     }
-    if (!pickerClosedSince) pickerClosedSince = Date.now();
-    return Date.now() - pickerClosedSince >= 1000
-      ? { verification: "picker-closed-after-add", ingredientCount: elements.length }
+    const elements = promptIngredientElements();
+    const matched = assetLocator
+      ? elements.find((element) => assetMatchesLocator(element, assetLocator, filenameHint)) || null
       : null;
+    const freshElements = elements.filter((element) => !baselineElements.has(element));
+    const current = promptIngredientSnapshot();
+    const fresh = [...current].filter((entry) => !baseline.has(entry));
+    const observed = matched || (freshElements.length >= expectedCount ? freshElements.at(-1) : null);
+    if (!observed && fresh.length < expectedCount) {
+      stableElement = null;
+      stablePolls = 0;
+      return null;
+    }
+    const identity = observed || "signature";
+    if (stableElement === identity) stablePolls += 1;
+    else {
+      stableElement = identity;
+      stablePolls = 1;
+    }
+    if (stablePolls < 3) return null;
+    return {
+      verification: matched
+        ? "matching-prompt-thumbnail-stable"
+        : observed
+          ? "new-prompt-thumbnail-stable"
+          : "new-prompt-signature-stable",
+      ingredientCount: elements.length,
+      stablePolls,
+    };
   }, 25000);
   if (!accepted) {
     return {
@@ -1148,6 +1164,7 @@ async function preparePromptForDebugger() {
     return { ok: false, code: "FLOW_UI_CHANGED", error: "Không tìm thấy ô prompt Google Flow." };
   }
   const rect = input.getBoundingClientRect();
+  window.__flowx_verified_prompt = null;
   window.__h2dev_flow_baseline = new Set(getCompletedImages().map(srcKey));
   window.__flowx_generation_error_baseline = generationFailureSnapshot();
   return {
@@ -1163,6 +1180,7 @@ async function prepareVideoPromptForDebugger() {
     return { ok: false, code: "FLOW_UI_CHANGED", error: "Không tìm thấy ô prompt video Google Flow." };
   }
   const rect = input.getBoundingClientRect();
+  window.__flowx_verified_prompt = null;
   const videoBaseline = videoBaselineSnapshot();
   window.__flowx_active_render_anchor = null;
   window.__flowx_active_render_parent = null;
@@ -1178,10 +1196,19 @@ async function prepareVideoPromptForDebugger() {
 }
 
 async function confirmDebuggerSubmit() {
+  const verified = window.__flowx_verified_prompt;
+  if (!verified || Date.now() - Number(verified.verifiedAt || 0) > 30000) {
+    return {
+      ok: false,
+      code: "FLOW_PROMPT_NOT_VERIFIED",
+      error: "App chưa xác nhận prompt đã nằm ổn định trong ô Flow nên không công nhận thao tác Gửi.",
+    };
+  }
   const submitted = await waitUntil(() => {
     const input = findPromptInput();
     return !input || inputText(input).trim().length < 3;
   }, 10000);
+  if (submitted) window.__flowx_verified_prompt = null;
   return submitted
     ? { ok: true }
     : {
@@ -1590,6 +1617,71 @@ function inputText(el) {
   }
   return el.value || "";
 }
+
+function normalizedPromptVerificationText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function promptTextMatches(actualValue, expectedValue) {
+  const actual = normalizedPromptVerificationText(actualValue);
+  const expected = normalizedPromptVerificationText(expectedValue);
+  if (!actual || !expected) return false;
+  if (actual === expected) return true;
+  const tolerance = Math.max(12, Math.ceil(expected.length * 0.02));
+  const edgeLength = Math.min(120, Math.floor(expected.length / 3));
+  return Math.abs(actual.length - expected.length) <= tolerance &&
+    actual.slice(0, edgeLength) === expected.slice(0, edgeLength) &&
+    actual.slice(-edgeLength) === expected.slice(-edgeLength);
+}
+
+async function confirmPromptText(expectedText) {
+  window.__flowx_verified_prompt = null;
+  let stableInput = null;
+  let stablePolls = 0;
+  let lastActualLength = 0;
+  const accepted = await waitUntil(() => {
+    const input = findPromptInput();
+    if (!input || !isShown(input)) {
+      stableInput = null;
+      stablePolls = 0;
+      return null;
+    }
+    const actual = inputText(input);
+    lastActualLength = normalizedPromptVerificationText(actual).length;
+    if (!promptTextMatches(actual, expectedText)) {
+      stableInput = null;
+      stablePolls = 0;
+      return null;
+    }
+    if (stableInput === input) stablePolls += 1;
+    else {
+      stableInput = input;
+      stablePolls = 1;
+    }
+    return stablePolls >= 3 ? input : null;
+  }, 12000);
+  if (!accepted) {
+    return {
+      ok: false,
+      code: "FLOW_PROMPT_NOT_FILLED",
+      error: `Không xác nhận được prompt đã dán vào Flow. Ô prompt hiện có ${lastActualLength} ký tự; chưa bấm Gửi để tránh chạy nhầm.`,
+      actualLength: lastActualLength,
+      expectedLength: normalizedPromptVerificationText(expectedText).length,
+    };
+  }
+  window.__flowx_verified_prompt = {
+    input: accepted,
+    verifiedAt: Date.now(),
+    expectedLength: normalizedPromptVerificationText(expectedText).length,
+  };
+  return {
+    ok: true,
+    actualLength: lastActualLength,
+    expectedLength: window.__flowx_verified_prompt.expectedLength,
+    stablePolls,
+  };
+}
+
 function isBtnDisabled(b) {
   return b.disabled || b.getAttribute("aria-disabled") === "true";
 }
@@ -2229,6 +2321,7 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     clickViewerDownloadAndClose,
     generationFailureSnapshot,
     newGenerationFailure,
+    promptTextMatches,
     isDurationControl,
     isLandscapeAspectControl,
     selectedFlowTab,
@@ -2410,7 +2503,11 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     }
 
     if (msg.type === "FLOWX_CONFIRM_INGREDIENT_DROP") {
-      confirmIngredientDrop(Number(msg.expectedCount) || 1).then(sendResponse);
+      confirmIngredientDrop(
+        Number(msg.expectedCount) || 1,
+        msg.assetLocator || null,
+        String(msg.filenameHint || ""),
+      ).then(sendResponse);
       return true;
     }
 
@@ -2432,6 +2529,13 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
       prepareVideoPromptForDebugger()
         .then(sendResponse)
         .catch((error) => sendResponse({ ok: false, code: "FLOW_UI_CHANGED", error: String(error?.message || error) }));
+      return true;
+    }
+
+    if (msg.type === "FLOWX_CONFIRM_PROMPT_TEXT") {
+      confirmPromptText(String(msg.expectedText || ""))
+        .then(sendResponse)
+        .catch((error) => sendResponse({ ok: false, code: "FLOW_PROMPT_NOT_FILLED", error: String(error?.message || error) }));
       return true;
     }
 
