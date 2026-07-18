@@ -45,11 +45,15 @@ function validateInput(value: unknown): TimelineGenerateInput {
       return token && name ? [{ token, name }] : [];
     })
     : [];
+  const visualBible = normalizeVisualBible(input.visualBible);
+  if (!visualBible.style) {
+    throw new Error("Phong cách đồ họa trong Visual Bible là bắt buộc");
+  }
 
   return {
     srtText,
     scriptText: validateText(input.scriptText, "File kịch bản"),
-    visualBible: normalizeVisualBible(input.visualBible),
+    visualBible,
     characterRoster,
     styleReference: normalizeStyleReference(input.styleReference),
   };

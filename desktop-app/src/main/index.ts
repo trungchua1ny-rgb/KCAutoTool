@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from "electron";
 import { join } from "node:path";
 import {
   WORKER_STATUS_CHANNEL,
@@ -11,7 +11,7 @@ import { registerTimelineIpcHandlers } from "./timeline-ipc";
 import { registerTimelineSessionIpcHandlers } from "./timeline-session-ipc";
 import { TimelineSessionStore } from "./timeline-session-store";
 import { registerSceneJobIpcHandlers } from "./scene-job-ipc";
-import { registerMediaIpcHandlers } from "./media-ipc";
+import { registerMediaIpcHandlers, registerMediaProtocol } from "./media-ipc";
 import { registerVisualStyleIpcHandlers } from "./visual-style-ipc";
 import { VisualStyleStore } from "./visual-style-store";
 import { ProjectDatabase } from "./project-database";
@@ -26,10 +26,17 @@ import {
   WORKER_SERVER_PORT,
   WorkerServer,
 } from "./worker-server";
+import { VOICE_PROGRESS_CHANNEL, type VoiceProgress } from "../shared/voice";
+import { VoiceService } from "./voice-service";
+import { registerVoiceIpcHandlers } from "./voice-ipc";
+import { registerSystemIpcHandlers } from "./system-ipc";
 
 let workerServer: WorkerServer | null = null;
 let projectDatabase: ProjectDatabase | null = null;
 let productionQueue: ProductionQueue | null = null;
+let voiceService: VoiceService | null = null;
+
+protocol.registerSchemesAsPrivileged([{ scheme: "kc-media", privileges: { secure: true, standard: true, stream: true, supportFetchAPI: true } }]);
 
 function broadcastWorkerStatuses(statuses: WorkerStatuses): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -43,15 +50,21 @@ function broadcastQueueSnapshot(snapshot: ProductionQueueSnapshot): void {
   }
 }
 
+function broadcastVoiceProgress(progress: VoiceProgress): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send(VOICE_PROGRESS_CHANNEL, progress);
+  }
+}
+
 function createWindow(): void {
   const window = new BrowserWindow({
-    width: 1120,
-    height: 760,
+    width: 1440,
+    height: 900,
     minWidth: 800,
     minHeight: 560,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: "#f4f6f8",
+    backgroundColor: "#07111F",
     title: "KC Auto Tool",
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
@@ -137,6 +150,12 @@ app.whenReady().then(async () => {
     );
     await productionQueue.start();
     registerProductionQueueIpcHandlers(productionQueue);
+    voiceService = new VoiceService(
+      join(app.getPath("downloads"), "KC Auto Tool"),
+      broadcastVoiceProgress,
+    );
+    registerVoiceIpcHandlers(voiceService);
+    registerSystemIpcHandlers(join(app.getPath("downloads"), "KC Auto Tool"));
     registerTimelineSessionIpcHandlers(timelineSessionStore, {
       beforeDelete: (id) => {
         const snapshot = productionQueue?.getSnapshot(id);
@@ -156,7 +175,8 @@ app.whenReady().then(async () => {
     });
     registerTimelineIpcHandlers(workerServer);
     registerSceneJobIpcHandlers(workerServer, characterStore);
-    registerMediaIpcHandlers();
+    registerMediaIpcHandlers(join(app.getPath("downloads"), "KC Auto Tool"));
+    registerMediaProtocol(join(app.getPath("downloads"), "KC Auto Tool"));
     console.info(
       `[KC Auto Tool] Project DB schema v${projectDatabase.schemaVersion}; legacy migration: ${legacyMigration.migrated ? `${legacyMigration.sceneCount} scenes` : "up to date"}`,
     );
@@ -188,6 +208,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  voiceService?.cancel();
   productionQueue?.shutdown();
   workerServer?.stop();
   projectDatabase?.close();

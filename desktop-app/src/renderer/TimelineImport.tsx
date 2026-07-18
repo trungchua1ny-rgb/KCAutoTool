@@ -50,7 +50,10 @@ import {
 import { ImageGenerationModal } from "./ImageGenerationModal";
 import { VideoGenerationModal } from "./VideoGenerationModal";
 import { VisualBiblePanel } from "./VisualBiblePanel";
+import { SceneTimeline } from "./SceneTimeline";
+import { SceneDetailDrawer } from "./SceneDetailDrawer";
 import type { GraphicStylePreset } from "../shared/visual-style";
+import type { IntegratedWorkflowHandoff } from "./integrated-workflow";
 import {
   DEFAULT_PROJECT_ID,
   type ProductionQueueSnapshot,
@@ -60,6 +63,8 @@ import {
 interface TimelineImportProps {
   chatConnected: boolean;
   flowConnected: boolean;
+  integratedHandoff?: IntegratedWorkflowHandoff | null;
+  onIntegratedHandoffConsumed?: () => void;
 }
 
 const TIMELINE_STORAGE_KEY = "flowx.timeline.scenes.v1";
@@ -645,7 +650,12 @@ function ErrorCenter({
   );
 }
 
-export function TimelineImport({ chatConnected, flowConnected }: TimelineImportProps) {
+export function TimelineImport({
+  chatConnected,
+  flowConnected,
+  integratedHandoff = null,
+  onIntegratedHandoffConsumed,
+}: TimelineImportProps) {
   const [srtFile, setSrtFile] = useState<File | null>(null);
   const [scriptFile, setScriptFile] = useState<File | null>(null);
   const [workflowMode, setWorkflowMode] = useState<VideoWorkflowMode>("two_step");
@@ -682,6 +692,8 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
   >("loading");
   const [queueSnapshot, setQueueSnapshot] = useState<ProductionQueueSnapshot | null>(null);
   const [queueCommandError, setQueueCommandError] = useState("");
+  const [selectedSceneId, setSelectedSceneId] = useState("");
+  const [sceneDetailOpen, setSceneDetailOpen] = useState(false);
   const [repairingPromptKey, setRepairingPromptKey] = useState("");
   const [policyRepairModal, setPolicyRepairModal] = useState<PolicyRepairModalState | null>(null);
   const [policyReason, setPolicyReason] = useState<PolicyReason>("auto");
@@ -690,6 +702,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
   const settledSceneJobs = useRef(new Set<string>());
   const sceneJobSessions = useRef(new Map<string, string>());
   const activeSessionIdRef = useRef(activeSessionId);
+  const consumedHandoffIds = useRef(new Set<string>());
   const loadedThumbnailPaths = useRef(new Set<string>());
   const activeProjectId = activeSessionId || DEFAULT_PROJECT_ID;
 
@@ -711,6 +724,12 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     setThumbnails({});
     setImageModal(null);
     setVideoModal(null);
+    const restoredSceneId = localStorage.getItem(`kc-auto-tool:selected-scene:${session.id}`) || "";
+    const nextSceneId = session.scenes.some((scene) => scene.id === restoredSceneId)
+      ? restoredSceneId
+      : session.scenes[0]?.id || "";
+    setSelectedSceneId(nextSceneId);
+    setSceneDetailOpen(false);
     setClearSceneMediaTarget(null);
     setClearingSceneId("");
     loadedThumbnailPaths.current.clear();
@@ -945,6 +964,25 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         };
       }),
     );
+  };
+
+  const selectScene = (sceneId: string) => {
+    setSelectedSceneId(sceneId);
+    setSceneDetailOpen(true);
+    localStorage.setItem(`kc-auto-tool:selected-scene:${activeProjectId}`, sceneId);
+  };
+
+  const saveCurrentSession = async () => {
+    const bridge = window.flowx?.timeline;
+    if (!bridge) return;
+    setSessionStatus("saving");
+    try {
+      await bridge.saveSession({ scenes, visualBible, styleReference, workflowMode, workflowSource });
+      setSessionStatus("saved");
+    } catch (caught) {
+      setSessionStatus("error");
+      setQueueCommandError(errorMessage(caught));
+    }
   };
 
   const updatePlanning = (
@@ -1391,16 +1429,25 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     }
   };
 
-  const generate = async () => {
+  const generate = async (handoff?: IntegratedWorkflowHandoff) => {
+    const sourceInput = handoff?.workflowSource || workflowSource;
+    const bibleInput = handoff?.visualBible || visualBible;
+    const referenceInput = handoff ? handoff.styleReference : styleReference;
+    const modeInput = handoff?.workflowMode || workflowMode;
+    const targetProjectId = handoff?.sessionId || activeProjectId;
     setError("");
     setWorkflowNotice("");
-    if (srtFile && !validateFile(srtFile, "File phụ đề", [".srt"])) return;
-    if (scriptFile && !validateFile(scriptFile, "File kịch bản", [".txt", ".md"])) return;
-    if (!srtFile && !workflowSource.srtText.trim()) {
+    if (!bibleInput.style.trim()) {
+      setError("Phong cách đồ họa trong Visual Bible là bắt buộc. Hãy nhập hoặc chọn một phong cách đã lưu.");
+      return;
+    }
+    if (!handoff && srtFile && !validateFile(srtFile, "File phụ đề", [".srt"])) return;
+    if (!handoff && scriptFile && !validateFile(scriptFile, "File kịch bản", [".txt", ".md"])) return;
+    if (!srtFile && !sourceInput.srtText.trim()) {
       setError("Hãy chọn file phụ đề SRT");
       return;
     }
-    if (!scriptFile && !workflowSource.scriptText.trim()) {
+    if (!scriptFile && !sourceInput.scriptText.trim()) {
       setError("Hãy chọn file kịch bản");
       return;
     }
@@ -1408,7 +1455,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
       setError("ChatGPT worker chưa kết nối");
       return;
     }
-    if (workflowMode === "automatic" && !flowConnected) {
+    if (modeInput === "automatic" && !flowConnected) {
       setError("Chế độ tự động hoàn toàn cần Google Flow worker kết nối trước khi bắt đầu");
       return;
     }
@@ -1421,30 +1468,30 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     setProgress(null);
     try {
       const [srtText, scriptText, availableCharacters] = await Promise.all([
-        srtFile ? srtFile.text() : Promise.resolve(workflowSource.srtText),
-        scriptFile ? scriptFile.text() : Promise.resolve(workflowSource.scriptText),
+        !handoff && srtFile ? srtFile.text() : Promise.resolve(sourceInput.srtText),
+        !handoff && scriptFile ? scriptFile.text() : Promise.resolve(sourceInput.scriptText),
         window.flowx?.characters.list() || Promise.resolve(characters),
       ]);
       const nextWorkflowSource: TimelineWorkflowSource = {
-        ...workflowSource,
+        ...sourceInput,
         srtText,
         scriptText,
-        srtFileName: srtFile?.name || workflowSource.srtFileName || "timeline.srt",
-        scriptFileName: scriptFile?.name || workflowSource.scriptFileName || "kich-ban.txt",
+        srtFileName: (!handoff ? srtFile?.name : "") || sourceInput.srtFileName || "timeline.srt",
+        scriptFileName: (!handoff ? scriptFile?.name : "") || sourceInput.scriptFileName || "kich-ban.txt",
       };
       setWorkflowSource(nextWorkflowSource);
       setCharacters(availableCharacters);
       const characterRoster = recurringCharacterRoster(
         scriptText,
-        availableCharacters,
+        availableCharacters.filter((character) => character.isRecurring !== false || character.isMain),
         2,
       );
       const result = await window.flowx.timeline.generate({
         srtText,
         scriptText,
-        visualBible,
+        visualBible: bibleInput,
         characterRoster,
-        styleReference,
+        styleReference: referenceInput,
       });
       const preparedScenes: Scene[] = result.scenes.map((scene) => {
         const detectedTokens = matchCharacterNames(
@@ -1461,12 +1508,14 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
       });
       setScenes(preparedScenes);
       setVisualBible(result.visualBible);
+      setStyleReference(referenceInput);
+      setWorkflowMode(modeInput);
       setProgress(null);
       const saved = await window.flowx.timeline.saveSession({
         scenes: preparedScenes,
         visualBible: result.visualBible,
-        styleReference,
-        workflowMode,
+        styleReference: referenceInput,
+        workflowMode: modeInput,
         workflowSource: nextWorkflowSource,
       });
       setSessions((current) => current.map((entry) => entry.id === saved.id
@@ -1480,12 +1529,12 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         }
         : { ...entry, active: false }));
 
-      if (workflowMode === "automatic") {
+      if (modeInput === "automatic") {
         const queue = window.flowx?.productionQueue;
         if (!queue) throw new Error("Production queue chưa sẵn sàng");
         try {
-          await queue.setApprovalPolicy(true, true, activeProjectId);
-          const snapshot = await queue.generateAllImages(activeProjectId);
+          await queue.setApprovalPolicy(true, true, targetProjectId);
+          const snapshot = await queue.generateAllImages(targetProjectId);
           setQueueSnapshot(snapshot);
           setScenes((current) => applyQueueSnapshotToScenes(current, snapshot));
           setWorkflowNotice("Đã tạo timeline. App đang tự động chuyển sang sản xuất ảnh và video.");
@@ -1505,6 +1554,39 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
       setRunning(false);
     }
   };
+
+  useEffect(() => {
+    if (
+      !sessionReady ||
+      !integratedHandoff ||
+      consumedHandoffIds.current.has(integratedHandoff.id)
+    ) return;
+    consumedHandoffIds.current.add(integratedHandoff.id);
+    let active = true;
+    const apply = async () => {
+      try {
+        const timeline = window.flowx?.timeline;
+        if (!timeline) throw new Error("Timeline bridge chưa sẵn sàng");
+        const session = activeSessionIdRef.current === integratedHandoff.sessionId
+          ? await timeline.loadSession()
+          : await timeline.selectSession(integratedHandoff.sessionId);
+        if (!session) throw new Error("Không tìm thấy phiên vừa tạo voice.");
+        if (!active) return;
+        applySession(session);
+        setSessions(await timeline.listSessions());
+        onIntegratedHandoffConsumed?.();
+        if (integratedHandoff.autoGenerateTimeline) {
+          await generate(integratedHandoff);
+        } else {
+          setWorkflowNotice("Voice và SRT đã được đưa vào dự án. Kiểm tra đầu vào rồi bấm Tạo timeline & prompt.");
+        }
+      } catch (caught) {
+        if (active) setError(errorMessage(caught));
+      }
+    };
+    void apply();
+    return () => { active = false; };
+  }, [sessionReady, integratedHandoff]);
 
   const cancel = async () => {
     try {
@@ -1831,9 +1913,10 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
                 !chatConnected ||
                 !hasSrtInput ||
                 !hasScriptInput ||
+                !visualBible.style.trim() ||
                 (workflowMode === "automatic" && !flowConnected)
               }
-              onClick={generate}
+              onClick={() => void generate()}
             >
               <Sparkles size={16} aria-hidden="true" />
               {workflowMode === "automatic" ? "Dựng video tự động" : "Chạy bước 1: Tạo timeline"}
@@ -1967,7 +2050,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
             </article>
             <article>
               <Play size={17} />
-              <div><strong>Source video</strong><span>{projectOutputFolder(activeProjectId, sessionNameDraft)}</span></div>
+              <div><strong>Source ảnh & video</strong><span>{projectOutputFolder(activeProjectId, sessionNameDraft)}</span></div>
             </article>
           </div>
         </section>
@@ -1980,6 +2063,16 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         }}
       />
       {scenes.length > 0 ? (
+        <>
+          <SceneTimeline
+            scenes={scenes}
+            snapshot={queueSnapshot}
+            thumbnails={thumbnails}
+            selectedSceneId={selectedSceneId}
+            onSelect={selectScene}
+            onRegenerate={(sceneId, mediaType) => regenerateQueuedScene(sceneId, mediaType)}
+            onClearResult={setClearSceneMediaTarget}
+          />
           <TimelineTable
             scenes={scenes}
             errors={sceneErrors}
@@ -1997,6 +2090,21 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
             clearingSceneId={clearingSceneId}
             chatConnected={chatConnected}
           />
+          {sceneDetailOpen && (
+            <SceneDetailDrawer
+              scene={scenes.find((scene) => scene.id === selectedSceneId) || null}
+              snapshot={queueSnapshot}
+              thumbnail={thumbnails[selectedSceneId]}
+              onClose={() => setSceneDetailOpen(false)}
+              onPromptChange={updatePrompt}
+              onSave={() => void saveCurrentSession()}
+              onRun={runOrRegenerateScene}
+              onRegenerate={regenerateQueuedScene}
+              onClear={setClearSceneMediaTarget}
+              onOpenFolder={() => void window.flowx?.system.openOutput(activeProjectId)}
+            />
+          )}
+        </>
       ) : (
         <p className="empty-state timeline-empty">Chưa có dữ liệu scene.</p>
       )}

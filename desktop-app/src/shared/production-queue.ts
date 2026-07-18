@@ -46,6 +46,7 @@ export interface QueueSceneView {
   orderIndex: number;
   status: SceneState;
   imageAssetPath: string;
+  startFrameAssetPath: string;
   flowImageAssetId: string;
   videoAssetPath: string;
   approvedImage: boolean;
@@ -69,6 +70,7 @@ export interface QueueErrorView {
 export interface QueueJobView {
   id: string;
   sceneId: string;
+  jobType: string;
   mediaType: SceneMediaType | null;
   status: JobState;
   dependsOn: string;

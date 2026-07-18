@@ -17,6 +17,43 @@ npm run dev
 
 `npm run dev` starts the Vite renderer and opens the Electron window.
 
+## Integrated Voice → SRT → Video workflow
+
+The desktop home screen offers three entry points:
+
+- **Tạo tự động toàn bộ video**: required narration text, optional visual
+  script, voice/prosody settings and Visual Bible are collected once. The app
+  generates voice plus SRT, sends the generated SRT and effective script to the
+  ChatGPT timeline worker, then starts the approved Flow image/video queue.
+- **Tạo từ file SRT và kịch bản**: opens a clean workspace and uses the existing
+  Phase 3 timeline importer without synthesizing voice.
+- **Tạo từng bước**: generates and saves voice/SRT first, then waits for the
+  operator before opening timeline/prompt review and production.
+
+If no optional visual script is supplied, narration text is reused as the
+script input. Outputs are isolated under
+`Downloads/KC Auto Tool/<workspace-id>/`; voice lives in `audio/`, subtitles in
+`srt/`, and both use unique file names to avoid Windows `EBUSY` replacement
+errors. The Output screen can also export `metadata/project.json`,
+`visual-bible/visual-bible.json`, and `prompts/scenes.json` without moving the
+existing image, video, or final-frame files.
+
+## Desktop workspace UI
+
+The React renderer uses a dark KC Auto Tool desktop shell with persistent page,
+sidebar, queue-drawer, session, and selected-scene state. It reuses the existing
+LowDB timeline session store, SQLite production queue, IPC handlers, and local
+WebSocket workers. The right Production Queue remains sequential; continue
+scenes still wait for the previous extracted final frame. Deleting generated
+results keeps the Phase 3 timeline and prompts.
+
+Voice synthesis uses `edge-tts-universal` and the unofficial Microsoft Edge
+online TTS endpoint. It requires network access and has no service SLA. The
+dependency is AGPL-3.0 licensed, so review its redistribution obligations before
+shipping KC Auto Tool outside personal/internal use. FFmpeg and FFprobe must be
+available on `PATH`; they are used to join long narration chunks, insert real
+punctuation-aware silence, and keep SRT timing aligned with the final audio.
+
 ## Extension worker
 
 1. Open `chrome://extensions` in each Chrome profile.

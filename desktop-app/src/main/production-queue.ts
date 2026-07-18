@@ -346,6 +346,7 @@ export class ProductionQueue {
         orderIndex: scene.orderIndex,
         status: scene.status,
         imageAssetPath: scene.imageAssetPath || "",
+        startFrameAssetPath: scene.startFrameAssetPath || "",
         flowImageAssetId: scene.flowImageAssetId || "",
         videoAssetPath: scene.videoAssetPath || "",
         approvedImage: scene.approvedImage,
@@ -355,6 +356,7 @@ export class ProductionQueue {
       jobs: jobs.map((job) => ({
         id: job.id,
         sceneId: publicSceneId(projectId, job.sceneId),
+        jobType: job.jobType,
         mediaType: jobMediaType(job.jobType),
         status: job.status,
         dependsOn: job.dependsOn || "",

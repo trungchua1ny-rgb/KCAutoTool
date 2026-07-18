@@ -28,6 +28,9 @@ export type SceneDurationSeconds = 4 | 6 | 8;
 export type VideoWorkflowMode = "automatic" | "two_step";
 
 export interface TimelineWorkflowSource {
+  narrationText?: string;
+  narrationFileName?: string;
+  narrationPath?: string;
   srtText: string;
   scriptText: string;
   srtFileName: string;
@@ -36,9 +39,20 @@ export interface TimelineWorkflowSource {
   scriptPath: string;
   audioPath: string;
   audioFileName: string;
+  voiceName?: string;
+  voiceRate?: number;
+  voicePitch?: number;
+  voiceVolume?: number;
+  voicePauseLevel?: "off" | "medium" | "strong" | "dramatic";
+  voiceSplitMode?: "paragraph" | "sentence";
+  voiceMaxCharsPerChunk?: number;
+  voiceExportWordSrt?: boolean;
 }
 
 export const DEFAULT_TIMELINE_WORKFLOW_SOURCE: TimelineWorkflowSource = {
+  narrationText: "",
+  narrationFileName: "",
+  narrationPath: "",
   srtText: "",
   scriptText: "",
   srtFileName: "",
@@ -47,6 +61,14 @@ export const DEFAULT_TIMELINE_WORKFLOW_SOURCE: TimelineWorkflowSource = {
   scriptPath: "",
   audioPath: "",
   audioFileName: "",
+  voiceName: "",
+  voiceRate: 0,
+  voicePitch: 0,
+  voiceVolume: 0,
+  voicePauseLevel: "off",
+  voiceSplitMode: "paragraph",
+  voiceMaxCharsPerChunk: 3000,
+  voiceExportWordSrt: false,
 };
 
 export const SCENE_DURATION_OPTIONS: SceneDurationSeconds[] = [4, 6, 8];
@@ -333,6 +355,9 @@ export function normalizeTimelineWorkflowSource(value: unknown): TimelineWorkflo
     ? value as Record<string, unknown>
     : {};
   return {
+    narrationText: workflowText(source.narrationText, MAX_TIMELINE_FILE_BYTES),
+    narrationFileName: workflowText(source.narrationFileName, 260).trim(),
+    narrationPath: workflowText(source.narrationPath, 4_096).trim(),
     srtText: workflowText(source.srtText, MAX_TIMELINE_FILE_BYTES),
     scriptText: workflowText(source.scriptText, MAX_TIMELINE_FILE_BYTES),
     srtFileName: workflowText(source.srtFileName, 260).trim(),
@@ -341,6 +366,20 @@ export function normalizeTimelineWorkflowSource(value: unknown): TimelineWorkflo
     scriptPath: workflowText(source.scriptPath, 4_096).trim(),
     audioPath: workflowText(source.audioPath, 4_096).trim(),
     audioFileName: workflowText(source.audioFileName, 260).trim(),
+    voiceName: workflowText(source.voiceName, 260).trim(),
+    voiceRate: typeof source.voiceRate === "number" && Number.isFinite(source.voiceRate)
+      ? Math.max(-50, Math.min(50, source.voiceRate))
+      : 0,
+    voicePitch: typeof source.voicePitch === "number" && Number.isFinite(source.voicePitch)
+      ? Math.max(-50, Math.min(50, source.voicePitch))
+      : 0,
+    voiceVolume: typeof source.voiceVolume === "number" && Number.isFinite(source.voiceVolume)
+      ? Math.max(-50, Math.min(50, source.voiceVolume))
+      : 0,
+    voicePauseLevel: source.voicePauseLevel === "medium" ||
+      source.voicePauseLevel === "strong" || source.voicePauseLevel === "dramatic"
+      ? source.voicePauseLevel
+      : "off",
   };
 }
 

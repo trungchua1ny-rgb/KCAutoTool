@@ -36,6 +36,23 @@ function normalizeName(value: unknown): string {
   return name;
 }
 
+function optionalMetadata(value: unknown, maxLength: number): string {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, maxLength);
+}
+
+function characterMetadata(input: CharacterCreateInput | CharacterUpdateInput) {
+  return {
+    role: optionalMetadata(input.role, 100),
+    palette: optionalMetadata(input.palette, 200),
+    appearance: optionalMetadata(input.appearance, 1_000),
+    clothing: optionalMetadata(input.clothing, 1_000),
+    isMain: Boolean(input.isMain),
+    isRecurring: Boolean(input.isRecurring),
+    detailsLocked: Boolean(input.detailsLocked),
+  };
+}
+
 function requireToken(value: unknown): string {
   if (typeof value !== "string") throw new Error("Token không hợp lệ.");
   const token = normalizeCharacterToken(value);
@@ -201,7 +218,7 @@ export class CharacterStore {
       }
 
       const imagePath = await this.saveImage(validateImage(input?.image));
-      const character = { token, name, refImagePath: imagePath };
+      const character = { token, name, refImagePath: imagePath, ...characterMetadata(input) };
       this.database.data.characters.push(character);
 
       try {
@@ -236,7 +253,7 @@ export class CharacterStore {
       const nextImagePath = input.image
         ? await this.saveImage(validateImage(input.image))
         : previous.refImagePath;
-      const next = { token, name, refImagePath: nextImagePath };
+      const next = { token, name, refImagePath: nextImagePath, ...characterMetadata(input) };
       this.database.data.characters[index] = next;
 
       try {

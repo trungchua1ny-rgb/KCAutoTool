@@ -1,7 +1,8 @@
-import { ipcMain } from "electron";
+import { ipcMain, net, protocol } from "electron";
 import { readFile, stat } from "node:fs/promises";
-import { extname, isAbsolute } from "node:path";
-import { MEDIA_READ_IMAGE_CHANNEL } from "../shared/media";
+import { extname, isAbsolute, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { MEDIA_GET_STREAM_URL_CHANNEL, MEDIA_READ_IMAGE_CHANNEL } from "../shared/media";
 
 const MAX_RESULT_IMAGE_BYTES = 25 * 1024 * 1024;
 
@@ -18,7 +19,16 @@ function detectedMimeType(bytes: Buffer): "image/png" | "image/jpeg" | "image/we
   return null;
 }
 
-export function registerMediaIpcHandlers(): void {
+function safeMediaPath(root: string, value: string): string {
+  const absolute = resolve(value);
+  const relativePath = relative(resolve(root), absolute);
+  if (!isAbsolute(absolute) || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+    throw new Error("File media nằm ngoài thư mục KC Auto Tool.");
+  }
+  return absolute;
+}
+
+export function registerMediaIpcHandlers(generatedMediaRoot: string): void {
   ipcMain.handle(MEDIA_READ_IMAGE_CHANNEL, async (_event, value: unknown) => {
     if (typeof value !== "string" || !isAbsolute(value) || !/[.](png|jpe?g|webp)$/i.test(extname(value))) {
       throw new Error("Đường dẫn ảnh kết quả không hợp lệ.");
@@ -31,5 +41,26 @@ export function registerMediaIpcHandlers(): void {
     const mimeType = detectedMimeType(bytes);
     if (!mimeType) throw new Error("File kết quả không phải PNG, JPEG hoặc WebP.");
     return `data:${mimeType};base64,${bytes.toString("base64")}`;
+  });
+  ipcMain.handle(MEDIA_GET_STREAM_URL_CHANNEL, async (_event, value: unknown) => {
+    if (typeof value !== "string" || !/[.](mp3|wav|m4a|mp4|webm)$/i.test(extname(value))) {
+      throw new Error("Đường dẫn media không hợp lệ.");
+    }
+    const path = safeMediaPath(generatedMediaRoot, value);
+    const file = await stat(path);
+    if (!file.isFile() || file.size <= 0) throw new Error("File media không tồn tại.");
+    return `kc-media://local/${Buffer.from(path, "utf8").toString("base64url")}`;
+  });
+}
+
+export function registerMediaProtocol(generatedMediaRoot: string): void {
+  protocol.handle("kc-media", (request) => {
+    const encoded = new URL(request.url).pathname.split("/").filter(Boolean).at(-1) || "";
+    try {
+      const path = safeMediaPath(generatedMediaRoot, Buffer.from(encoded, "base64url").toString("utf8"));
+      return net.fetch(pathToFileURL(path).toString());
+    } catch {
+      return new Response("Media not found", { status: 404 });
+    }
   });
 }

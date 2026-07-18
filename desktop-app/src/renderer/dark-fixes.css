@@ -1,0 +1,136 @@
+/*
+ * Loaded after the legacy functional stylesheet. These narrow overrides keep
+ * migrated workflow controls inside the KC Auto Tool dark theme.
+ */
+.home-mode-card.is-primary,
+.home-mode-card.is-primary:hover {
+  border-color: rgba(59, 130, 246, .58);
+  color: var(--kc-text);
+  background: linear-gradient(145deg, #112440, #0c192b 74%);
+}
+
+.home-mode-card.is-primary .home-mode-tag {
+  color: #9fc5ff;
+  background: rgba(59, 130, 246, .13);
+}
+
+.home-output-note,
+.video-workflow-panel,
+.timeline-command-bar,
+.timeline-file,
+.workflow-mode-card,
+.workflow-step-strip,
+.workflow-output-grid > article {
+  border-color: var(--kc-border-soft);
+  color: var(--kc-text);
+  background: linear-gradient(145deg, #0e1c2e, #0a1829);
+}
+
+.home-output-note strong,
+.video-workflow-heading strong,
+.workflow-output-panel h3,
+.workflow-mode-card strong {
+  color: var(--kc-text);
+}
+
+.workflow-mode-card:hover:not(:disabled) {
+  border-color: #416b9c;
+}
+
+.workflow-mode-card.is-selected {
+  border-color: var(--kc-blue);
+  color: #dbeafe;
+  background: linear-gradient(145deg, rgba(37, 99, 235, .2), #0c1b30);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, .24);
+}
+
+.workflow-mode-card small,
+.workflow-save-hint,
+.timeline-progress,
+.timeline-file-details span {
+  color: var(--kc-muted);
+}
+
+.visual-bible-toggle,
+.visual-bible-fields,
+.graphic-style-bar {
+  border-color: var(--kc-border-soft);
+  color: var(--kc-text);
+  background: #0b192b;
+}
+
+.visual-bible-toggle:hover {
+  background: #10223a;
+}
+
+.visual-bible-heading strong,
+.style-reference-copy strong {
+  color: var(--kc-text);
+}
+
+.visual-bible-heading span:not(.visual-bible-icon),
+.visual-bible-summary,
+.visual-bible-guidance,
+.graphic-style-bar small,
+.style-reference-copy small {
+  color: var(--kc-muted);
+}
+
+.visual-bible-summary span,
+.visual-bible-icon {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, .13);
+}
+
+.style-reference-preview,
+.graphic-style-library,
+.graphic-style-save-row input {
+  border-color: var(--kc-border);
+  color: var(--kc-text);
+  background: #071321;
+}
+
+.style-reference-preview img {
+  background: #0e1c2e;
+}
+
+.style-reference-preview span {
+  color: #cbd5e1;
+}
+
+.timeline-table-wrap,
+.timeline-table {
+  border-color: var(--kc-border-soft);
+  color: #cbd5e1;
+  background: #0a1728;
+}
+
+.timeline-table th {
+  border-color: var(--kc-border-soft);
+  color: #91a6c0;
+  background: #0c1a2d;
+}
+
+.timeline-table td {
+  border-color: var(--kc-border-soft);
+  color: #cbd5e1;
+  background: #0a1728;
+}
+
+.timeline-table tr:hover td {
+  background: #0e2037;
+}
+
+.scene-chain-cell select,
+.scene-chain-cell input,
+.scene-prompt textarea,
+.scene-context-menu {
+  border-color: var(--kc-border);
+  color: var(--kc-text);
+  background: #071321;
+}
+
+select option {
+  color: var(--kc-text);
+  background: #0b1728;
+}

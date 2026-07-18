@@ -198,8 +198,9 @@ CHAIN RULES
 
 ${hasStyleReference ? `STYLE REFERENCE IMAGE
 - A graphic style reference image is attached to this first message.
-- Silently analyze its medium, line quality, shape language, character construction, facial simplification, palette behavior, shading, texture, background treatment, composition, and explicit visual exclusions.
-- Retain that analysis for all later batches in this conversation. Do not return the style analysis in this beat-planning JSON.` : ""}
+- Use it only to understand character construction, spatial continuity, palette behavior, and readable composition.
+- The user-entered graphic style text is authoritative. Never rewrite, expand, summarize, translate, or replace it, and never inject style-reference terminology into scene prompts.
+- Do not return any style analysis in this beat-planning JSON.` : ""}
 
 Do not write imagePrompt or videoPrompt in this job. Do not add events absent from the sources.${correction}
 
@@ -346,11 +347,12 @@ ${scriptText}
     const requestedBible = normalizeRequestedVisualBible(visualBibleInput);
     const bibleFields = ["style", "palette", "lighting", "continuityNotes"];
     const lockedFields = bibleFields.filter((field) => requestedBible[field]);
-    const blankFields = bibleFields.filter((field) => !requestedBible[field]);
+    const blankFields = bibleFields.filter((field) => field !== "style" && !requestedBible[field]);
     const requestedBibleContract = `USER VISUAL BIBLE INPUT
 ${JSON.stringify(requestedBible)}
-- Non-empty user fields are locked. Copy them into the returned visualBible EXACTLY, without rewriting, translating, shortening, or expanding them: ${lockedFields.filter((field) => field !== "style" || !hasStyleReference).length ? lockedFields.filter((field) => field !== "style" || !hasStyleReference).join(", ") : "none"}.
-- ${hasStyleReference ? "A style reference image was attached in Phase 3a. For visualBible.style only, preserve the complete non-empty user style as the opening base, then append a concise production-ready analysis of the image's observable drawing system. Never replace or contradict the user's base style. Do not mention the file, attachment, ChatGPT, or analysis process in the final style text." : "No style reference image was supplied; preserve a non-empty user style exactly."}
+- Non-empty user fields are locked. Copy them into the returned visualBible EXACTLY, without rewriting, translating, shortening, or expanding them: ${lockedFields.length ? lockedFields.join(", ") : "none"}.
+- visualBible.style is mandatory external render configuration. Copy it character-for-character from the user input. Never rewrite, translate, expand, summarize, analyze, or append reference-image observations to it.
+- ${hasStyleReference ? "A style reference image was attached in Phase 3a. Use it only as silent visual context for continuity; it creates no exception to the immutable style rule." : "No style reference image was supplied."}
 - Only analyze the complete story and generate values for these blank fields: ${blankFields.length ? blankFields.join(", ") : "none"}.
 - Even when every field is already filled, return the complete visualBible object in batch 1.`;
     const visualBibleContract = batch.index === 0
@@ -358,8 +360,8 @@ ${JSON.stringify(requestedBible)}
 - Read the COMPLETE supporting script before writing any scene.
 - Create one coherent visual system for the entire story, not just this SRT segment.
 - Return visualBible with five fields: style, palette, lighting, continuityNotes, and aspectRatio.
-- Write all Visual Bible values in clear production-ready English.
-- style defines medium, rendering approach, lens and composition language, texture, detail level, and exclusions.
+- Write only AI-generated blank Visual Bible fields in clear production-ready English. Preserve every user-entered field in its original language and wording.
+- style is supplied by the user and is immutable. Return it exactly; do not author style content.
 - palette defines dominant and accent colors, saturation, contrast, and controlled mood variations.
 - lighting defines default light quality, direction, time-of-day behavior, shadows, atmosphere, and exposure.
 - continuityNotes records stable character designs, wardrobe, proportions, recurring locations, important props, screen direction, and facts later scenes must not change.
@@ -431,6 +433,8 @@ PROMPT RULES
 - VIDEO PACING BUDGET — infer the exact duration from each required boundary and obey the matching rule. For 4s: begin the primary motion immediately; omit anticipation and final settle, or keep each at no more than 0.3s only when physically necessary; primary motion occupies about 2.5–3.5s and reaction overlaps it. For 6s: anticipation is optional and at most 1s; primary motion occupies about 3.5–4.5s; reaction is brief; settle is optional and at most 1s; setup plus final settle total at most 1.5s. For 8s: anticipation is at most 1.5s; primary motion occupies about 4.5–5.5s; reaction is visible; settle is at most 1.5s; setup plus final settle total at most 2s. Primary motion must visibly occupy at least 60% of every clip. An 8s clip must not stretch one small gesture; extended anticipation or settle requires a source-supported emotional beat or establishing shot.
 - PACING LOCK: character and camera motion read at natural real-world speed, never slow-motion, floaty, suspended, or dreamlike unless the source explicitly calls for a deliberate emotional beat. Spend the majority of runtime on visible story action and never pad the start or end with a static pose merely to fill duration.
 - Do NOT repeat global graphic style, palette, default lighting, aspect ratio, stable character design, wardrobe, or recurring-location rules already present in the Visual Bible. Mention a visual property only when it changes specifically in this scene because the story requires it.
+- Treat graphic style as external Google Flow configuration, not scene content. Never put art medium, rendering technique, line style, texture, realism level, background-treatment keywords, style exclusions, or the text of visualBible.style into imagePrompt or videoPrompt.
+- Spend the prompt budget on the other visible parts of the shot: subjects, exact action, facial expression and body language, location, foreground/middle-ground/background objects, spatial relationships, camera framing, motion, reaction, environment, and end-frame continuity.
 - Do NOT include meta phrases such as "according to the Visual Bible", "keep consistent", "same style", or lists of negative rendering instructions in scene prompts. The desktop app attaches the Visual Bible separately.
 - Do not leave characters motionless when the source implies an action. Use specific motion such as walking slowly, turning, opening a door, typing, wind moving objects, or rain falling.
 - Before returning JSON, silently audit every scene: it matches the exact timeline, contains no dialogue or internal thought, is not generic, does not invent an event, does not repeat the Visual Bible, gives image and video prompts distinct jobs for single/start, and uses an empty imagePrompt for every continue boundary.
@@ -468,7 +472,7 @@ ${scriptSource}
       : '{"scenes":[{"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","imagePrompt":"...","videoPrompt":"...","usedCharacterTokens":["@TOKEN"]}]}';
     const requestedBible = normalizeRequestedVisualBible(visualBibleInput);
     const bibleRequirement = batch.index === 0
-      ? `Return a complete non-empty visualBible. Preserve every non-empty field from this user input EXACTLY and generate only its blank fields: ${JSON.stringify(requestedBible)}. ${hasStyleReference ? "Exception for style only: keep the complete user style as the opening base and append the production-ready visual analysis retained from the attached Phase 3a reference image." : ""} Its aspectRatio must be exactly 16:9. Do not invent characters absent from the source.`
+      ? `Return a complete non-empty visualBible. Preserve every non-empty field from this user input EXACTLY and generate only blank palette, lighting, or continuityNotes fields: ${JSON.stringify(requestedBible)}. visualBible.style is mandatory external Google Flow configuration: copy it character-for-character and never rewrite, translate, expand, summarize, analyze, or append reference-image observations. ${hasStyleReference ? "The attached reference creates no exception to this immutable style rule." : ""} Its aspectRatio must be exactly 16:9. Do not invent characters absent from the source. Scene prompts must describe only visible scene content and must not contain graphic-style wording.`
       : "Keep the exact Visual Bible established in batch 1 and do not return a replacement visualBible.";
     return `Your previous response for batch ${batch.index + 1} of ${batchCount} was invalid: ${reason}
 

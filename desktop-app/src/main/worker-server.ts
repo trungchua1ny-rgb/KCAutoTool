@@ -755,15 +755,7 @@ export class WorkerServer {
         const lockedBible = input.visualBible;
         for (const field of ["style", "palette", "lighting", "continuityNotes"] as const) {
           if (lockedBible[field]?.trim()) {
-            if (field === "style" && input.styleReference) {
-              const lockedStyle = lockedBible.style.trim();
-              const analyzedStyle = result.visualBible.style.trim();
-              result.visualBible.style = analyzedStyle.startsWith(lockedStyle)
-                ? analyzedStyle
-                : `${lockedStyle}\nReference-image analysis: ${analyzedStyle}`.slice(0, 4_000);
-            } else {
-              result.visualBible[field] = lockedBible[field].trim();
-            }
+            result.visualBible[field] = lockedBible[field].trim();
           }
         }
         validateGeneratedVisualBible(result.visualBible);

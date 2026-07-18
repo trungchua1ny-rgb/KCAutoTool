@@ -2,6 +2,13 @@ export interface Character {
   token: string;
   name: string;
   refImagePath: string;
+  role?: string;
+  palette?: string;
+  appearance?: string;
+  clothing?: string;
+  isMain?: boolean;
+  isRecurring?: boolean;
+  detailsLocked?: boolean;
 }
 
 export interface CharacterView extends Character {
@@ -22,6 +29,13 @@ export interface CharacterCreateInput {
   token: string;
   name: string;
   image: CharacterImageInput;
+  role?: string;
+  palette?: string;
+  appearance?: string;
+  clothing?: string;
+  isMain?: boolean;
+  isRecurring?: boolean;
+  detailsLocked?: boolean;
 }
 
 export interface CharacterUpdateInput {
@@ -29,6 +43,13 @@ export interface CharacterUpdateInput {
   token: string;
   name: string;
   image?: CharacterImageInput;
+  role?: string;
+  palette?: string;
+  appearance?: string;
+  clothing?: string;
+  isMain?: boolean;
+  isRecurring?: boolean;
+  detailsLocked?: boolean;
 }
 
 export interface CharactersBridge {

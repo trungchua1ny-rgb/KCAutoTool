@@ -123,7 +123,8 @@ The hero crosses the hall.`;
     true,
   );
   assert.match(referenceBeatPrompt, /style reference image is attached/i);
-  assert.match(referenceBeatPrompt, /Retain that analysis for all later batches/);
+  assert.match(referenceBeatPrompt, /graphic style text is authoritative/);
+  assert.match(referenceBeatPrompt, /never inject style-reference terminology into scene prompts/);
   const beatPlan = internals.validateBeatPlanningResult(
     internals.parseBeatPlanningResponse(JSON.stringify({ beats: [
       { timeStart: "00:00:00,000", timeEnd: "00:00:08,000", durationSeconds: 8, chainId: "hall", chainRole: "start" },
@@ -186,8 +187,8 @@ The hero crosses the hall.`;
     [],
     true,
   );
-  assert.match(referencedStylePrompt, /append a concise production-ready analysis/);
-  assert.match(referencedStylePrompt, /Never replace or contradict the user's base style/);
+  assert.match(referencedStylePrompt, /Copy it character-for-character/);
+  assert.match(referencedStylePrompt, /creates no exception to the immutable style rule/);
 
   const firstPrompt = internals.buildTimelinePrompt(
     batches[0] as TimelineBatch & { index: number },
@@ -227,6 +228,9 @@ The hero crosses the hall.`;
   assert.match(lockedStylePrompt, /Non-empty user fields are locked/);
   assert.match(lockedStylePrompt, /generate values for these blank fields: lighting, continuityNotes/);
   assert.match(lockedStylePrompt, /Stickman, flat 2D illustration, white background/);
+  assert.match(lockedStylePrompt, /Copy it character-for-character from the user input/);
+  assert.match(lockedStylePrompt, /Treat graphic style as external Google Flow configuration, not scene content/);
+  assert.match(lockedStylePrompt, /Spend the prompt budget on the other visible parts of the shot/);
   assert.match(lockedStylePrompt, /Do NOT repeat global graphic style, palette, default lighting/);
   assert.match(lockedStylePrompt, /facial expression, head angle, posture, gesture/);
   assert.match(lockedStylePrompt, /foreground element, one middle-ground subject\/object, and one background element/);

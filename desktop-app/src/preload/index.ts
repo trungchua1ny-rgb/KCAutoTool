@@ -32,7 +32,7 @@ import {
   type KCAutoToolBridge,
   type WorkerStatuses,
 } from "../shared/worker-status";
-import { MEDIA_READ_IMAGE_CHANNEL } from "../shared/media";
+import { MEDIA_GET_STREAM_URL_CHANNEL, MEDIA_READ_IMAGE_CHANNEL } from "../shared/media";
 import {
   VISUAL_STYLE_DELETE_CHANNEL,
   VISUAL_STYLE_LIST_CHANNEL,
@@ -56,6 +56,20 @@ import {
   QUEUE_STOP_CHANNEL,
   type ProductionQueueSnapshot,
 } from "../shared/production-queue";
+import {
+  VOICE_CANCEL_CHANNEL,
+  VOICE_GENERATE_CHANNEL,
+  VOICE_LIST_CHANNEL,
+  VOICE_PREVIEW_CHANNEL,
+  VOICE_PROGRESS_CHANNEL,
+  type VoiceProgress,
+} from "../shared/voice";
+import {
+  OUTPUT_EXPORT_SESSION_CHANNEL,
+  OUTPUT_INSPECT_CHANNEL,
+  OUTPUT_OPEN_CHANNEL,
+  SYSTEM_STATUS_CHANNEL,
+} from "../shared/system";
 
 const bridge: KCAutoToolBridge = {
   platform: process.platform,
@@ -100,6 +114,7 @@ const bridge: KCAutoToolBridge = {
   },
   media: {
     readImageDataUrl: (path) => ipcRenderer.invoke(MEDIA_READ_IMAGE_CHANNEL, path),
+    getStreamUrl: (path) => ipcRenderer.invoke(MEDIA_GET_STREAM_URL_CHANNEL, path),
   },
   visualStyles: {
     list: () => ipcRenderer.invoke(VISUAL_STYLE_LIST_CHANNEL),
@@ -139,6 +154,26 @@ const bridge: KCAutoToolBridge = {
       ipcRenderer.on(QUEUE_CHANGED_CHANNEL, listener);
       return () => ipcRenderer.removeListener(QUEUE_CHANGED_CHANNEL, listener);
     },
+  },
+  voice: {
+    list: () => ipcRenderer.invoke(VOICE_LIST_CHANNEL),
+    preview: (voice, locale) => ipcRenderer.invoke(VOICE_PREVIEW_CHANNEL, { voice, locale }),
+    generate: (input) => ipcRenderer.invoke(VOICE_GENERATE_CHANNEL, input),
+    cancel: () => ipcRenderer.invoke(VOICE_CANCEL_CHANNEL),
+    onProgress: (callback) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        value: VoiceProgress,
+      ) => callback(value);
+      ipcRenderer.on(VOICE_PROGRESS_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(VOICE_PROGRESS_CHANNEL, listener);
+    },
+  },
+  system: {
+    getStatus: () => ipcRenderer.invoke(SYSTEM_STATUS_CHANNEL),
+    inspectOutput: (projectId) => ipcRenderer.invoke(OUTPUT_INSPECT_CHANNEL, projectId),
+    openOutput: (projectId, group) => ipcRenderer.invoke(OUTPUT_OPEN_CHANNEL, { projectId, group }),
+    exportSession: (session) => ipcRenderer.invoke(OUTPUT_EXPORT_SESSION_CHANNEL, session),
   },
   workers: {
     getStatuses: () => ipcRenderer.invoke(WORKER_STATUS_GET_CHANNEL),

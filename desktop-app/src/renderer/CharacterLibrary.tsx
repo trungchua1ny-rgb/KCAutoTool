@@ -25,6 +25,13 @@ interface EditorState {
   originalToken: string | null;
   token: string;
   name: string;
+  role: string;
+  palette: string;
+  appearance: string;
+  clothing: string;
+  isMain: boolean;
+  isRecurring: boolean;
+  detailsLocked: boolean;
   imageFile: File | null;
   previewUrl: string | null;
 }
@@ -90,6 +97,13 @@ export function CharacterLibrary() {
       originalToken: null,
       token: "@",
       name: "",
+      role: "",
+      palette: "",
+      appearance: "",
+      clothing: "",
+      isMain: false,
+      isRecurring: true,
+      detailsLocked: true,
       imageFile: null,
       previewUrl: null,
     });
@@ -102,6 +116,13 @@ export function CharacterLibrary() {
       originalToken: character.token,
       token: character.token,
       name: character.name,
+      role: character.role || "",
+      palette: character.palette || "",
+      appearance: character.appearance || "",
+      clothing: character.clothing || "",
+      isMain: Boolean(character.isMain),
+      isRecurring: Boolean(character.isRecurring),
+      detailsLocked: Boolean(character.detailsLocked),
       imageFile: null,
       previewUrl: character.refImageDataUrl,
     });
@@ -153,6 +174,13 @@ export function CharacterLibrary() {
           token,
           name: editor.name,
           image: await imageInput(editor.imageFile),
+          role: editor.role,
+          palette: editor.palette,
+          appearance: editor.appearance,
+          clothing: editor.clothing,
+          isMain: editor.isMain,
+          isRecurring: editor.isRecurring,
+          detailsLocked: editor.detailsLocked,
         });
       } else {
         nextCharacters = await bridge.characters.update({
@@ -162,6 +190,13 @@ export function CharacterLibrary() {
           image: editor.imageFile
             ? await imageInput(editor.imageFile)
             : undefined,
+          role: editor.role,
+          palette: editor.palette,
+          appearance: editor.appearance,
+          clothing: editor.clothing,
+          isMain: editor.isMain,
+          isRecurring: editor.isRecurring,
+          detailsLocked: editor.detailsLocked,
         });
       }
       setCharacters(nextCharacters);
@@ -259,6 +294,27 @@ export function CharacterLibrary() {
                 maxLength={80}
               />
             </label>
+            <label>
+              <span>Vai trò</span>
+              <input value={editor.role} onChange={(event) => setEditor({ ...editor, role: event.target.value })} placeholder="Nhân vật chính, người dẫn chuyện…" maxLength={100} />
+            </label>
+            <label>
+              <span>Bảng màu</span>
+              <input value={editor.palette} onChange={(event) => setEditor({ ...editor, palette: event.target.value })} placeholder="Đen, trắng, áo xanh dương…" maxLength={200} />
+            </label>
+            <label className="is-wide">
+              <span>Ngoại hình</span>
+              <textarea value={editor.appearance} onChange={(event) => setEditor({ ...editor, appearance: event.target.value })} placeholder="Chiều cao, tỷ lệ, khuôn mặt, tóc và đặc điểm nhận diện…" maxLength={1000} />
+            </label>
+            <label className="is-wide">
+              <span>Trang phục</span>
+              <textarea value={editor.clothing} onChange={(event) => setEditor({ ...editor, clothing: event.target.value })} placeholder="Quần áo, phụ kiện và chi tiết không được thay đổi…" maxLength={1000} />
+            </label>
+            <div className="character-flags is-wide">
+              <label><input type="checkbox" checked={editor.isMain} onChange={(event) => setEditor({ ...editor, isMain: event.target.checked })} /> Nhân vật chính</label>
+              <label><input type="checkbox" checked={editor.isRecurring} onChange={(event) => setEditor({ ...editor, isRecurring: event.target.checked })} /> Nhân vật lặp lại</label>
+              <label><input type="checkbox" checked={editor.detailsLocked} onChange={(event) => setEditor({ ...editor, detailsLocked: event.target.checked })} /> Khóa chi tiết</label>
+            </div>
           </div>
 
           <div className="editor-actions">
@@ -298,6 +354,11 @@ export function CharacterLibrary() {
             <div className="character-details">
               <strong>{character.token}</strong>
               <span>{character.name}</span>
+              <small>{character.role || "Chưa đặt vai trò"}</small>
+              <p>{character.appearance || "Chưa có mô tả ngoại hình"}</p>
+              <p>{character.clothing || "Chưa có mô tả trang phục"}</p>
+              <div className="character-palette" title={character.palette || "Chưa có bảng màu"}>{character.palette || "Chưa có bảng màu"}</div>
+              <div className="character-tags">{character.isMain && <b>Chính</b>}{character.isRecurring && <b>Lặp lại</b>}{character.detailsLocked && <b>Đã khóa</b>}</div>
             </div>
             <div className="row-actions">
               <button
@@ -325,4 +386,3 @@ export function CharacterLibrary() {
     </section>
   );
 }
-

@@ -53,7 +53,7 @@ export function VisualBiblePanel({
       </button>
       <div className="graphic-style-bar">
         <p className="visual-bible-guidance">
-          Điền trước những quy tắc bạn muốn khóa. Ô nào để trống sẽ được ChatGPT tự phân tích từ toàn bộ kịch bản và điền sau khi tạo timeline.
+          Phong cách đồ họa là cấu hình render bắt buộc và chỉ do bạn quyết định. ChatGPT không được sửa hoặc lặp lại phong cách này trong prompt scene; AI chỉ phân tích nội dung nhìn thấy, bối cảnh, hành động, biểu cảm, bố cục và tính liên tục.
         </p>
         <div className="graphic-style-library">
           <label className="field">
@@ -105,18 +105,21 @@ export function VisualBiblePanel({
           {presetError && <small className="graphic-style-error">{presetError}</small>}
         </div>
         <label className="field graphic-style-editor">
-          <span>Phong cách đồ họa gửi Google Flow</span>
+          <span>Phong cách đồ họa gửi Google Flow <b className="required-mark">Bắt buộc</b></span>
           <textarea
-            className="graphic-style-input"
+            className={`graphic-style-input ${value.style.trim() ? "" : "is-required"}`}
             value={value.style}
             placeholder="Ví dụ: Stickman, flat 2D illustration, white background, bold black outlines..."
+            required
+            aria-required="true"
             onChange={(event) => update("style", event.target.value)}
           />
+          {!value.style.trim() && <small className="graphic-style-error">Hãy nhập hoặc chọn một phong cách đã lưu trước khi tạo timeline.</small>}
         </label>
         <div className="style-reference-control">
           <div className="style-reference-copy">
             <strong>Ảnh đồ họa mẫu cho ChatGPT</strong>
-            <small>Ảnh được đính kèm ở tin nhắn Phase 3a đầu tiên. ChatGPT phân tích nét vẽ rồi bổ sung kết quả vào ô phong cách phía trên.</small>
+            <small>Ảnh chỉ giúp AI hiểu quy luật hình ảnh và tính liên tục. AI không được ghi đè, mở rộng hoặc thay đổi ô phong cách đồ họa.</small>
           </div>
           {styleReference ? (
             <div className="style-reference-preview">
@@ -162,25 +165,28 @@ export function VisualBiblePanel({
           )}
           {referenceError && <small className="graphic-style-error">{referenceError}</small>}
         </div>
-        <small>Phong cách khóa cách vẽ. Prompt scene vẫn phải chứa bối cảnh, hành động, biểu cảm và bố cục riêng của từng cảnh.</small>
+        <small>Khi gửi Google Flow, app ghép nguyên văn phong cách trên vào prompt sau cùng. Prompt Phase 3 chỉ chứa nội dung riêng của cảnh.</small>
       </div>
       {open && (
         <div className="visual-bible-fields">
           <label className="field">
             <span>Bảng màu</span>
-            <input value={value.palette} placeholder="Ví dụ: xanh ngọc, vàng ấm, bão hòa vừa" onChange={(event) => update("palette", event.target.value)} />
+            <input value={value.palette} placeholder="Màu chủ đạo, màu nhấn, độ bão hòa và tương phản" onChange={(event) => update("palette", event.target.value)} />
+            <small>Để trống: ChatGPT phân tích từ câu chuyện, nhưng không được đổi phong cách đồ họa.</small>
           </label>
           <label className="field">
             <span>Ánh sáng</span>
-            <input value={value.lighting} placeholder="Ví dụ: hoàng hôn mềm, bóng đổ dịu" onChange={(event) => update("lighting", event.target.value)} />
+            <input value={value.lighting} placeholder="Ánh sáng mặc định, hướng sáng, thời gian và độ tương phản" onChange={(event) => update("lighting", event.target.value)} />
+            <small>Ánh sáng là quy tắc dự án; prompt scene chỉ nói thay đổi ánh sáng khi câu chuyện yêu cầu.</small>
           </label>
           <label className="field aspect-field">
             <span>Tỷ lệ khung hình</span>
             <input value="16:9 · Ngang (cố định)" readOnly aria-readonly="true" />
           </label>
           <label className="field continuity-field">
-            <span>Quy tắc liên tục</span>
-            <textarea value={value.continuityNotes} placeholder="Những chi tiết không được thay đổi: khuôn mặt, trang phục, địa điểm, đạo cụ..." onChange={(event) => update("continuityNotes", event.target.value)} />
+            <span>Nhân vật, bối cảnh và quy tắc liên tục</span>
+            <textarea value={value.continuityNotes} placeholder="Thiết kế nhân vật, trang phục, tỷ lệ, địa điểm lặp lại, đạo cụ, hướng di chuyển và trạng thái cần giữ nguyên..." onChange={(event) => update("continuityNotes", event.target.value)} />
+            <small>Đây là bộ nhớ xuyên scene, không phải mô tả phong cách vẽ.</small>
           </label>
         </div>
       )}

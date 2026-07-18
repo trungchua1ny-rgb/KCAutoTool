@@ -112,7 +112,7 @@ test("handles heartbeat, timeline results, and stop on an isolated port", async 
     assert.equal(result.scenes[0].imagePrompt, "@HERO enters a room");
     assert.equal(
       result.visualBible.style,
-      "locked stickman style\nReference-image analysis: cinematic 3D animation",
+      "locked stickman style",
     );
     assert.equal(result.visualBible.palette, "locked black, white, and red accents");
     assert.equal(result.visualBible.lighting, "soft directional sunset light");

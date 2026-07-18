@@ -4,6 +4,8 @@ import type { SceneJobsBridge } from "./scene-job";
 import type { MediaBridge } from "./media";
 import type { VisualStylesBridge } from "./visual-style";
 import type { ProductionQueueBridge } from "./production-queue";
+import type { VoiceBridge } from "./voice";
+import type { SystemBridge } from "./system";
 
 export const WORKER_ROLES = ["chat-worker", "flow-worker"] as const;
 
@@ -26,6 +28,8 @@ export interface KCAutoToolBridge {
   media: MediaBridge;
   visualStyles: VisualStylesBridge;
   productionQueue: ProductionQueueBridge;
+  voice: VoiceBridge;
+  system: SystemBridge;
   workers: {
     getStatuses: () => Promise<WorkerStatuses>;
     onStatusChange: (
