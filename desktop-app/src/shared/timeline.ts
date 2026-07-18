@@ -25,6 +25,29 @@ export type CharacterPolicy = "none" | "selected";
 export type ProjectAspectRatio = "16:9";
 export type SceneChainRole = "single" | "start" | "continue";
 export type SceneDurationSeconds = 4 | 6 | 8;
+export type VideoWorkflowMode = "automatic" | "two_step";
+
+export interface TimelineWorkflowSource {
+  srtText: string;
+  scriptText: string;
+  srtFileName: string;
+  scriptFileName: string;
+  srtPath: string;
+  scriptPath: string;
+  audioPath: string;
+  audioFileName: string;
+}
+
+export const DEFAULT_TIMELINE_WORKFLOW_SOURCE: TimelineWorkflowSource = {
+  srtText: "",
+  scriptText: "",
+  srtFileName: "",
+  scriptFileName: "",
+  srtPath: "",
+  scriptPath: "",
+  audioPath: "",
+  audioFileName: "",
+};
 
 export const SCENE_DURATION_OPTIONS: SceneDurationSeconds[] = [4, 6, 8];
 
@@ -113,6 +136,8 @@ export interface TimelineSession {
   scenes: Scene[];
   visualBible: VisualBible;
   styleReference: TimelineStyleReference | null;
+  workflowMode: VideoWorkflowMode;
+  workflowSource: TimelineWorkflowSource;
   savedAt: string;
 }
 
@@ -120,6 +145,8 @@ export interface TimelineSessionInput {
   scenes: Scene[];
   visualBible: VisualBible;
   styleReference?: TimelineStyleReference | null;
+  workflowMode?: VideoWorkflowMode;
+  workflowSource?: TimelineWorkflowSource;
 }
 
 export interface TimelineSessionSummary {
@@ -129,6 +156,7 @@ export interface TimelineSessionSummary {
   createdAt: string;
   savedAt: string;
   active: boolean;
+  workflowMode: VideoWorkflowMode;
 }
 
 export interface TimelineSessionDeleteResult {
@@ -290,6 +318,30 @@ export function normalizeStyleReference(value: unknown): TimelineStyleReference 
   const estimatedBytes = Math.floor(encoded.length * 3 / 4);
   if (!encoded || estimatedBytes > MAX_STYLE_REFERENCE_BYTES) return null;
   return { name, mimeType, dataUrl };
+}
+
+export function normalizeVideoWorkflowMode(value: unknown): VideoWorkflowMode {
+  return value === "automatic" ? "automatic" : "two_step";
+}
+
+function workflowText(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.slice(0, maxLength) : "";
+}
+
+export function normalizeTimelineWorkflowSource(value: unknown): TimelineWorkflowSource {
+  const source = value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    srtText: workflowText(source.srtText, MAX_TIMELINE_FILE_BYTES),
+    scriptText: workflowText(source.scriptText, MAX_TIMELINE_FILE_BYTES),
+    srtFileName: workflowText(source.srtFileName, 260).trim(),
+    scriptFileName: workflowText(source.scriptFileName, 260).trim(),
+    srtPath: workflowText(source.srtPath, 4_096).trim(),
+    scriptPath: workflowText(source.scriptPath, 4_096).trim(),
+    audioPath: workflowText(source.audioPath, 4_096).trim(),
+    audioFileName: workflowText(source.audioFileName, 260).trim(),
+  };
 }
 
 export function validateGeneratedVisualBible(value: VisualBible): void {

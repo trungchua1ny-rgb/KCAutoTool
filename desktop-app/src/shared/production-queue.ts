@@ -10,6 +10,7 @@ export const QUEUE_PAUSE_CHANNEL = "production-queue:pause";
 export const QUEUE_RESUME_CHANNEL = "production-queue:resume";
 export const QUEUE_STOP_CHANNEL = "production-queue:stop";
 export const QUEUE_CLEAR_GENERATED_MEDIA_CHANNEL = "production-queue:clear-generated-media";
+export const QUEUE_CLEAR_SCENE_MEDIA_CHANNEL = "production-queue:clear-scene-media";
 export const QUEUE_RETRY_FAILED_CHANNEL = "production-queue:retry-failed";
 export const QUEUE_RESUME_FROM_CHANNEL = "production-queue:resume-from";
 export const QUEUE_REGENERATE_SCENE_CHANNEL = "production-queue:regenerate-scene";
@@ -96,6 +97,12 @@ export interface ClearGeneratedMediaResult {
   retainedScenes: number;
 }
 
+export interface ClearSceneMediaResult {
+  snapshot: ProductionQueueSnapshot;
+  sceneId: string;
+  deletedFiles: number;
+}
+
 export interface ProductionQueueBridge {
   getSnapshot: (projectId?: string) => Promise<ProductionQueueSnapshot>;
   generateAllImages: (
@@ -112,6 +119,10 @@ export interface ProductionQueueBridge {
   clearGeneratedMedia: (
     projectId?: string,
   ) => Promise<ClearGeneratedMediaResult>;
+  clearSceneMedia: (
+    sceneId: string,
+    projectId?: string,
+  ) => Promise<ClearSceneMediaResult>;
   retryFailed: (
     sceneIds: string[],
     projectId?: string,

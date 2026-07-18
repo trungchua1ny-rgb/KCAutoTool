@@ -23,7 +23,7 @@ async function temporaryDatabase(): Promise<{
 test("creates the complete project schema and logs scene state transitions", async () => {
   const { directory, database, repositories } = await temporaryDatabase();
   try {
-    assert.equal(database.schemaVersion, 2);
+    assert.equal(database.schemaVersion, 3);
     const tables = (database.db.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
     ).all() as Array<{ name: string }>).map((row) => row.name);
@@ -41,6 +41,10 @@ test("creates the complete project schema and logs scene state transitions", asy
       scriptText: "A complete supporting script",
       srtFileName: "story.srt",
       scriptFileName: "story.txt",
+      srtFilePath: "C:/project/story.srt",
+      scriptFilePath: "C:/project/story.txt",
+      audioFilePath: "C:/project/voice.wav",
+      audioFileName: "voice.wav",
       updatedAt: new Date().toISOString(),
     });
     assert.equal(repositories.sources.get(project.id)?.srtFileName, "story.srt");
@@ -154,6 +158,17 @@ test("migrates the latest LowDB timeline and graphic styles idempotently", async
     createdAt: "2026-07-15T01:02:03.000Z",
     savedAt: "2026-07-15T01:02:03.000Z",
     styleReference: null,
+    workflowMode: "two_step",
+    workflowSource: {
+      srtText: "",
+      scriptText: "",
+      srtFileName: "",
+      scriptFileName: "",
+      srtPath: "",
+      scriptPath: "",
+      audioPath: "",
+      audioFileName: "",
+    },
     visualBible: {
       style: "Hand-drawn stick figures",
       palette: "black, white, amber",

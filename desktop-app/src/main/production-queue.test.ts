@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -253,6 +253,184 @@ test("uses the previous clip final frame directly for continuation video", async
       "SELECT status FROM jobs WHERE job_type = 'extract_last_frame'",
     ).get() as { status: string };
     assert.equal(extractJob.status, "succeeded");
+  } finally {
+    queue.shutdown();
+    context.database.close();
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
+test("regenerating an upstream video replaces its files and rebuilds continuation from a fresh final frame", async () => {
+  const context = await fixture();
+  const worker = new FakeQueueWorker();
+  const generatedRoot = join(context.directory, "Downloads", "KC Auto Tool");
+  const projectDirectory = join(generatedRoot, projectOutputFolder(DEFAULT_PROJECT_ID));
+  await mkdir(projectDirectory, { recursive: true });
+  worker.resultDirectory = projectDirectory;
+  worker.persistResults = true;
+  const original = await context.sessionStore.load();
+  assert.ok(original);
+  await context.sessionStore.save({
+    ...original,
+    scenes: original.scenes.map((scene, index) => ({
+      ...scene,
+      timeStart: index === 0 ? "00:00:00,000" : "00:00:06,000",
+      timeEnd: index === 0 ? "00:00:06,000" : "00:00:10,000",
+      chainId: "replace-chain",
+      chainRole: index === 0 ? "start" as const : "continue" as const,
+      durationSeconds: index === 0 ? 6 as const : 4 as const,
+    })),
+  });
+  let extracted = 0;
+  const queue = new ProductionQueue(
+    context.database,
+    worker,
+    context.characterStore,
+    context.sessionStore,
+    () => {},
+    {
+      generatedMediaRoot: generatedRoot,
+      retryBackoffMs: [5],
+      extractLastFrame: async (_videoPath, outputPath) => {
+        extracted += 1;
+        await writeFile(outputPath, `fresh-frame-${extracted}`);
+      },
+    },
+  );
+  try {
+    await queue.start();
+    queue.setApprovalPolicy(true, false, DEFAULT_PROJECT_ID);
+    await queue.generateAllImages(DEFAULT_PROJECT_ID);
+    await waitFor(() => queue.getSnapshot().state === "idle");
+    const completedSnapshot = queue.getSnapshot();
+    const completedSession = await context.sessionStore.load();
+    assert.ok(completedSession);
+    await context.sessionStore.save({
+      ...completedSession,
+      scenes: completedSession.scenes.map((storedScene) => {
+        const completed = completedSnapshot.scenes.find((scene) => scene.sceneId === storedScene.id);
+        assert.ok(completed);
+        return {
+          ...storedScene,
+          imageStatus: completed.imageAssetPath ? "done" as const : "pending" as const,
+          imageResultPath: completed.imageAssetPath,
+          imageFlowAssetKey: completed.flowImageAssetId,
+          imageApproved: completed.approvedImage,
+          videoStatus: completed.videoAssetPath ? "done" as const : "pending" as const,
+          videoResultPath: completed.videoAssetPath,
+          videoApproved: completed.approvedVideo,
+        };
+      }),
+    });
+    const initialContinuation = completedSnapshot.scenes.find((scene) => scene.sceneId === "scene-002");
+    assert.ok(initialContinuation?.imageAssetPath);
+    assert.equal(await readFile(initialContinuation.imageAssetPath, "utf8"), "fresh-frame-1");
+
+    queue.stopQueue();
+    await queue.regenerateScene("scene-001", "video", DEFAULT_PROJECT_ID);
+    await waitFor(() => worker.calls.length === 5 && queue.getSnapshot().state === "stopped", 4_000);
+
+    assert.deepEqual(worker.calls, [
+      "scene-001:image",
+      "scene-001:video",
+      "scene-002:video",
+      "scene-001:video",
+      "scene-002:video",
+    ]);
+    const replacedContinuation = queue.getSnapshot().scenes.find((scene) => scene.sceneId === "scene-002");
+    assert.ok(replacedContinuation?.imageAssetPath);
+    assert.equal(await readFile(replacedContinuation.imageAssetPath, "utf8"), "fresh-frame-2");
+    assert.equal(extracted, 2);
+    const extractJobs = context.database.db.prepare(
+      "SELECT status FROM jobs WHERE job_type = 'extract_last_frame'",
+    ).all() as Array<{ status: string }>;
+    assert.equal(extractJobs.length, 1);
+    assert.equal(extractJobs[0].status, "succeeded");
+  } finally {
+    queue.shutdown();
+    context.database.close();
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
+test("a newly queued upstream video discards a stale continuation frame before moving to other scenes", async () => {
+  const context = await fixture();
+  const worker = new FakeQueueWorker();
+  const generatedRoot = join(context.directory, "Downloads", "KC Auto Tool");
+  const projectDirectory = join(generatedRoot, projectOutputFolder(DEFAULT_PROJECT_ID));
+  await mkdir(projectDirectory, { recursive: true });
+  const openingImage = join(projectDirectory, "scene-001-opening.png");
+  const staleFrame = join(projectDirectory, "scene-035-stale-frame.png");
+  const staleContinuationVideo = join(projectDirectory, "scene-036-stale.mp4");
+  await Promise.all([
+    writeFile(openingImage, "opening"),
+    writeFile(staleFrame, "stale-frame"),
+    writeFile(staleContinuationVideo, "stale-video"),
+  ]);
+  worker.resultDirectory = projectDirectory;
+  worker.persistResults = true;
+
+  const original = await context.sessionStore.load();
+  assert.ok(original);
+  const withStaleContinuation = await context.sessionStore.save({
+    ...original,
+    scenes: original.scenes.map((scene, index) => index === 0
+      ? {
+          ...scene,
+          chainId: "stale-chain",
+          chainRole: "start" as const,
+          imageStatus: "done" as const,
+          imageResultPath: openingImage,
+          imageFlowAssetKey: "flow:opening",
+          imageApproved: true,
+          videoStatus: "pending" as const,
+          videoResultPath: "",
+          videoApproved: false,
+        }
+      : {
+          ...scene,
+          chainId: "stale-chain",
+          chainRole: "continue" as const,
+          imagePrompt: "",
+          imageStatus: "done" as const,
+          imageResultPath: staleFrame,
+          imageFlowAssetKey: "",
+          imageApproved: true,
+          videoStatus: "done" as const,
+          videoResultPath: staleContinuationVideo,
+          videoApproved: false,
+        }),
+  });
+  syncTimelineSessionToProject(context.database, withStaleContinuation, []);
+  const repositories = new ProjectRepositories(context.database);
+  const [, continued] = repositories.scenes.listByProject(DEFAULT_PROJECT_ID);
+  repositories.scenes.setStartFrameAssetPath(continued.id, staleFrame);
+
+  const queue = new ProductionQueue(
+    context.database,
+    worker,
+    context.characterStore,
+    context.sessionStore,
+    () => {},
+    {
+      generatedMediaRoot: generatedRoot,
+      extractLastFrame: async (_videoPath, outputPath) => {
+        await writeFile(outputPath, "replacement-frame");
+      },
+    },
+  );
+  try {
+    await queue.start();
+    await queue.generateAllVideos(DEFAULT_PROJECT_ID, { onlyApprovedImages: true });
+    await waitFor(() => queue.getSnapshot().state === "idle");
+
+    assert.deepEqual(worker.calls, ["scene-001:video", "scene-002:video"]);
+    await assert.rejects(access(staleFrame));
+    await assert.rejects(access(staleContinuationVideo));
+    const refreshed = queue.getSnapshot().scenes.find((scene) => scene.sceneId === "scene-002");
+    assert.ok(refreshed?.imageAssetPath);
+    assert.notEqual(refreshed.imageAssetPath, staleFrame);
+    assert.equal(await readFile(refreshed.imageAssetPath, "utf8"), "replacement-frame");
   } finally {
     queue.shutdown();
     context.database.close();
@@ -618,6 +796,106 @@ test("regenerate only one scene does not wake other stopped jobs and may chain i
       "scene-001:image",
       "scene-001:video",
     ]);
+  } finally {
+    queue.shutdown();
+    context.database.close();
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
+test("deletes one scene result while preserving its Phase 3 prompt and other scene media", async () => {
+  const context = await fixture();
+  const worker = new FakeQueueWorker();
+  const generatedRoot = join(context.directory, "Downloads", "KC Auto Tool");
+  const projectDirectory = join(generatedRoot, projectOutputFolder(DEFAULT_PROJECT_ID));
+  await mkdir(projectDirectory, { recursive: true });
+  const firstImage = join(projectDirectory, "scene-001-image.png");
+  const firstVideo = join(projectDirectory, "scene-001-video.mp4");
+  const secondImage = join(projectDirectory, "scene-002-image.png");
+  await Promise.all([
+    writeFile(firstImage, "first-image"),
+    writeFile(firstVideo, "first-video"),
+    writeFile(secondImage, "second-image"),
+  ]);
+
+  const phase3 = await context.sessionStore.load();
+  assert.ok(phase3);
+  const firstPrompt = phase3.scenes[0].imagePrompt;
+  const withResults = await context.sessionStore.save({
+    visualBible: phase3.visualBible,
+    scenes: phase3.scenes.map((scene, index) => index === 0
+      ? {
+          ...scene,
+          imageStatus: "done" as const,
+          imageResultPath: firstImage,
+          imageFlowAssetKey: "flow:first",
+          imageApproved: true,
+          videoStatus: "done" as const,
+          videoResultPath: firstVideo,
+          videoApproved: true,
+        }
+      : {
+          ...scene,
+          imageStatus: "done" as const,
+          imageResultPath: secondImage,
+          imageFlowAssetKey: "flow:second",
+          imageApproved: true,
+        }),
+  });
+  syncTimelineSessionToProject(context.database, withResults, []);
+  const repositories = new ProjectRepositories(context.database);
+  const storedScenes = repositories.scenes.listByProject(DEFAULT_PROJECT_ID);
+  const timestamp = new Date().toISOString();
+  for (const [index, scene] of storedScenes.entries()) {
+    repositories.jobs.create({
+      id: `completed-image-job-${index + 1}`,
+      projectId: DEFAULT_PROJECT_ID,
+      sceneId: scene.id,
+      jobType: "image_generation",
+      status: "succeeded",
+      dependsOn: null,
+      attempts: 1,
+      maxAttempts: 3,
+      lastHeartbeatAt: timestamp,
+      lastError: null,
+      payloadHash: `completed-image-${index + 1}`,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+
+  const queue = new ProductionQueue(
+    context.database,
+    worker,
+    context.characterStore,
+    context.sessionStore,
+    () => {},
+    { generatedMediaRoot: generatedRoot },
+  );
+  try {
+    await queue.start();
+    const result = await queue.clearSceneMedia("scene-001", DEFAULT_PROJECT_ID);
+    assert.equal(result.sceneId, "scene-001");
+    assert.equal(result.deletedFiles, 2);
+    await assert.rejects(access(firstImage));
+    await assert.rejects(access(firstVideo));
+    await access(secondImage);
+
+    const snapshotFirst = result.snapshot.scenes.find((scene) => scene.sceneId === "scene-001");
+    const snapshotSecond = result.snapshot.scenes.find((scene) => scene.sceneId === "scene-002");
+    assert.equal(snapshotFirst?.status, "prompt_ready");
+    assert.equal(snapshotFirst?.imageAssetPath, "");
+    assert.equal(snapshotFirst?.videoAssetPath, "");
+    assert.equal(snapshotSecond?.imageAssetPath, secondImage);
+    assert.equal(result.snapshot.jobs.some((job) => job.sceneId === "scene-001"), false);
+    assert.equal(result.snapshot.jobs.some((job) => job.sceneId === "scene-002"), true);
+
+    const retained = await context.sessionStore.load();
+    assert.ok(retained);
+    assert.equal(retained.scenes[0].imagePrompt, firstPrompt);
+    assert.equal(retained.scenes[0].imageStatus, "pending");
+    assert.equal(retained.scenes[0].imageResultPath, "");
+    assert.equal(retained.scenes[1].imageResultPath, secondImage);
   } finally {
     queue.shutdown();
     context.database.close();

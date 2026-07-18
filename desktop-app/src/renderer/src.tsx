@@ -111,7 +111,7 @@ function App() {
             onClick={() => setView("timeline")}
           >
             <ListVideo size={16} aria-hidden="true" />
-            Timeline
+            Dựng video
           </button>
           <button
             type="button"

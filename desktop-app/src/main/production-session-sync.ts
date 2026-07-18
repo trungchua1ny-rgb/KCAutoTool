@@ -44,6 +44,19 @@ export function syncTimelineSessionToProject(
       });
     }
 
+    repositories.sources.upsert({
+      projectId,
+      srtText: session.workflowSource.srtText,
+      scriptText: session.workflowSource.scriptText,
+      srtFileName: session.workflowSource.srtFileName || null,
+      scriptFileName: session.workflowSource.scriptFileName || null,
+      srtFilePath: session.workflowSource.srtPath || null,
+      scriptFilePath: session.workflowSource.scriptPath || null,
+      audioFilePath: session.workflowSource.audioPath || null,
+      audioFileName: session.workflowSource.audioFileName || null,
+      updatedAt: session.savedAt,
+    });
+
     const visualBibleJson = JSON.stringify(session.visualBible);
     database.db.prepare(`
       INSERT INTO visual_bibles (

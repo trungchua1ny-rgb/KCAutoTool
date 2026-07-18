@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import {
   DEFAULT_PROJECT_ID,
   QUEUE_CLEAR_GENERATED_MEDIA_CHANNEL,
+  QUEUE_CLEAR_SCENE_MEDIA_CHANNEL,
   QUEUE_APPROVE_SCENE_CHANNEL,
   QUEUE_GENERATE_IMAGES_CHANNEL,
   QUEUE_GENERATE_VIDEOS_CHANNEL,
@@ -56,6 +57,13 @@ export function registerProductionQueueIpcHandlers(queue: ProductionQueue): void
     _event,
     value?: { projectId?: unknown },
   ) => queue.clearGeneratedMedia(projectId(value?.projectId)));
+  ipcMain.handle(QUEUE_CLEAR_SCENE_MEDIA_CHANNEL, (
+    _event,
+    value?: { sceneId?: unknown; projectId?: unknown },
+  ) => queue.clearSceneMedia(
+    sceneId(value?.sceneId),
+    projectId(value?.projectId),
+  ));
   ipcMain.handle(QUEUE_RETRY_FAILED_CHANNEL, (
     _event,
     value?: { sceneIds?: unknown; projectId?: unknown },

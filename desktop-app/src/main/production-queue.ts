@@ -11,6 +11,7 @@ import {
   DEFAULT_PROJECT_ID,
   QUEUE_ERROR_CATEGORIES,
   type ClearGeneratedMediaResult,
+  type ClearSceneMediaResult,
   type ProductionQueueSnapshot,
   type QueueErrorCategory,
   type QueueGenerateOptions,
@@ -253,6 +254,7 @@ export class ProductionQueue {
   private readonly generatedMediaRoot: string | null;
   private stoppingActiveJob = false;
   private singleRunJobId: string | null = null;
+  private readonly singleRunSceneIds = new Set<string>();
   private stateAfterSingleRun: "paused" | "stopped" | null = null;
 
   constructor(
@@ -461,6 +463,7 @@ export class ProductionQueue {
   stopQueue(): ProductionQueueSnapshot {
     this.state = "stopped";
     this.singleRunJobId = null;
+    this.singleRunSceneIds.clear();
     this.stateAfterSingleRun = null;
     this.persistState();
     if (this.activeJobId) {
@@ -615,6 +618,7 @@ export class ProductionQueue {
     this.forcedErrors.clear();
     this.activeJobId = null;
     this.singleRunJobId = null;
+    this.singleRunSceneIds.clear();
     this.stateAfterSingleRun = null;
     this.stoppingActiveJob = false;
     this.state = "idle";
@@ -625,6 +629,152 @@ export class ProductionQueue {
       deletedFiles,
       deletedDirectories,
       retainedScenes: scenes.length,
+    };
+  }
+
+  async clearSceneMedia(
+    sceneId: string,
+    projectId = DEFAULT_PROJECT_ID,
+  ): Promise<ClearSceneMediaResult> {
+    this.activeProjectId = projectId;
+    this.stopQueue();
+    const stopDeadline = Date.now() + 15_000;
+    while (this.activeJobId && Date.now() < stopDeadline) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+    }
+    if (this.activeJobId) {
+      throw new Error("Job hiện tại chưa dừng xong. Scene chưa bị xóa; hãy thử lại sau vài giây.");
+    }
+
+    await this.syncProject(projectId);
+    const scene = this.requireScene(projectId, sceneId);
+    const publicId = publicSceneId(projectId, scene.id);
+    const session = await this.sessionStore.load(projectId);
+    if (!session?.scenes.some((storedScene) => storedScene.id === publicId)) {
+      throw new Error(`Không tìm thấy scene ${publicId} trong phiên Phase 3.`);
+    }
+    const trackedPaths = [...new Set([
+      scene.startFrameAssetPath,
+      scene.imageAssetPath,
+      scene.videoAssetPath,
+    ].filter((path): path is string => Boolean(path?.trim())))];
+
+    const sharedPathKeys = new Set<string>();
+    const otherRows = this.database.db.prepare(`
+      SELECT start_frame_asset_path, image_asset_path, video_asset_path
+      FROM scenes WHERE id <> ?
+    `).all(scene.id) as Array<Record<string, unknown>>;
+    for (const row of otherRows) {
+      for (const value of [row.start_frame_asset_path, row.image_asset_path, row.video_asset_path]) {
+        if (typeof value === "string" && value.trim()) sharedPathKeys.add(normalizedPath(value));
+      }
+    }
+    for (const summary of await this.sessionStore.list()) {
+      const session = await this.sessionStore.load(summary.id);
+      for (const storedScene of session?.scenes || []) {
+        if (summary.id === projectId && storedScene.id === publicId) continue;
+        for (const value of [storedScene.imageResultPath, storedScene.videoResultPath]) {
+          if (value?.trim()) sharedPathKeys.add(normalizedPath(value));
+        }
+      }
+    }
+    const deletablePaths = trackedPaths.filter((path) => !sharedPathKeys.has(normalizedPath(path)));
+    const roots = new Map<string, string>();
+    if (this.generatedMediaRoot) roots.set(normalizedPath(this.generatedMediaRoot), this.generatedMediaRoot);
+    for (const path of deletablePaths) {
+      const root = generatedMediaRootFromPath(path);
+      if (root) roots.set(normalizedPath(root), validateGeneratedMediaRoot(root));
+    }
+    for (const path of deletablePaths) {
+      const insideKnownRoot = [...roots.values()].some((root) => isInsideDirectory(path, root));
+      if (insideKnownRoot) continue;
+      const exists = await access(path).then(() => true, () => false);
+      if (exists) throw new Error(`Không xóa vì file kết quả nằm ngoài thư mục KC Auto Tool: ${path}`);
+    }
+
+    let deletedFiles = 0;
+    for (const path of deletablePaths) {
+      const exists = await access(path).then(() => true, () => false);
+      if (!exists) continue;
+      await removeGeneratedPathWithRetry(path);
+      deletedFiles += 1;
+    }
+
+    await this.sessionStore.save({
+      visualBible: session.visualBible,
+      styleReference: session.styleReference,
+      scenes: session.scenes.map((storedScene) => storedScene.id === publicId
+        ? {
+            ...storedScene,
+            imageStatus: "pending" as const,
+            imageResultPath: "",
+            imageFlowAssetKey: "",
+            imageApproved: false,
+            videoStatus: "pending" as const,
+            videoResultPath: "",
+            videoApproved: false,
+          }
+        : storedScene),
+    }, projectId);
+
+    const affectedJobs = this.database.db.prepare(`
+      WITH RECURSIVE affected(id, scene_id) AS (
+        SELECT id, scene_id FROM jobs WHERE scene_id = ?
+        UNION ALL
+        SELECT child.id, child.scene_id
+        FROM jobs child JOIN affected parent ON child.depends_on = parent.id
+      )
+      SELECT DISTINCT id, scene_id FROM affected
+    `).all(scene.id) as Array<{ id: string; scene_id: string }>;
+    for (const job of affectedJobs) {
+      this.cancelRetry(job.id);
+      this.forcedErrors.delete(job.id);
+    }
+    this.database.transaction(() => {
+      this.database.db.prepare(`
+        WITH RECURSIVE affected(id) AS (
+          SELECT id FROM jobs WHERE scene_id = ?
+          UNION ALL
+          SELECT child.id FROM jobs child JOIN affected parent ON child.depends_on = parent.id
+        )
+        DELETE FROM jobs WHERE id IN (SELECT id FROM affected)
+      `).run(scene.id);
+      this.database.db.prepare(`
+        UPDATE scenes SET
+          start_frame_asset_path = NULL,
+          status = 'prompt_ready',
+          image_asset_path = NULL,
+          flow_image_asset_id = NULL,
+          video_asset_path = NULL,
+          approved_image = 0,
+          approved_video = 0,
+          last_error = NULL,
+          updated_at = ?
+        WHERE id = ?
+      `).run(now(), scene.id);
+      for (const dependentSceneId of new Set(affectedJobs.map((job) => job.scene_id))) {
+        if (dependentSceneId !== scene.id) this.repositories.scenes.resetPendingQueueState(dependentSceneId);
+      }
+      for (const bible of this.repositories.visualBibles.listByProject(projectId)) {
+        const retainedAnchors = bible.anchorImagePaths.filter((path) =>
+          !deletablePaths.some((deletedPath) => normalizedPath(deletedPath) === normalizedPath(path))
+        );
+        this.repositories.visualBibles.setAnchors(bible.id, retainedAnchors, bible.locked);
+      }
+    });
+
+    this.activeJobId = null;
+    this.singleRunJobId = null;
+    this.singleRunSceneIds.clear();
+    this.stateAfterSingleRun = null;
+    this.stoppingActiveJob = false;
+    this.state = "stopped";
+    this.persistState();
+    this.emitChanged(projectId);
+    return {
+      snapshot: this.getSnapshot(projectId),
+      sceneId: publicId,
+      deletedFiles,
     };
   }
 
@@ -673,14 +823,142 @@ export class ProductionQueue {
     mediaType: SceneMediaType,
     projectId = DEFAULT_PROJECT_ID,
   ): Promise<ProductionQueueSnapshot> {
+    if (this.activeJobId) {
+      this.stopQueue();
+      const deadline = Date.now() + 15_000;
+      while (this.activeJobId && Date.now() < deadline) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+      }
+      if (this.activeJobId) {
+        throw new Error("Job hiện tại chưa dừng xong; chưa xóa kết quả cũ để tạo lại.");
+      }
+    }
     await this.syncProject(projectId);
     const scene = this.requireScene(projectId, sceneId);
-    for (const job of this.repositories.jobs.listByScene(scene.id)) this.cancelRetry(job.id);
+    if (scene.chainRole === "continue" && mediaType === "image") {
+      throw new Error("Scene tiếp nối dùng frame cuối của video trước, không tạo lại ảnh riêng. Hãy tạo lại video trước hoặc video của scene này.");
+    }
+    if (mediaType === "video" && !scene.imageAssetPath) {
+      throw new Error("Không thể tạo lại video trước khi scene có ảnh hoặc frame bắt đầu.");
+    }
+    const session = await this.sessionStore.load(projectId);
+    const targetPublicId = publicSceneId(projectId, scene.id);
+    if (!session?.scenes.some((storedScene) => storedScene.id === targetPublicId)) {
+      throw new Error(`Không tìm thấy ${targetPublicId} trong phiên Phase 3.`);
+    }
+
+    const projectScenes = this.repositories.scenes.listByProject(projectId);
+    const continuationScenes: SceneRecord[] = [];
+    if (scene.chainId) {
+      for (let orderIndex = scene.orderIndex + 1; ; orderIndex += 1) {
+        const next = projectScenes.find((candidate) => candidate.orderIndex === orderIndex);
+        if (!next || next.chainRole !== "continue" || next.chainId !== scene.chainId) break;
+        continuationScenes.push(next);
+      }
+    }
+    const invalidatedScenes = [scene, ...continuationScenes];
+    const invalidatedIds = new Set(invalidatedScenes.map((entry) => entry.id));
+    const pathsToDelete = invalidatedScenes.flatMap((entry) => {
+      if (entry.id === scene.id && mediaType === "video") {
+        return entry.videoAssetPath ? [entry.videoAssetPath] : [];
+      }
+      return [entry.startFrameAssetPath, entry.imageAssetPath, entry.videoAssetPath]
+        .filter((path): path is string => Boolean(path?.trim()));
+    });
+    const deletedPathKeys = await this.removeGeneratedPathsForReplacement(
+      projectId,
+      invalidatedIds,
+      pathsToDelete,
+    );
+
+    const invalidatedPublicIds = new Set(
+      invalidatedScenes.map((entry) => publicSceneId(projectId, entry.id)),
+    );
+    await this.sessionStore.save({
+      visualBible: session.visualBible,
+      styleReference: session.styleReference,
+      scenes: session.scenes.map((storedScene) => {
+        if (!invalidatedPublicIds.has(storedScene.id)) return storedScene;
+        if (storedScene.id === targetPublicId && mediaType === "video") {
+          return {
+            ...storedScene,
+            videoStatus: "pending" as const,
+            videoResultPath: "",
+            videoApproved: false,
+          };
+        }
+        return {
+          ...storedScene,
+          imageStatus: "pending" as const,
+          imageResultPath: "",
+          imageFlowAssetKey: "",
+          imageApproved: false,
+          videoStatus: "pending" as const,
+          videoResultPath: "",
+          videoApproved: false,
+        };
+      }),
+    }, projectId);
+
+    const allJobs = this.repositories.jobs.listByProject(projectId);
+    const removedJobIds = new Set(
+      allJobs.filter((job) => job.sceneId && invalidatedIds.has(job.sceneId)).map((job) => job.id),
+    );
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const job of allJobs) {
+        if (removedJobIds.has(job.id) || !job.dependsOn || !removedJobIds.has(job.dependsOn)) continue;
+        removedJobIds.add(job.id);
+        expanded = true;
+      }
+    }
+    for (const jobId of removedJobIds) {
+      this.cancelRetry(jobId);
+      this.forcedErrors.delete(jobId);
+    }
+    const affectedJobSceneIds = new Set(
+      allJobs.filter((job) => removedJobIds.has(job.id) && job.sceneId).map((job) => job.sceneId!),
+    );
+    this.database.transaction(() => {
+      if (removedJobIds.size > 0) {
+        const placeholders = [...removedJobIds].map(() => "?").join(", ");
+        this.database.db.prepare(`DELETE FROM jobs WHERE id IN (${placeholders})`).run(...removedJobIds);
+      }
+      for (const continued of continuationScenes) {
+        this.database.db.prepare(`
+          UPDATE scenes SET
+            start_frame_asset_path = NULL,
+            status = 'prompt_ready',
+            image_asset_path = NULL,
+            flow_image_asset_id = NULL,
+            video_asset_path = NULL,
+            approved_image = 0,
+            approved_video = 0,
+            last_error = NULL,
+            updated_at = ?
+          WHERE id = ?
+        `).run(now(), continued.id);
+      }
+      for (const affectedSceneId of affectedJobSceneIds) {
+        if (!invalidatedIds.has(affectedSceneId)) {
+          this.repositories.scenes.resetPendingQueueState(affectedSceneId);
+        }
+      }
+      for (const bible of this.repositories.visualBibles.listByProject(projectId)) {
+        const retainedAnchors = bible.anchorImagePaths.filter((path) =>
+          !deletedPathKeys.has(normalizedPath(path))
+        );
+        this.repositories.visualBibles.setAnchors(bible.id, retainedAnchors, bible.locked);
+      }
+    });
     const reset = this.repositories.scenes.resetForMedia(scene.id, mediaType);
     const job = this.enqueueScene(reset, mediaType);
     if (this.state === "stopped" || this.state === "paused") {
       this.activeProjectId = projectId;
       this.singleRunJobId = job.id;
+      this.singleRunSceneIds.clear();
+      for (const entry of invalidatedScenes) this.singleRunSceneIds.add(entry.id);
       this.stateAfterSingleRun = this.state;
       this.state = "running";
       this.emitChanged(projectId);
@@ -798,6 +1076,7 @@ export class ProductionQueue {
   private run(projectId: string): ProductionQueueSnapshot {
     this.activeProjectId = projectId;
     this.singleRunJobId = null;
+    this.singleRunSceneIds.clear();
     this.stateAfterSingleRun = null;
     this.state = "running";
     this.persistState();
@@ -922,8 +1201,13 @@ export class ProductionQueue {
           this.emitChanged();
           return;
         }
-        this.finishSingleRun();
-        return;
+        const next = this.nextSingleRunJob();
+        if (!next) {
+          this.finishSingleRun();
+          return;
+        }
+        this.singleRunJobId = next.id;
+        job = next;
       }
     }
     if (!job) {
@@ -946,8 +1230,12 @@ export class ProductionQueue {
         selected.status === "succeeded" ||
         (selected.status === "failed" && !this.retryTimers.has(selected.id))
       ) {
-        this.finishSingleRun();
-        return;
+        const next = this.nextSingleRunJob();
+        if (!next) {
+          this.finishSingleRun();
+          return;
+        }
+        this.singleRunJobId = next.id;
       }
     }
     this.schedulePump(0);
@@ -986,6 +1274,14 @@ export class ProductionQueue {
     this.emitChanged(job.projectId);
 
     try {
+      if (mediaType === "video") {
+        const next = this.repositories.scenes.listByProject(scene.projectId)
+          .find((candidate) => candidate.orderIndex === scene.orderIndex + 1);
+        if (next?.chainRole === "continue" && next.chainId && next.chainId === scene.chainId) {
+          await this.invalidateContinuationChain(next);
+          this.emitChanged(job.projectId);
+        }
+      }
       const input = await this.buildWorkerInput(scene, mediaType);
       const result = await this.worker.runSceneJob(input, () => {
         const current = this.repositories.jobs.get(job.id);
@@ -1250,11 +1546,178 @@ export class ProductionQueue {
 
   private finishSingleRun(): void {
     this.singleRunJobId = null;
+    this.singleRunSceneIds.clear();
     const restore = this.stateAfterSingleRun;
     this.stateAfterSingleRun = null;
     this.state = restore || "idle";
     this.persistState();
     this.emitChanged();
+  }
+
+  private nextSingleRunJob(): JobRecord | null {
+    if (this.singleRunSceneIds.size === 0) return null;
+    const sceneOrder = new Map(
+      this.repositories.scenes.listByProject(this.activeProjectId)
+        .map((scene) => [scene.id, scene.orderIndex]),
+    );
+    return this.repositories.jobs.listByProject(this.activeProjectId)
+      .filter((job) => {
+        if (job.status !== "queued" || !job.sceneId || !this.singleRunSceneIds.has(job.sceneId)) {
+          return false;
+        }
+        const dependency = job.dependsOn ? this.repositories.jobs.get(job.dependsOn) : null;
+        return !dependency || dependency.status === "succeeded";
+      })
+      .sort((left, right) =>
+        (sceneOrder.get(left.sceneId || "") ?? Number.MAX_SAFE_INTEGER) -
+          (sceneOrder.get(right.sceneId || "") ?? Number.MAX_SAFE_INTEGER) ||
+        left.createdAt.localeCompare(right.createdAt)
+      )[0] || null;
+  }
+
+  private async invalidateContinuationChain(first: SceneRecord): Promise<void> {
+    const projectScenes = this.repositories.scenes.listByProject(first.projectId);
+    const chain: SceneRecord[] = [];
+    for (let orderIndex = first.orderIndex; ; orderIndex += 1) {
+      const scene = projectScenes.find((candidate) => candidate.orderIndex === orderIndex);
+      if (!scene || scene.chainRole !== "continue" || scene.chainId !== first.chainId) break;
+      chain.push(scene);
+    }
+    if (chain.length === 0) return;
+
+    const chainIds = new Set(chain.map((scene) => scene.id));
+    const paths = chain.flatMap((scene) => [
+      scene.startFrameAssetPath,
+      scene.imageAssetPath,
+      scene.videoAssetPath,
+    ].filter((path): path is string => Boolean(path?.trim())));
+    const deletedPathKeys = await this.removeGeneratedPathsForReplacement(
+      first.projectId,
+      chainIds,
+      paths,
+    );
+
+    const session = await this.sessionStore.load(first.projectId);
+    if (!session) throw new Error("Không tìm thấy phiên Phase 3 để làm mới chuỗi continue.");
+    const publicIds = new Set(chain.map((scene) => publicSceneId(first.projectId, scene.id)));
+    await this.sessionStore.save({
+      visualBible: session.visualBible,
+      styleReference: session.styleReference,
+      scenes: session.scenes.map((scene) => publicIds.has(scene.id)
+        ? {
+            ...scene,
+            imageStatus: "pending" as const,
+            imageResultPath: "",
+            imageFlowAssetKey: "",
+            imageApproved: false,
+            videoStatus: "pending" as const,
+            videoResultPath: "",
+            videoApproved: false,
+          }
+        : scene),
+    }, first.projectId);
+
+    const allJobs = this.repositories.jobs.listByProject(first.projectId);
+    const removedJobIds = new Set(
+      allJobs.filter((job) => job.sceneId && chainIds.has(job.sceneId)).map((job) => job.id),
+    );
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const job of allJobs) {
+        if (removedJobIds.has(job.id) || !job.dependsOn || !removedJobIds.has(job.dependsOn)) continue;
+        removedJobIds.add(job.id);
+        expanded = true;
+      }
+    }
+    for (const jobId of removedJobIds) {
+      this.cancelRetry(jobId);
+      this.forcedErrors.delete(jobId);
+    }
+    const affectedJobSceneIds = new Set(
+      allJobs.filter((job) => removedJobIds.has(job.id) && job.sceneId).map((job) => job.sceneId!),
+    );
+    this.database.transaction(() => {
+      if (removedJobIds.size > 0) {
+        const placeholders = [...removedJobIds].map(() => "?").join(", ");
+        this.database.db.prepare(`DELETE FROM jobs WHERE id IN (${placeholders})`).run(...removedJobIds);
+      }
+      for (const scene of chain) {
+        this.database.db.prepare(`
+          UPDATE scenes SET
+            start_frame_asset_path = NULL,
+            status = 'prompt_ready',
+            image_asset_path = NULL,
+            flow_image_asset_id = NULL,
+            video_asset_path = NULL,
+            approved_image = 0,
+            approved_video = 0,
+            last_error = NULL,
+            updated_at = ?
+          WHERE id = ?
+        `).run(now(), scene.id);
+      }
+      for (const affectedSceneId of affectedJobSceneIds) {
+        if (!chainIds.has(affectedSceneId)) {
+          this.repositories.scenes.resetPendingQueueState(affectedSceneId);
+        }
+      }
+      for (const bible of this.repositories.visualBibles.listByProject(first.projectId)) {
+        const retainedAnchors = bible.anchorImagePaths.filter((path) =>
+          !deletedPathKeys.has(normalizedPath(path))
+        );
+        this.repositories.visualBibles.setAnchors(bible.id, retainedAnchors, bible.locked);
+      }
+    });
+  }
+
+  private async removeGeneratedPathsForReplacement(
+    projectId: string,
+    replacedSceneIds: Set<string>,
+    paths: string[],
+  ): Promise<Set<string>> {
+    const trackedPaths = [...new Set(paths.filter((path) => path.trim()))];
+    const sharedPathKeys = new Set<string>();
+    const rows = this.database.db.prepare(`
+      SELECT id, start_frame_asset_path, image_asset_path, video_asset_path FROM scenes
+    `).all() as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      if (typeof row.id === "string" && replacedSceneIds.has(row.id)) continue;
+      for (const value of [row.start_frame_asset_path, row.image_asset_path, row.video_asset_path]) {
+        if (typeof value === "string" && value.trim()) sharedPathKeys.add(normalizedPath(value));
+      }
+    }
+    const replacedPublicIds = new Set([...replacedSceneIds].map((id) => publicSceneId(projectId, id)));
+    for (const summary of await this.sessionStore.list()) {
+      const session = await this.sessionStore.load(summary.id);
+      for (const storedScene of session?.scenes || []) {
+        if (summary.id === projectId && replacedPublicIds.has(storedScene.id)) continue;
+        for (const value of [storedScene.imageResultPath, storedScene.videoResultPath]) {
+          if (value?.trim()) sharedPathKeys.add(normalizedPath(value));
+        }
+      }
+    }
+    const deletablePaths = trackedPaths.filter((path) => !sharedPathKeys.has(normalizedPath(path)));
+    const roots = new Map<string, string>();
+    if (this.generatedMediaRoot) roots.set(normalizedPath(this.generatedMediaRoot), this.generatedMediaRoot);
+    for (const path of deletablePaths) {
+      const root = generatedMediaRootFromPath(path);
+      if (root) roots.set(normalizedPath(root), validateGeneratedMediaRoot(root));
+    }
+    for (const path of deletablePaths) {
+      const insideKnownRoot = [...roots.values()].some((root) => isInsideDirectory(path, root));
+      if (insideKnownRoot) continue;
+      const exists = await access(path).then(() => true, () => false);
+      if (exists) throw new Error(`Không thay thế vì file cũ nằm ngoài thư mục KC Auto Tool: ${path}`);
+    }
+    const deletedPathKeys = new Set<string>();
+    for (const path of deletablePaths) {
+      const exists = await access(path).then(() => true, () => false);
+      if (!exists) continue;
+      await removeGeneratedPathWithRetry(path);
+      deletedPathKeys.add(normalizedPath(path));
+    }
+    return deletedPathKeys;
   }
 
   private persistState(): void {

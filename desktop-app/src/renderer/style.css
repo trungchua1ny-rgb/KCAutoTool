@@ -197,6 +197,218 @@ body {
   min-height: 38px;
 }
 
+.video-workflow-panel {
+  display: grid;
+  gap: 13px;
+  margin-top: 12px;
+  padding: 15px;
+  border: 1px solid #cfd8d4;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #f8fbfa 0%, #f5f7fa 100%);
+}
+
+.video-workflow-heading,
+.workflow-output-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.video-workflow-heading strong,
+.workflow-output-panel h3 {
+  display: block;
+  margin: 3px 0 0;
+  color: #1d2939;
+  font-size: 15px;
+}
+
+.workflow-save-hint,
+.workflow-output-panel > header > span {
+  color: #667085;
+  font-size: 11px;
+}
+
+.workflow-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.workflow-mode-card {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  min-height: 78px;
+  padding: 12px;
+  border: 1px solid #d7dde2;
+  border-radius: 8px;
+  background: #fff;
+  color: #344054;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workflow-mode-card:hover:not(:disabled) {
+  border-color: #87b7a6;
+}
+
+.workflow-mode-card.is-selected {
+  border-color: #16815e;
+  box-shadow: 0 0 0 2px #dff2ea;
+  background: #f7fcfa;
+}
+
+.workflow-mode-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.workflow-mode-card > span:last-child {
+  display: grid;
+  gap: 5px;
+}
+
+.workflow-mode-card strong {
+  font-size: 13px;
+}
+
+.workflow-mode-card small {
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.workflow-mode-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  background: #edf2f0;
+  color: #475467;
+}
+
+.workflow-mode-card.is-selected .workflow-mode-icon {
+  background: #dff2ea;
+  color: #126b4e;
+}
+
+.workflow-step-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 54px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.workflow-step-strip > div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #98a2b3;
+}
+
+.workflow-step-strip > div > span {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: #e7eaee;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workflow-step-strip p {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+
+.workflow-step-strip strong {
+  font-size: 11px;
+}
+
+.workflow-step-strip small {
+  font-size: 10px;
+}
+
+.workflow-step-strip > i {
+  height: 1px;
+  background: #d7dde2;
+}
+
+.workflow-step-strip > div.is-active,
+.workflow-step-strip > div.is-complete {
+  color: #344054;
+}
+
+.workflow-step-strip > div.is-active > span {
+  background: #fff0cf;
+  color: #895900;
+}
+
+.workflow-step-strip > div.is-complete > span {
+  background: #dff2ea;
+  color: #126b4e;
+}
+
+.workflow-output-panel {
+  display: grid;
+  gap: 11px;
+  margin-top: 12px;
+  padding: 13px;
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.workflow-output-panel h3,
+.workflow-output-panel p {
+  margin: 0;
+}
+
+.workflow-output-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.workflow-output-grid article {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border-radius: 6px;
+  background: #f7f9fa;
+  color: #475467;
+}
+
+.workflow-output-grid article > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.workflow-output-grid strong {
+  color: #344054;
+  font-size: 11px;
+}
+
+.workflow-output-grid span {
+  overflow: hidden;
+  color: #667085;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .timeline-file {
   position: relative;
   display: grid;
@@ -455,6 +667,12 @@ body {
   color: #202428;
   font-family: "Segoe UI", Arial, sans-serif;
   font-size: 14px;
+}
+
+.scene-delete-result {
+  width: 26px;
+  height: 26px;
+  margin-top: 8px;
 }
 
 .scene-chain-cell {
@@ -2008,6 +2226,28 @@ input:focus-visible {
 @media (max-width: 760px) {
   .workspace-session-bar {
     grid-template-columns: 1fr;
+  }
+
+  .workflow-mode-grid,
+  .workflow-output-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .video-workflow-heading,
+  .workflow-output-panel > header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .workflow-step-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-step-strip > i {
+    width: 1px;
+    height: 16px;
+    margin-left: 13px;
   }
 
   .visual-bible-fields {

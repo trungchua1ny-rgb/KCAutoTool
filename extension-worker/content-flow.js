@@ -783,12 +783,14 @@ async function confirmVideoGenerationMode(mode) {
 }
 
 function isDurationControl(control, seconds) {
-  if (new RegExp(`-(?:trigger|content)-${seconds}$`, "i").test(flowControlIdentity(control))) {
-    return true;
-  }
+  if (String(control?.getAttribute?.("role") || "").toLowerCase() !== "tab") return false;
+  const identityMatches = new RegExp(`-(?:trigger|content)-${seconds}$`, "i")
+    .test(flowControlIdentity(control));
   const label = cleanFlowOptionLabel(control);
-  return !/\d+\s*:\s*\d+/.test(label) &&
-    new RegExp(`^${seconds}(?:\\s*(?:s|sec|secs|seconds|gi\\u00e2y))?$`, "i").test(label);
+  // Flow also has an output-count control labelled x4. Identity alone can
+  // therefore select the wrong Radix tab. Duration is valid only when both
+  // the stable identity and the visible `${seconds}s` label agree.
+  return identityMatches && new RegExp(`^${seconds}\\s*s$`, "i").test(label);
 }
 
 async function getVideoAspectRatioOption() {
@@ -835,17 +837,11 @@ async function confirmVideoAspectRatio() {
 async function getVideoDurationOption(durationSeconds) {
   const seconds = [4, 6, 8].includes(Number(durationSeconds)) ? Number(durationSeconds) : 8;
   const option = await waitUntil(() => {
-    const exactTab = [...document.querySelectorAll(
+    return [...document.querySelectorAll(
       `button[role="tab"][id$="-trigger-${seconds}"], button[role="tab"][aria-controls$="-content-${seconds}"]`,
-    )].filter(isVisible)[0];
-    if (exactTab) return exactTab;
-    return [...document.querySelectorAll('button, [role="tab"], [role="option"], [role="radio"]')]
+    )]
       .filter(isVisible)
-      .find((control) => {
-        const label = cleanFlowOptionLabel(control);
-        if (/\d+\s*:\s*\d+/.test(label)) return false; // Never confuse 9:16 with duration.
-        return new RegExp(`^${seconds}(?:\\s*(?:s|sec|secs|seconds|gi\\u00e2y))?$`, "i").test(label);
-      }) || null;
+      .find((control) => isDurationControl(control, seconds)) || null;
   }, 8000);
   return option
     ? {
@@ -859,7 +855,7 @@ async function getVideoDurationOption(durationSeconds) {
     : {
       ok: false,
       code: "FLOW_VIDEO_DURATION_NOT_FOUND",
-      error: `Video settings popup has no ${seconds}-second option.`,
+      error: `Video settings popup has no exact ${seconds}s duration tab (trigger-${seconds}/content-${seconds}).`,
     };
 }
 
@@ -2357,6 +2353,7 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     findStartFrameButton,
     getMediaModeOption,
     getVideoGenerationModeOption,
+    getVideoDurationOption,
     confirmVideoGenerationMode,
     checkForNewVideo,
     videoBaselineSnapshot,

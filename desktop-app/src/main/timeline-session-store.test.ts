@@ -42,6 +42,17 @@ test("persists, switches, renames, and deletes multiple timeline sessions", asyn
         mimeType: "image/png",
         dataUrl: "data:image/png;base64,iVBORw0KGgo=",
       },
+      workflowMode: "automatic",
+      workflowSource: {
+        srtText: "1\n00:00:00,000 --> 00:00:08,000\nOpening",
+        scriptText: "A saved source script",
+        srtFileName: "story.srt",
+        scriptFileName: "story.txt",
+        srtPath: "C:/project/story.srt",
+        scriptPath: "C:/project/story.txt",
+        audioPath: "C:/project/voice.wav",
+        audioFileName: "voice.wav",
+      },
     });
     assert.equal(saved.scenes[0].imagePrompt, "A saved scene");
     assert.equal(saved.visualBible.palette, "teal and gold");
@@ -53,6 +64,8 @@ test("persists, switches, renames, and deletes multiple timeline sessions", asyn
     assert.equal(restored?.scenes[0].imageFlowAssetKey, SCENES[0].imageFlowAssetKey);
     assert.equal(restored?.visualBible.style, "cinematic 3D");
     assert.equal(restored?.styleReference?.name, "sample.png");
+    assert.equal(restored?.workflowMode, "automatic");
+    assert.equal(restored?.workflowSource.audioFileName, "voice.wav");
 
     const second = await reloaded.create("Project two");
     assert.equal((await reloaded.list()).length, 2);

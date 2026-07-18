@@ -214,6 +214,7 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     findStartFrameButton: () => FakeControl | null;
     getMediaModeOption: (mediaType: "image" | "video") => Promise<Record<string, unknown>>;
     getVideoGenerationModeOption: (mode: "frames" | "ingredients") => Promise<Record<string, unknown>>;
+    getVideoDurationOption: (seconds: number) => Promise<Record<string, unknown>>;
     confirmVideoGenerationMode: (mode: "frames" | "ingredients") => Promise<Record<string, unknown>>;
     checkForNewVideo: (baseline: string[]) => Record<string, unknown>;
     videoBaselineSnapshot: () => Set<string>;
@@ -362,6 +363,41 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   assert.equal(internals.findEndFrameButton(), endFrame);
 
   controls.length = 0;
+  const outputCountX4 = new FakeControl(
+    "radix-:output-count:-trigger-4",
+    "x4",
+    {
+      "aria-controls": "radix-:output-count:-content-4",
+      "aria-selected": "false",
+      "data-state": "inactive",
+      role: "tab",
+    },
+  );
+  const duration4s = new FakeControl(
+    "radix-:r2ap:-trigger-4",
+    "4s",
+    {
+      "aria-controls": "radix-:r2ap:-content-4",
+      "aria-selected": "false",
+      "data-state": "inactive",
+      role: "tab",
+    },
+  );
+  controls.push(outputCountX4, duration4s);
+  assert.deepEqual(
+    { ...(await internals.getVideoDurationOption(4)) },
+    {
+      ok: true,
+      x: 70,
+      y: 30,
+      label: "4s",
+      identity: "radix-:r2ap:-trigger-4 radix-:r2ap:-content-4",
+      alreadySelected: false,
+      durationSeconds: 4,
+    },
+  );
+
+  controls.length = 0;
   controls.push(new FakeControl(
     "radix-:test:-trigger-8",
     "8s",
@@ -369,6 +405,7 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
       "aria-controls": "radix-:test:-content-8",
       "aria-selected": "true",
       "data-state": "active",
+      role: "tab",
     },
   ));
   assert.deepEqual(

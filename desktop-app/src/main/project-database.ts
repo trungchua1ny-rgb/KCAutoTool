@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const MIGRATION_1 = `
 CREATE TABLE IF NOT EXISTS projects (
@@ -152,6 +152,13 @@ CREATE INDEX idx_jobs_depends_on ON jobs(depends_on);
 CREATE INDEX idx_project_characters_project ON project_characters(project_id, token);
 `;
 
+const MIGRATION_3 = `
+ALTER TABLE project_sources ADD COLUMN srt_file_path TEXT;
+ALTER TABLE project_sources ADD COLUMN script_file_path TEXT;
+ALTER TABLE project_sources ADD COLUMN audio_file_path TEXT;
+ALTER TABLE project_sources ADD COLUMN audio_file_name TEXT;
+`;
+
 export class ProjectDatabase {
   private connection: DatabaseSync | null = null;
 
@@ -208,6 +215,13 @@ export class ProjectDatabase {
       this.transaction(() => {
         this.db.exec(MIGRATION_2);
         this.db.exec("PRAGMA user_version = 2");
+      });
+      current = 2;
+    }
+    if (current < 3) {
+      this.transaction(() => {
+        this.db.exec(MIGRATION_3);
+        this.db.exec("PRAGMA user_version = 3");
       });
     }
   }

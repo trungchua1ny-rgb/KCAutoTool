@@ -182,6 +182,12 @@ Extension version `2.47.0` removes a slow-machine race in character-assisted ima
 
 Extension version `2.48.0` treats the `cancel` material-symbol overlay on a prompt attachment as authoritative evidence that Google Flow accepted a character image. The worker no longer uploads the same character repeatedly when Flow represents the ingredient without a detectable `img`; after this marker appears, character-assisted image jobs paste and submit immediately. Non-character jobs keep the existing prompt read-back checkpoint.
 
+Extension version `2.49.0` locks duration selection to an exact Radix duration tab: stable `trigger-N`/`content-N` identity plus the visible `Ns` label. This specifically prevents a requested 4-second clip from clicking Flow's unrelated `x4` output-count control.
+
+KC Auto Tool now also provides a trash action on every timeline row. It stops production safely and deletes only that scene's downloaded image, video, extracted frame, and related queue jobs while preserving its Phase 3 prompts, character assignment, the other scene results, and all media stored in Google Flow.
+
+Regenerate now performs replacement instead of layering a new result over stale files. Rebuilding an image removes that scene's old image and video; rebuilding a video removes its old clip. If the changed clip leads into one or more `continue` scenes, KC Auto Tool invalidates their old extracted frames and videos, then runs the isolated chain `new upstream video -> new final-frame extraction -> rebuilt continuation video` without waking unrelated stopped jobs.
+
 Extension version `2.32.0` also adds **Sửa chính sách** beside a failed image or video prompt. The action stops both direct Flow work and the production queue, asks ChatGPT for one policy-safe replacement without evasion, validates and saves it, resets the failed scene, then resumes production from that exact prompt. If rewriting or validation fails, the original prompt remains and the queue stays stopped.
 
 When the app restarts, orphaned `running` jobs are returned to `queued` without

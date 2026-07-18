@@ -538,17 +538,23 @@ export class ProjectSourceRepository {
   upsert(input: ProjectSourceRecord): ProjectSourceRecord {
     this.database.db.prepare(`
       INSERT INTO project_sources (
-        project_id, srt_text, script_text, srt_file_name, script_file_name, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
+        project_id, srt_text, script_text, srt_file_name, script_file_name,
+        srt_file_path, script_file_path, audio_file_path, audio_file_name, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(project_id) DO UPDATE SET
         srt_text = excluded.srt_text,
         script_text = excluded.script_text,
         srt_file_name = excluded.srt_file_name,
         script_file_name = excluded.script_file_name,
+        srt_file_path = excluded.srt_file_path,
+        script_file_path = excluded.script_file_path,
+        audio_file_path = excluded.audio_file_path,
+        audio_file_name = excluded.audio_file_name,
         updated_at = excluded.updated_at
     `).run(
       input.projectId, input.srtText, input.scriptText, input.srtFileName,
-      input.scriptFileName, input.updatedAt,
+      input.scriptFileName, input.srtFilePath, input.scriptFilePath,
+      input.audioFilePath, input.audioFileName, input.updatedAt,
     );
     return this.get(input.projectId)!;
   }
@@ -563,6 +569,10 @@ export class ProjectSourceRepository {
       scriptText: text(row.script_text),
       srtFileName: nullableText(row.srt_file_name),
       scriptFileName: nullableText(row.script_file_name),
+      srtFilePath: nullableText(row.srt_file_path),
+      scriptFilePath: nullableText(row.script_file_path),
+      audioFilePath: nullableText(row.audio_file_path),
+      audioFileName: nullableText(row.audio_file_name),
       updatedAt: text(row.updated_at),
     } : null;
   }

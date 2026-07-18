@@ -30,6 +30,7 @@ import {
   type SceneJobProgress,
 } from "../shared/scene-job";
 import {
+  DEFAULT_TIMELINE_WORKFLOW_SOURCE,
   DEFAULT_VISUAL_BIBLE,
   MAX_TIMELINE_FILE_BYTES,
   normalizeStoredScenes,
@@ -42,6 +43,8 @@ import {
   type TimelineSession,
   type TimelineSessionSummary,
   type TimelineStyleReference,
+  type TimelineWorkflowSource,
+  type VideoWorkflowMode,
   type VisualBible,
 } from "../shared/timeline";
 import { ImageGenerationModal } from "./ImageGenerationModal";
@@ -200,12 +203,14 @@ function FilePicker({
   label,
   accept,
   file,
+  savedName,
   onChange,
 }: {
   id: string;
   label: string;
   accept: string;
   file: File | null;
+  savedName?: string;
   onChange: (file: File | null) => void;
 }) {
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -213,13 +218,17 @@ function FilePicker({
   };
 
   return (
-    <div className={`timeline-file ${file ? "has-file" : ""}`}>
+    <div className={`timeline-file ${file || savedName ? "has-file" : ""}`}>
       <div className="timeline-file-icon" aria-hidden="true">
         <FileText size={20} />
       </div>
       <div className="timeline-file-details">
         <strong>{label}</strong>
-        <span>{file ? `${file.name} · ${formatBytes(file.size)}` : "Chưa chọn file"}</span>
+        <span>{file
+          ? `${file.name} · ${formatBytes(file.size)}`
+          : savedName
+            ? `${savedName} · đã lưu trong phiên`
+            : "Chưa chọn file"}</span>
       </div>
       <label className="button secondary compact" htmlFor={id}>
         <Upload size={15} aria-hidden="true" />
@@ -312,10 +321,12 @@ function TimelineTable({
   onRun,
   onRegenerate,
   onResumeFrom,
+  onClearSceneMedia,
   onApprove,
   onReject,
   onRepairPolicy,
   repairingPromptKey,
+  clearingSceneId,
   chatConnected,
 }: {
   scenes: Scene[];
@@ -329,10 +340,12 @@ function TimelineTable({
   onRun: (sceneId: string, mediaType: SceneMediaType, prompt: string) => void;
   onRegenerate: (sceneId: string, mediaType: SceneMediaType) => void;
   onResumeFrom: (sceneId: string, mediaType: SceneMediaType) => void;
+  onClearSceneMedia: (sceneId: string) => void;
   onApprove: (sceneId: string, mediaType: SceneMediaType) => void;
   onReject: (sceneId: string, mediaType: SceneMediaType) => void;
   onRepairPolicy: (sceneId: string, mediaType: SceneMediaType) => void;
   repairingPromptKey: string;
+  clearingSceneId: string;
   chatConnected: boolean;
 }) {
   const [alternative, setAlternative] = useState<{ sceneId: string; mediaType: SceneMediaType } | null>(null);
@@ -378,6 +391,12 @@ function TimelineTable({
         <tbody>
           {scenes.map((scene) => {
             const isAlternative = alternative?.sceneId === scene.id;
+            const hasSceneWork = Boolean(
+              scene.imageResultPath ||
+              scene.videoResultPath ||
+              scene.imageStatus !== "pending" ||
+              scene.videoStatus !== "pending"
+            );
             return [
               <tr
                 key={scene.id}
@@ -390,6 +409,18 @@ function TimelineTable({
                   <strong>{scene.order}</strong>
                   <span>{scene.timeStart}</span>
                   <span>{scene.timeEnd}</span>
+                  <button
+                    className="icon-button compact-icon danger-icon scene-delete-result"
+                    type="button"
+                    title="Xóa ảnh, video và job của riêng scene này; giữ nguyên prompt"
+                    aria-label={`Xóa kết quả scene ${scene.order}`}
+                    disabled={!hasSceneWork || Boolean(clearingSceneId)}
+                    onClick={() => onClearSceneMedia(scene.id)}
+                  >
+                    {clearingSceneId === scene.id
+                      ? <LoaderCircle className="spin" size={13} />
+                      : <Trash2 size={13} />}
+                  </button>
                 </td>
                 <td className="scene-chain-cell">
                   <select
@@ -617,6 +648,11 @@ function ErrorCenter({
 export function TimelineImport({ chatConnected, flowConnected }: TimelineImportProps) {
   const [srtFile, setSrtFile] = useState<File | null>(null);
   const [scriptFile, setScriptFile] = useState<File | null>(null);
+  const [workflowMode, setWorkflowMode] = useState<VideoWorkflowMode>("two_step");
+  const [workflowSource, setWorkflowSource] = useState<TimelineWorkflowSource>(
+    () => structuredClone(DEFAULT_TIMELINE_WORKFLOW_SOURCE),
+  );
+  const [workflowNotice, setWorkflowNotice] = useState("");
   const [scenes, setScenes] = useState<Scene[]>(loadStoredScenes);
   const [visualBible, setVisualBible] = useState<VisualBible>(() => structuredClone(DEFAULT_VISUAL_BIBLE));
   const [styleReference, setStyleReference] = useState<TimelineStyleReference | null>(null);
@@ -632,6 +668,8 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [clearMediaConfirmOpen, setClearMediaConfirmOpen] = useState(false);
   const [clearingGeneratedMedia, setClearingGeneratedMedia] = useState(false);
+  const [clearSceneMediaTarget, setClearSceneMediaTarget] = useState<string | null>(null);
+  const [clearingSceneId, setClearingSceneId] = useState("");
   const [clearMediaNotice, setClearMediaNotice] = useState("");
   const [progress, setProgress] = useState<TimelineProgress | null>(null);
   const [error, setError] = useState("");
@@ -662,6 +700,9 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     setScenes(session.scenes);
     setVisualBible(session.visualBible);
     setStyleReference(session.styleReference);
+    setWorkflowMode(session.workflowMode);
+    setWorkflowSource(session.workflowSource);
+    setWorkflowNotice("");
     setSrtFile(null);
     setScriptFile(null);
     setProgress(null);
@@ -670,6 +711,8 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     setThumbnails({});
     setImageModal(null);
     setVideoModal(null);
+    setClearSceneMediaTarget(null);
+    setClearingSceneId("");
     loadedThumbnailPaths.current.clear();
     settledSceneJobs.current.clear();
     sceneJobSessions.current.clear();
@@ -821,13 +864,19 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     // Clearing generated media performs its own ordered session writes. Pause
     // the debounced renderer autosave so an older scene snapshot cannot be
     // queued behind the clear operation and restore deleted result paths.
-    if (!sessionReady || clearingGeneratedMedia) return undefined;
+    if (!sessionReady || clearingGeneratedMedia || Boolean(clearingSceneId)) return undefined;
     const saveVersion = ++sessionSaveVersion.current;
     setSessionStatus("saving");
     const timer = window.setTimeout(() => {
       const bridge = window.flowx?.timeline;
       if (!bridge) return;
-      const operation = bridge.saveSession({ scenes, visualBible, styleReference });
+      const operation = bridge.saveSession({
+        scenes,
+        visualBible,
+        styleReference,
+        workflowMode,
+        workflowSource,
+      });
       void operation.then(
         (saved) => {
           localStorage.removeItem(TIMELINE_STORAGE_KEY);
@@ -846,7 +895,16 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
       );
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [scenes, visualBible, styleReference, sessionReady, clearingGeneratedMedia]);
+  }, [
+    scenes,
+    visualBible,
+    styleReference,
+    workflowMode,
+    workflowSource,
+    sessionReady,
+    clearingGeneratedMedia,
+    clearingSceneId,
+  ]);
 
   const validateFile = (
     file: File | null,
@@ -1032,12 +1090,19 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
   const runQueueCommand = async (
     operation: () => Promise<ProductionQueueSnapshot>,
     flushSession = true,
+    sessionScenes: Scene[] = scenes,
   ) => {
     const commandSessionId = activeSessionIdRef.current;
     setQueueCommandError("");
     try {
-      if (flushSession && scenes.length > 0) {
-        await window.flowx?.timeline.saveSession({ scenes, visualBible, styleReference });
+      if (flushSession && sessionScenes.length > 0) {
+        await window.flowx?.timeline.saveSession({
+          scenes: sessionScenes,
+          visualBible,
+          styleReference,
+          workflowMode,
+          workflowSource,
+        });
       }
       const snapshot = await operation();
       if (activeSessionIdRef.current !== commandSessionId) return;
@@ -1049,10 +1114,42 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     }
   };
 
-  const regenerateQueuedScene = (sceneId: string, mediaType: SceneMediaType) => {
+  const regenerateQueuedScene = (
+    sceneId: string,
+    mediaType: SceneMediaType,
+    promptOverride?: string,
+  ) => {
     const bridge = window.flowx?.productionQueue;
     if (!bridge) return;
-    void runQueueCommand(() => bridge.regenerateScene(sceneId, mediaType, activeProjectId));
+    const nextScenes = typeof promptOverride === "string"
+      ? scenes.map((scene) => scene.id === sceneId
+        ? mediaType === "image"
+          ? { ...scene, imagePrompt: promptOverride }
+          : { ...scene, videoPrompt: promptOverride }
+        : scene)
+      : scenes;
+    if (nextScenes !== scenes) setScenes(nextScenes);
+    void runQueueCommand(
+      () => bridge.regenerateScene(sceneId, mediaType, activeProjectId),
+      true,
+      nextScenes,
+    );
+  };
+
+  const runOrRegenerateScene = (
+    sceneId: string,
+    mediaType: SceneMediaType,
+    prompt: string,
+  ) => {
+    const scene = scenes.find((entry) => entry.id === sceneId);
+    const hasOldResult = mediaType === "image"
+      ? Boolean(scene?.imageResultPath || scene?.videoResultPath)
+      : Boolean(scene?.videoResultPath);
+    if (hasOldResult) {
+      regenerateQueuedScene(sceneId, mediaType, prompt);
+      return;
+    }
+    requestSceneJob(sceneId, mediaType, prompt);
   };
 
   const resumeQueueFromScene = (sceneId: string, mediaType: SceneMediaType) => {
@@ -1141,7 +1238,13 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         };
       });
       setScenes(nextScenes);
-      await timeline.saveSession({ scenes: nextScenes, visualBible, styleReference });
+      await timeline.saveSession({
+        scenes: nextScenes,
+        visualBible,
+        styleReference,
+        workflowMode,
+        workflowSource,
+      });
       setSceneErrors((current) => {
         const next = { ...current };
         delete next[key];
@@ -1200,21 +1303,29 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     void runQueueCommand(async () => {
       await bridge.setApprovalPolicy(
         true,
-        queueSnapshot?.autoApproveVideos || false,
+        true,
         activeProjectId,
       );
-      return bridge.generateAllImages(activeProjectId);
+      const snapshot = await bridge.generateAllImages(activeProjectId);
+      setWorkflowNotice("Bước sản xuất đã bắt đầu: app tự tạo ảnh, duyệt và dựng video theo thứ tự scene.");
+      return snapshot;
     });
   };
 
   const clearAllGeneratedMedia = async () => {
     const bridge = window.flowx?.productionQueue;
-    if (!bridge || clearingGeneratedMedia) return;
+    if (!bridge || clearingGeneratedMedia || Boolean(clearingSceneId)) return;
     setClearingGeneratedMedia(true);
     setQueueCommandError("");
     setClearMediaNotice("");
     try {
-      await window.flowx?.timeline.saveSession({ scenes, visualBible, styleReference });
+      await window.flowx?.timeline.saveSession({
+        scenes,
+        visualBible,
+        styleReference,
+        workflowMode,
+        workflowSource,
+      });
       const result = await bridge.clearGeneratedMedia(activeProjectId);
       setQueueSnapshot(result.snapshot);
       setScenes((current) => applyQueueSnapshotToScenes(current, result.snapshot));
@@ -1235,12 +1346,70 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     }
   };
 
+  const clearOneSceneMedia = async () => {
+    const sceneId = clearSceneMediaTarget;
+    const bridge = window.flowx?.productionQueue;
+    if (!bridge || !sceneId || clearingSceneId || clearingGeneratedMedia) return;
+    setClearingSceneId(sceneId);
+    setQueueCommandError("");
+    setClearMediaNotice("");
+    try {
+      await window.flowx?.timeline.saveSession({
+        scenes,
+        visualBible,
+        styleReference,
+        workflowMode,
+        workflowSource,
+      });
+      const result = await bridge.clearSceneMedia(sceneId, activeProjectId);
+      setQueueSnapshot(result.snapshot);
+      setScenes((current) => applyQueueSnapshotToScenes(current, result.snapshot));
+      setSceneErrors((current) => {
+        const next = { ...current };
+        delete next[`${sceneId}:image`];
+        delete next[`${sceneId}:video`];
+        return next;
+      });
+      setThumbnails((current) => {
+        const next = { ...current };
+        delete next[sceneId];
+        return next;
+      });
+      settledSceneJobs.current.delete(`${sceneId}:image`);
+      settledSceneJobs.current.delete(`${sceneId}:video`);
+      loadedThumbnailPaths.current.clear();
+      setImageModal((current) => current?.sceneId === sceneId ? null : current);
+      setVideoModal((current) => current?.sceneId === sceneId ? null : current);
+      setClearSceneMediaTarget(null);
+      setClearMediaNotice(
+        `Đã xóa ${result.deletedFiles} file và toàn bộ job của ${sceneId}; prompt Phase 3 vẫn được giữ nguyên.`,
+      );
+    } catch (caught) {
+      setQueueCommandError(errorMessage(caught));
+    } finally {
+      setClearingSceneId("");
+    }
+  };
+
   const generate = async () => {
     setError("");
-    if (!validateFile(srtFile, "File phụ đề", [".srt"])) return;
-    if (!validateFile(scriptFile, "File kịch bản", [".txt", ".md"])) return;
+    setWorkflowNotice("");
+    if (srtFile && !validateFile(srtFile, "File phụ đề", [".srt"])) return;
+    if (scriptFile && !validateFile(scriptFile, "File kịch bản", [".txt", ".md"])) return;
+    if (!srtFile && !workflowSource.srtText.trim()) {
+      setError("Hãy chọn file phụ đề SRT");
+      return;
+    }
+    if (!scriptFile && !workflowSource.scriptText.trim()) {
+      setError("Hãy chọn file kịch bản");
+      return;
+    }
     if (!chatConnected) {
       setError("ChatGPT worker chưa kết nối");
+      return;
+    }
+    if (workflowMode === "automatic" && !flowConnected) {
+      setError("Chế độ tự động hoàn toàn cần Google Flow worker kết nối trước khi bắt đầu");
       return;
     }
     if (!window.flowx?.timeline) {
@@ -1252,10 +1421,18 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     setProgress(null);
     try {
       const [srtText, scriptText, availableCharacters] = await Promise.all([
-        srtFile.text(),
-        scriptFile.text(),
+        srtFile ? srtFile.text() : Promise.resolve(workflowSource.srtText),
+        scriptFile ? scriptFile.text() : Promise.resolve(workflowSource.scriptText),
         window.flowx?.characters.list() || Promise.resolve(characters),
       ]);
+      const nextWorkflowSource: TimelineWorkflowSource = {
+        ...workflowSource,
+        srtText,
+        scriptText,
+        srtFileName: srtFile?.name || workflowSource.srtFileName || "timeline.srt",
+        scriptFileName: scriptFile?.name || workflowSource.scriptFileName || "kich-ban.txt",
+      };
+      setWorkflowSource(nextWorkflowSource);
       setCharacters(availableCharacters);
       const characterRoster = recurringCharacterRoster(
         scriptText,
@@ -1269,7 +1446,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         characterRoster,
         styleReference,
       });
-      setScenes(result.scenes.map((scene) => {
+      const preparedScenes: Scene[] = result.scenes.map((scene) => {
         const detectedTokens = matchCharacterNames(
           `${scene.imagePrompt}\n${scene.videoPrompt}`,
           characterRoster,
@@ -1281,9 +1458,44 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
           characterPolicy: tokens.length > 0 ? "selected" : "none",
           assignedCharacterTokens: tokens,
         };
-      }));
+      });
+      setScenes(preparedScenes);
       setVisualBible(result.visualBible);
       setProgress(null);
+      const saved = await window.flowx.timeline.saveSession({
+        scenes: preparedScenes,
+        visualBible: result.visualBible,
+        styleReference,
+        workflowMode,
+        workflowSource: nextWorkflowSource,
+      });
+      setSessions((current) => current.map((entry) => entry.id === saved.id
+        ? {
+          ...entry,
+          name: saved.name,
+          sceneCount: saved.scenes.length,
+          savedAt: saved.savedAt,
+          active: true,
+          workflowMode: saved.workflowMode,
+        }
+        : { ...entry, active: false }));
+
+      if (workflowMode === "automatic") {
+        const queue = window.flowx?.productionQueue;
+        if (!queue) throw new Error("Production queue chưa sẵn sàng");
+        try {
+          await queue.setApprovalPolicy(true, true, activeProjectId);
+          const snapshot = await queue.generateAllImages(activeProjectId);
+          setQueueSnapshot(snapshot);
+          setScenes((current) => applyQueueSnapshotToScenes(current, snapshot));
+          setWorkflowNotice("Đã tạo timeline. App đang tự động chuyển sang sản xuất ảnh và video.");
+        } catch (queueError) {
+          setQueueCommandError(errorMessage(queueError));
+          setWorkflowNotice("Timeline và prompt đã được lưu. Hàng đợi tự động chưa khởi động; có thể tiếp tục từ Bước 2.");
+        }
+      } else {
+        setWorkflowNotice("Bước 1 đã hoàn tất. Hãy kiểm tra prompt rồi bấm Bắt đầu bước 2 để dựng video.");
+      }
     } catch (caught) {
       const message = errorMessage(caught);
       if (!/STOPPED|generation stopped|đã dừng/i.test(message)) {
@@ -1319,14 +1531,20 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
 
   const switchSession = async (id: string) => {
     const timeline = window.flowx?.timeline;
-    if (!timeline || id === activeSessionId || switchingSession || clearingGeneratedMedia) return;
+    if (!timeline || id === activeSessionId || switchingSession || clearingGeneratedMedia || Boolean(clearingSceneId)) return;
     setSwitchingSession(true);
     setSessionReady(false);
     setError("");
     try {
       if (running) await timeline.cancel();
       await stopProductionForSessionChange();
-      await timeline.saveSession({ scenes, visualBible, styleReference });
+      await timeline.saveSession({
+        scenes,
+        visualBible,
+        styleReference,
+        workflowMode,
+        workflowSource,
+      });
       const selected = await timeline.selectSession(id);
       applySession(selected);
       setSessions(await timeline.listSessions());
@@ -1344,13 +1562,19 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
 
   const createSession = async () => {
     const timeline = window.flowx?.timeline;
-    if (!timeline || switchingSession || clearingGeneratedMedia) return;
+    if (!timeline || switchingSession || clearingGeneratedMedia || Boolean(clearingSceneId)) return;
     setSwitchingSession(true);
     setSessionReady(false);
     try {
       if (running) await timeline.cancel();
       await stopProductionForSessionChange();
-      await timeline.saveSession({ scenes, visualBible, styleReference });
+      await timeline.saveSession({
+        scenes,
+        visualBible,
+        styleReference,
+        workflowMode,
+        workflowSource,
+      });
       const created = await timeline.createSession(`Phiên ${sessions.length + 1}`);
       applySession(created);
       setSessions(await timeline.listSessions());
@@ -1369,7 +1593,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
   const renameActiveSession = async () => {
     const timeline = window.flowx?.timeline;
     const name = sessionNameDraft.trim();
-    if (!timeline || !name || switchingSession || clearingGeneratedMedia) return;
+    if (!timeline || !name || switchingSession || clearingGeneratedMedia || Boolean(clearingSceneId)) return;
     try {
       setSessions(await timeline.renameSession(activeSessionId, name));
     } catch (caught) {
@@ -1379,7 +1603,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
 
   const deleteActiveSession = async () => {
     const timeline = window.flowx?.timeline;
-    if (!timeline || switchingSession || clearingGeneratedMedia) return;
+    if (!timeline || switchingSession || clearingGeneratedMedia || Boolean(clearingSceneId)) return;
     setSwitchingSession(true);
     setSessionReady(false);
     try {
@@ -1418,12 +1642,22 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
     );
   };
 
+  const hasSrtInput = Boolean(srtFile || workflowSource.srtText.trim());
+  const hasScriptInput = Boolean(scriptFile || workflowSource.scriptText.trim());
+  const completedVideoCount = scenes.filter((scene) => scene.videoStatus === "done").length;
+  const productionStarted = Boolean(
+    queueSnapshot?.activeJobId ||
+    queueSnapshot?.queuedJobs ||
+    scenes.some((scene) => scene.imageStatus !== "pending" || scene.videoStatus !== "pending"),
+  );
+  const workflowBusy = running || queueSnapshot?.state === "running";
+
   return (
     <section className="timeline-import">
       <header className="section-header">
         <div>
-          <p className="eyebrow">ChatGPT worker</p>
-          <h2>Nhập timeline</h2>
+          <p className="eyebrow">Dựng video</p>
+          <h2>SRT + kịch bản → source video</h2>
         </div>
         <div className="timeline-readiness">
           <div className={`chat-readiness ${chatConnected ? "is-ready" : ""}`}>
@@ -1442,7 +1676,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
           <span>Phiên đang mở</span>
           <select
             value={activeSessionId}
-            disabled={switchingSession || running || clearingGeneratedMedia}
+            disabled={switchingSession || running || clearingGeneratedMedia || Boolean(clearingSceneId)}
             onChange={(event) => void switchSession(event.target.value)}
           >
             {sessions.map((session) => (
@@ -1457,7 +1691,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
           <input
             value={sessionNameDraft}
             maxLength={100}
-            disabled={switchingSession || clearingGeneratedMedia}
+            disabled={switchingSession || clearingGeneratedMedia || Boolean(clearingSceneId)}
             onChange={(event) => setSessionNameDraft(event.target.value)}
             onBlur={() => void renameActiveSession()}
             onKeyDown={(event) => {
@@ -1470,12 +1704,67 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
           />
         </label>
         <div className="workspace-session-actions">
-          <button className="button secondary compact" type="button" disabled={switchingSession || running || clearingGeneratedMedia} onClick={() => void createSession()}>
+          <button className="button secondary compact" type="button" disabled={switchingSession || running || clearingGeneratedMedia || Boolean(clearingSceneId)} onClick={() => void createSession()}>
             <FolderPlus size={15} /> Phiên mới
           </button>
-          <button className="icon-button" type="button" title="Xóa phiên đang mở" disabled={switchingSession || running || clearingGeneratedMedia} onClick={() => setResetConfirmOpen(true)}>
+          <button className="icon-button" type="button" title="Xóa phiên đang mở" disabled={switchingSession || running || clearingGeneratedMedia || Boolean(clearingSceneId)} onClick={() => setResetConfirmOpen(true)}>
             <Trash2 size={16} />
           </button>
+        </div>
+      </section>
+
+      <section className="video-workflow-panel" aria-label="Chế độ dựng video">
+        <div className="video-workflow-heading">
+          <div>
+            <p className="eyebrow">Chế độ vận hành</p>
+            <strong>Chọn mức tự động hóa cho phiên “{sessionNameDraft}”</strong>
+          </div>
+          <span className="workflow-save-hint">Tùy chọn này được lưu riêng theo từng phiên</span>
+        </div>
+        <div className="workflow-mode-grid" role="radiogroup" aria-label="Mức tự động hóa">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={workflowMode === "automatic"}
+            className={`workflow-mode-card ${workflowMode === "automatic" ? "is-selected" : ""}`}
+            disabled={workflowBusy}
+            onClick={() => setWorkflowMode("automatic")}
+          >
+            <span className="workflow-mode-icon"><Sparkles size={18} /></span>
+            <span>
+              <strong>Tự động hoàn toàn</strong>
+              <small>Tạo timeline và prompt xong sẽ tự chạy ảnh → video, không cần bấm thêm.</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={workflowMode === "two_step"}
+            className={`workflow-mode-card ${workflowMode === "two_step" ? "is-selected" : ""}`}
+            disabled={workflowBusy}
+            onClick={() => setWorkflowMode("two_step")}
+          >
+            <span className="workflow-mode-icon"><ShieldCheck size={18} /></span>
+            <span>
+              <strong>Tách 2 bước</strong>
+              <small>Bước 1 tạo timeline/prompt; kiểm tra xong mới chủ động chạy Bước 2.</small>
+            </span>
+          </button>
+        </div>
+        <div className="workflow-step-strip" aria-label="Tiến trình dựng video">
+          <div className={scenes.length > 0 ? "is-complete" : running ? "is-active" : "is-active"}>
+            <span>1</span>
+            <p><strong>Timeline & prompt</strong><small>ChatGPT phân tích SRT và kịch bản</small></p>
+          </div>
+          <i aria-hidden="true" />
+          <div className={completedVideoCount === scenes.length && scenes.length > 0
+            ? "is-complete"
+            : productionStarted
+              ? "is-active"
+              : ""}>
+            <span>2</span>
+            <p><strong>Sản xuất video</strong><small>Google Flow tạo ảnh, frame nối tiếp và video</small></p>
+          </div>
         </div>
       </section>
 
@@ -1485,6 +1774,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
           label="Phụ đề SRT"
           accept=".srt,application/x-subrip,text/plain"
           file={srtFile}
+          savedName={workflowSource.srtFileName}
           onChange={setSrtFile}
         />
         <FilePicker
@@ -1492,6 +1782,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
           label="Kịch bản"
           accept=".txt,.md,text/plain,text/markdown"
           file={scriptFile}
+          savedName={workflowSource.scriptFileName}
           onChange={setScriptFile}
         />
       </div>
@@ -1536,11 +1827,16 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
             <button
               className="button primary"
               type="button"
-              disabled={!chatConnected || !srtFile || !scriptFile}
+              disabled={
+                !chatConnected ||
+                !hasSrtInput ||
+                !hasScriptInput ||
+                (workflowMode === "automatic" && !flowConnected)
+              }
               onClick={generate}
             >
               <Sparkles size={16} aria-hidden="true" />
-              Tạo timeline
+              {workflowMode === "automatic" ? "Dựng video tự động" : "Chạy bước 1: Tạo timeline"}
             </button>
           )}
         </div>
@@ -1591,7 +1887,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
               title="Chạy lần lượt ảnh scene 1 → video scene 1 → ảnh scene 2 → video scene 2"
               onClick={startAutomaticImageVideoPipeline}
             >
-              <Sparkles size={15} /> Chạy tự động Ảnh → Video
+              <Sparkles size={15} /> {workflowMode === "two_step" ? "Bắt đầu bước 2" : "Tiếp tục tự động"}
             </button>
             <button
               className="button secondary compact"
@@ -1618,7 +1914,7 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
             <button
               className="button danger compact"
               type="button"
-              disabled={clearingGeneratedMedia}
+              disabled={clearingGeneratedMedia || Boolean(clearingSceneId)}
               title="Xóa ảnh, video và frame trên máy; giữ nguyên prompt Phase 3 và thư viện Google Flow"
               onClick={() => setClearMediaConfirmOpen(true)}
             >
@@ -1648,7 +1944,34 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
         </section>
       )}
       {queueCommandError && <div className="form-error">{queueCommandError}</div>}
+      {workflowNotice && <div className="form-success">{workflowNotice}</div>}
       {clearMediaNotice && <div className="form-success">{clearMediaNotice}</div>}
+
+      {(hasSrtInput || hasScriptInput || scenes.length > 0) && (
+        <section className="workflow-output-panel" aria-label="Đầu vào và đầu ra của phiên">
+          <header>
+            <div>
+              <p className="eyebrow">Hồ sơ dự án</p>
+              <h3>Đầu vào và đầu ra được giữ theo phiên</h3>
+            </div>
+            <span>{completedVideoCount}/{scenes.length || 0} source video hoàn tất</span>
+          </header>
+          <div className="workflow-output-grid">
+            <article>
+              <FileText size={17} />
+              <div><strong>SRT</strong><span>{srtFile?.name || workflowSource.srtFileName || "Chưa có"}</span></div>
+            </article>
+            <article>
+              <FileText size={17} />
+              <div><strong>Voice</strong><span>{workflowSource.audioFileName || "Chưa liên kết tool voice"}</span></div>
+            </article>
+            <article>
+              <Play size={17} />
+              <div><strong>Source video</strong><span>{projectOutputFolder(activeProjectId, sessionNameDraft)}</span></div>
+            </article>
+          </div>
+        </section>
+      )}
       <ErrorCenter
         errors={queueSnapshot?.errors || []}
         onRetry={(sceneIds) => {
@@ -1663,13 +1986,15 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
             thumbnails={thumbnails}
             onPromptChange={updatePrompt}
             onPlanningChange={updatePlanning}
-            onRun={requestSceneJob}
+            onRun={runOrRegenerateScene}
             onRegenerate={regenerateQueuedScene}
             onResumeFrom={resumeQueueFromScene}
+            onClearSceneMedia={setClearSceneMediaTarget}
             onApprove={approveQueuedScene}
             onReject={rejectQueuedScene}
             onRepairPolicy={openPolicyRepairModal}
             repairingPromptKey={repairingPromptKey}
+            clearingSceneId={clearingSceneId}
             chatConnected={chatConnected}
           />
       ) : (
@@ -1831,6 +2156,60 @@ export function TimelineImport({ chatConnected, flowConnected }: TimelineImportP
           </section>
         </div>
       )}
+
+      {clearSceneMediaTarget && (() => {
+        const targetScene = scenes.find((scene) => scene.id === clearSceneMediaTarget);
+        return (
+          <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !clearingSceneId) {
+              setClearSceneMediaTarget(null);
+            }
+          }}>
+            <section className="session-reset-modal" role="alertdialog" aria-modal="true" aria-labelledby="clear-scene-media-title">
+              <header>
+                <div>
+                  <p className="eyebrow">Xóa kết quả một scene</p>
+                  <h3 id="clear-scene-media-title">
+                    Xóa kết quả Scene {targetScene?.order || clearSceneMediaTarget}?
+                  </h3>
+                </div>
+                <button
+                  className="icon-button"
+                  type="button"
+                  title="Đóng"
+                  disabled={Boolean(clearingSceneId)}
+                  onClick={() => setClearSceneMediaTarget(null)}
+                >
+                  <X size={18} />
+                </button>
+              </header>
+              <p>
+                App sẽ dừng hàng đợi, xóa ảnh, video, frame trung gian và job của riêng scene này trên máy. Prompt ảnh, prompt video, gán nhân vật và timeline Phase 3 vẫn được giữ nguyên.
+              </p>
+              <p>Nội dung đã tạo trong thư viện Google Flow không bị xóa.</p>
+              <footer>
+                <button
+                  className="button secondary"
+                  type="button"
+                  disabled={Boolean(clearingSceneId)}
+                  onClick={() => setClearSceneMediaTarget(null)}
+                >
+                  Hủy
+                </button>
+                <button
+                  className="button danger"
+                  type="button"
+                  disabled={Boolean(clearingSceneId)}
+                  onClick={() => void clearOneSceneMedia()}
+                >
+                  {clearingSceneId && <LoaderCircle className="spin" size={15} />}
+                  Xác nhận xóa scene này
+                </button>
+              </footer>
+            </section>
+          </div>
+        );
+      })()}
 
       {resetConfirmOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {

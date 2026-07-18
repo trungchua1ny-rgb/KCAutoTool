@@ -89,6 +89,10 @@ export interface ProjectSourceRecord {
   scriptText: string;
   srtFileName: string | null;
   scriptFileName: string | null;
+  srtFilePath: string | null;
+  scriptFilePath: string | null;
+  audioFilePath: string | null;
+  audioFileName: string | null;
   updatedAt: string;
 }
 
