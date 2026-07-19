@@ -463,7 +463,7 @@ function TimelineTable({
                 <td>
                   <div className={`scene-thumbnail is-${scene.imageStatus}`}>
                     {thumbnails[scene.id]
-                      ? <img src={thumbnails[scene.id]} alt={`Kết quả scene ${scene.order}`} />
+                      ? <img src={thumbnails[scene.id]} alt={`Kết quả scene ${scene.order}`} loading="lazy" />
                       : scene.imageStatus === "generating"
                         ? <LoaderCircle className="spin" size={20} />
                         : scene.imageStatus === "done"
@@ -703,7 +703,7 @@ export function TimelineImport({
   const sceneJobSessions = useRef(new Map<string, string>());
   const activeSessionIdRef = useRef(activeSessionId);
   const consumedHandoffIds = useRef(new Set<string>());
-  const loadedThumbnailPaths = useRef(new Set<string>());
+  const loadedThumbnailPaths = useRef(new Map<string, string>());
   const activeProjectId = activeSessionId || DEFAULT_PROJECT_ID;
 
   const applySession = (session: TimelineSession) => {
@@ -758,23 +758,48 @@ export function TimelineImport({
   useEffect(() => {
     const media = window.flowx?.media;
     if (!media) return;
+    const sessionId = activeProjectId;
+    const currentPaths = new Map(
+      scenes
+        .filter((scene) => scene.imageStatus === "done" && Boolean(scene.imageResultPath))
+        .map((scene) => [scene.id, scene.imageResultPath] as const),
+    );
+    for (const [sceneId, path] of loadedThumbnailPaths.current) {
+      if (currentPaths.get(sceneId) !== path) loadedThumbnailPaths.current.delete(sceneId);
+    }
+    setThumbnails((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([sceneId]) => currentPaths.has(sceneId)),
+      );
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
     for (const scene of scenes) {
       const path = scene.imageResultPath;
       if (
         scene.imageStatus !== "done" ||
         !path ||
         path.startsWith("mock://") ||
-        loadedThumbnailPaths.current.has(path)
+        loadedThumbnailPaths.current.get(scene.id) === path
       ) {
         continue;
       }
-      loadedThumbnailPaths.current.add(path);
-      void media.readImageDataUrl(path).then(
-        (dataUrl) => setThumbnails((current) => ({ ...current, [scene.id]: dataUrl })),
-        () => loadedThumbnailPaths.current.delete(path),
+      loadedThumbnailPaths.current.set(scene.id, path);
+      void media.getStreamUrl(path).then(
+        (streamUrl) => {
+          if (
+            activeSessionIdRef.current !== sessionId ||
+            loadedThumbnailPaths.current.get(scene.id) !== path
+          ) return;
+          setThumbnails((current) => ({ ...current, [scene.id]: streamUrl }));
+        },
+        () => {
+          if (loadedThumbnailPaths.current.get(scene.id) === path) {
+            loadedThumbnailPaths.current.delete(scene.id);
+          }
+        },
       );
     }
-  }, [scenes]);
+  }, [activeProjectId, scenes]);
 
   useEffect(() => {
     let active = true;

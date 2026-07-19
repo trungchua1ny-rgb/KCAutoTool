@@ -1,10 +1,13 @@
 import { app, ipcMain, shell } from "electron";
+import { execFile } from "node:child_process";
 import { mkdir, readdir, stat, statfs, writeFile } from "node:fs/promises";
 import { dirname, extname, join, normalize, relative, resolve } from "node:path";
+import { promisify } from "node:util";
 import {
   OUTPUT_INSPECT_CHANNEL,
   OUTPUT_EXPORT_SESSION_CHANNEL,
   OUTPUT_OPEN_CHANNEL,
+  SYSTEM_OPEN_EXTENSION_FOLDER_CHANNEL,
   SYSTEM_STATUS_CHANNEL,
   type OutputFileView,
   type OutputGroupId,
@@ -15,6 +18,15 @@ import {
 import type { TimelineSession } from "../shared/timeline";
 
 const GROUP_IDS: OutputGroupId[] = ["audio", "srt", "images", "videos", "frames", "logs", "metadata"];
+const execFileAsync = promisify(execFile);
+let ffmpegStatusPromise: Promise<{ available: boolean; version: string }> | null = null;
+
+function detectFfmpeg(): Promise<{ available: boolean; version: string }> {
+  ffmpegStatusPromise ||= execFileAsync("ffmpeg", ["-version"], { windowsHide: true, timeout: 8_000 })
+    .then(({ stdout }) => ({ available: true, version: String(stdout).split(/\r?\n/, 1)[0]?.trim() || "FFmpeg" }))
+    .catch(() => ({ available: false, version: "" }));
+  return ffmpegStatusPromise;
+}
 
 function projectId(value: unknown): string {
   const id = typeof value === "string" ? value.trim() : "";
@@ -70,7 +82,7 @@ async function walk(directory: string): Promise<OutputFileView[]> {
   return result;
 }
 
-export function registerSystemIpcHandlers(generatedMediaRoot: string): void {
+export function registerSystemIpcHandlers(generatedMediaRoot: string, extensionRoot: string): void {
   ipcMain.handle(SYSTEM_STATUS_CHANNEL, async (): Promise<SystemStatus> => {
     const memory = process.getSystemMemoryInfo();
     const metrics = app.getAppMetrics();
@@ -78,16 +90,25 @@ export function registerSystemIpcHandlers(generatedMediaRoot: string): void {
       ? metrics.reduce((sum, metric) => sum + (metric.cpu?.percentCPUUsage || 0), 0)
       : null;
     const disk = await statfs(dirname(generatedMediaRoot)).catch(() => null);
+    const ffmpeg = await detectFfmpeg();
     return {
       appVersion: app.getVersion(),
       cpuPercent,
       ramUsedBytes: Math.max(0, memory.total - memory.free) * 1_024,
       ramTotalBytes: memory.total * 1_024,
       gpuPercent: null,
+      ffmpegAvailable: ffmpeg.available,
+      ffmpegVersion: ffmpeg.version,
       diskFreeBytes: disk ? Number(disk.bavail) * Number(disk.bsize) : null,
       diskTotalBytes: disk ? Number(disk.blocks) * Number(disk.bsize) : null,
       updatedAt: new Date().toISOString(),
     };
+  });
+
+  ipcMain.handle(SYSTEM_OPEN_EXTENSION_FOLDER_CHANNEL, async (): Promise<string> => {
+    const info = await stat(extensionRoot).catch(() => null);
+    if (!info?.isDirectory()) return "Không tìm thấy thư mục extension KC Dev trong bộ cài.";
+    return shell.openPath(extensionRoot);
   });
 
   ipcMain.handle(OUTPUT_INSPECT_CHANNEL, async (_event, value: unknown): Promise<OutputInspection> => {

@@ -7,6 +7,7 @@ import {
 import { AppShell } from "./AppShell";
 import { CharacterLibrary } from "./CharacterLibrary";
 import { DashboardView } from "./DashboardView";
+import { LaunchSplash } from "./LaunchSplash";
 import { OutputLibrary } from "./OutputLibrary";
 import { SessionsView } from "./SessionsView";
 import { SettingsView } from "./SettingsView";
@@ -48,6 +49,7 @@ function App() {
   const [saving, setSaving] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
   const [toast, setToast] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  const [showLaunchSplash, setShowLaunchSplash] = useState(true);
   const workspace = useWorkspaceData();
 
   useEffect(() => {
@@ -78,6 +80,10 @@ function App() {
     const timer = window.setTimeout(() => setToast(null), 4_000);
     return () => window.clearTimeout(timer);
   }, [toast]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setShowLaunchSplash(false), 3_500);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const navigate = (next: AppPage) => {
     if (next === "voice") {
@@ -195,6 +201,7 @@ function App() {
     <AppShell page={page} collapsed={sidebarCollapsed} queueOpen={queueOpen} saving={saving} online={online} session={workspace.session} sessions={workspace.sessions} sessionQueues={workspace.sessionQueues} queue={workspace.queue} workers={statuses} system={workspace.system} onNavigate={navigate} onCreateSession={() => void createSession()} onSelectSession={(id) => void selectSession(id)} onRenameSession={(id) => void renameSession(id)} onDeleteSession={(id) => void deleteSession(id)} onToggleCollapsed={() => setSidebarCollapsed((value) => !value)} onToggleQueue={() => setQueueOpen((value) => !value)} onSave={() => void saveState()}>
       {workspace.loading ? <div className="kc-loading-screen"><span /><strong>Đang khôi phục phiên KC Auto Tool…</strong></div> : content}
       {toast && <div className={`kc-toast is-${toast.tone}`} role="status">{toast.text}</div>}
+      {showLaunchSplash && <LaunchSplash onContinue={() => setShowLaunchSplash(false)} />}
     </AppShell>
   );
 }

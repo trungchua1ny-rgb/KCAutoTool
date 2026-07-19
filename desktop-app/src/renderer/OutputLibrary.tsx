@@ -35,19 +35,19 @@ function OutputCard({ group, onOpen }: { group: OutputGroupView; onOpen: () => v
   const [preview, setPreview] = useState("");
   const copy = GROUP_COPY[group.id];
   const Icon = copy.icon;
+  const firstPath = group.files[0]?.path || "";
   useEffect(() => {
     let active = true;
-    const first = group.files[0];
-    if (!first || (group.id !== "images" && group.id !== "frames")) {
+    if (!firstPath || (group.id !== "images" && group.id !== "frames")) {
       setPreview("");
       return undefined;
     }
-    void window.flowx?.media.readImageDataUrl(first.path).then(
-      (dataUrl) => { if (active) setPreview(dataUrl); },
+    void window.flowx?.media.getStreamUrl(firstPath).then(
+      (streamUrl) => { if (active) setPreview(streamUrl); },
       () => { if (active) setPreview(""); },
     );
     return () => { active = false; };
-  }, [group.id, group.files]);
+  }, [firstPath, group.id]);
   return (
     <article className="kc-output-card">
       <div className="kc-output-preview">{preview ? <img src={preview} alt="Xem trước đầu ra" loading="lazy" /> : <Icon size={21} />}</div>

@@ -3,11 +3,17 @@
   "productName": "KC Auto Tool",
   "version": "0.1.0",
   "private": true,
-  "description": "KC Auto Tool desktop orchestrator by KC Dev",
+  "description": "KC Auto Tool - AI Video Production Automation by NTC Media",
+  "author": {
+    "name": "NTC Media"
+  },
+  "copyright": "Copyright © 2026 NTC Media",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
+    "dist:win": "npm run build && electron-builder --win nsis --x64",
+    "dist:bundle": "npm run dist:win && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/create-distribution.ps1",
     "preview": "electron-vite preview",
     "smoke:characters": "node scripts/phase2-character-smoke.mjs",
     "smoke:reconnect": "node scripts/phase1-reconnect-smoke.mjs",
@@ -33,9 +39,64 @@
     "@types/ws": "8.18.1",
     "@vitejs/plugin-react": "5.2.0",
     "electron": "43.1.0",
+    "electron-builder": "^26.15.3",
     "electron-vite": "5.0.0",
     "tsx": "4.23.1",
     "typescript": "7.0.2",
     "vite": "7.3.6"
+  },
+  "build": {
+    "appId": "media.ntc.kcautotool",
+    "productName": "KC Auto Tool",
+    "executableName": "KC Auto Tool",
+    "asar": true,
+    "compression": "maximum",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "../extension-worker",
+        "to": "kc-dev-extension",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "KC-Auto-Tool-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "KC Auto Tool",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    }
   }
 }

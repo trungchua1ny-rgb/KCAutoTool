@@ -35,6 +35,17 @@ let workerServer: WorkerServer | null = null;
 let projectDatabase: ProjectDatabase | null = null;
 let productionQueue: ProductionQueue | null = null;
 let voiceService: VoiceService | null = null;
+const APP_USER_MODEL_ID = "media.ntc.kcautotool";
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) app.quit();
+app.on("second-instance", () => {
+  const window = BrowserWindow.getAllWindows()[0];
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+});
 
 protocol.registerSchemesAsPrivileged([{ scheme: "kc-media", privileges: { secure: true, standard: true, stream: true, supportFetchAPI: true } }]);
 
@@ -57,6 +68,9 @@ function broadcastVoiceProgress(progress: VoiceProgress): void {
 }
 
 function createWindow(): void {
+  const icon = app.isPackaged
+    ? join(process.resourcesPath, "icon.png")
+    : join(__dirname, "../../build/icon.png");
   const window = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -66,6 +80,7 @@ function createWindow(): void {
     autoHideMenuBar: true,
     backgroundColor: "#07111F",
     title: "KC Auto Tool",
+    icon,
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       contextIsolation: true,
@@ -89,6 +104,8 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return;
+  app.setAppUserModelId(APP_USER_MODEL_ID);
   const timelineSessionStore = new TimelineSessionStore(
     process.env.FLOWX_DATA_DIR
       ? join(process.env.FLOWX_DATA_DIR, "timeline-session")
@@ -155,7 +172,12 @@ app.whenReady().then(async () => {
       broadcastVoiceProgress,
     );
     registerVoiceIpcHandlers(voiceService);
-    registerSystemIpcHandlers(join(app.getPath("downloads"), "KC Auto Tool"));
+    registerSystemIpcHandlers(
+      join(app.getPath("downloads"), "KC Auto Tool"),
+      app.isPackaged
+        ? join(process.resourcesPath, "kc-dev-extension")
+        : join(__dirname, "../../../extension-worker"),
+    );
     registerTimelineSessionIpcHandlers(timelineSessionStore, {
       beforeDelete: (id) => {
         const snapshot = productionQueue?.getSnapshot(id);

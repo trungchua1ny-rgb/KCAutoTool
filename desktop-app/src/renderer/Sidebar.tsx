@@ -6,7 +6,6 @@ import {
   Clapperboard,
   FileOutput,
   House,
-  Images,
   ListChecks,
   MoreHorizontal,
   Palette,
@@ -19,6 +18,7 @@ import type { ProductionQueueSnapshot } from "../shared/production-queue";
 import type { SystemStatus } from "../shared/system";
 import type { TimelineSessionSummary } from "../shared/timeline";
 import type { AppPage } from "./app-navigation";
+import kcLogo from "./assets/kc-logo.png";
 
 const NAVIGATION: Array<{ page: AppPage; label: string; icon: typeof House }> = [
   { page: "home", label: "Trang chủ", icon: House },
@@ -94,7 +94,7 @@ export function Sidebar({
   return (
     <aside className={`kc-sidebar ${collapsed ? "is-collapsed" : ""}`}>
       <div className="kc-brand-block">
-        <div className="kc-logo" aria-hidden="true"><Images size={19} /></div>
+        <div className="kc-logo" aria-hidden="true"><img src={kcLogo} alt="" /></div>
         {!collapsed && <div><strong>KC Auto Tool</strong><span>AI Video Production Automation</span></div>}
       </div>
 

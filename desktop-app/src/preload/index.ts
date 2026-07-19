@@ -68,6 +68,7 @@ import {
   OUTPUT_EXPORT_SESSION_CHANNEL,
   OUTPUT_INSPECT_CHANNEL,
   OUTPUT_OPEN_CHANNEL,
+  SYSTEM_OPEN_EXTENSION_FOLDER_CHANNEL,
   SYSTEM_STATUS_CHANNEL,
 } from "../shared/system";
 
@@ -171,6 +172,7 @@ const bridge: KCAutoToolBridge = {
   },
   system: {
     getStatus: () => ipcRenderer.invoke(SYSTEM_STATUS_CHANNEL),
+    openExtensionFolder: () => ipcRenderer.invoke(SYSTEM_OPEN_EXTENSION_FOLDER_CHANNEL),
     inspectOutput: (projectId) => ipcRenderer.invoke(OUTPUT_INSPECT_CHANNEL, projectId),
     openOutput: (projectId, group) => ipcRenderer.invoke(OUTPUT_OPEN_CHANNEL, { projectId, group }),
     exportSession: (session) => ipcRenderer.invoke(OUTPUT_EXPORT_SESSION_CHANNEL, session),

@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { MEDIA_GET_STREAM_URL_CHANNEL, MEDIA_READ_IMAGE_CHANNEL } from "../shared/media";
 
 const MAX_RESULT_IMAGE_BYTES = 25 * 1024 * 1024;
+const STREAMABLE_MEDIA_EXTENSION = /[.](mp3|wav|m4a|mp4|webm|png|jpe?g|webp)$/i;
 
 function detectedMimeType(bytes: Buffer): "image/png" | "image/jpeg" | "image/webp" | null {
   if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
@@ -43,7 +44,7 @@ export function registerMediaIpcHandlers(generatedMediaRoot: string): void {
     return `data:${mimeType};base64,${bytes.toString("base64")}`;
   });
   ipcMain.handle(MEDIA_GET_STREAM_URL_CHANNEL, async (_event, value: unknown) => {
-    if (typeof value !== "string" || !/[.](mp3|wav|m4a|mp4|webm)$/i.test(extname(value))) {
+    if (typeof value !== "string" || !STREAMABLE_MEDIA_EXTENSION.test(extname(value))) {
       throw new Error("Đường dẫn media không hợp lệ.");
     }
     const path = safeMediaPath(generatedMediaRoot, value);

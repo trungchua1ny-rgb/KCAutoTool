@@ -134,3 +134,29 @@ select option {
   color: var(--kc-text);
   background: #0b1728;
 }
+
+.kc-system-card b.is-ready { color: #86efac; }
+.kc-system-card b.is-missing { color: #fca5a5; }
+.kc-extension-setup,
+.kc-ffmpeg-notice {
+  margin: 0 12px 12px;
+  padding: 12px;
+  border: 1px solid var(--kc-border-soft);
+  border-radius: 9px;
+  color: var(--kc-text);
+  background: #0a182a;
+}
+.kc-extension-setup > div,
+.kc-ffmpeg-notice > div { display: grid; gap: 3px; }
+.kc-extension-setup strong,
+.kc-ffmpeg-notice strong { font-size: 10px; }
+.kc-extension-setup span,
+.kc-ffmpeg-notice span,
+.kc-extension-setup > p { margin: 3px 0 0; color: var(--kc-muted); font-size: 8px; }
+.kc-extension-setup ol { margin: 10px 0; padding-left: 19px; color: #aebed2; font-size: 8px; line-height: 1.8; }
+.kc-extension-setup code { padding: 2px 4px; border-radius: 4px; color: #93c5fd; background: #071321; }
+.kc-extension-setup button,
+.kc-ffmpeg-notice button { display: inline-flex; min-height: 29px; align-items: center; padding: 0 9px; gap: 5px; border: 1px solid var(--kc-border); border-radius: 7px; color: #dbeafe; background: #102039; cursor: pointer; font-size: 8px; font-weight: 700; }
+.kc-extension-setup button:hover,
+.kc-ffmpeg-notice button:hover { border-color: #416087; background: #162a45; }
+.kc-ffmpeg-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-color: rgba(245,158,11,.3); background: rgba(120,53,15,.16); }

@@ -6,6 +6,7 @@ import type { WorkerStatuses } from "../shared/worker-status";
 import { HomeView } from "./HomeView";
 import type { HomeWorkflowMode } from "./integrated-workflow";
 import { OutputLibrary } from "./OutputLibrary";
+import { ProjectJourney } from "./ProjectJourney";
 import { ChatGPTWorkerPanel, GoogleFlowWorkerPanel } from "./WorkerPanels";
 import type { AppPage } from "./app-navigation";
 
@@ -37,6 +38,7 @@ export function DashboardView({
   return (
     <div className="kc-dashboard">
       <HomeView onSelect={onStartWorkflow} />
+      <ProjectJourney session={session} queue={queue} output={output} onNavigate={onNavigate} />
       <section className="kc-project-overview">
         <header><div><span>PROJECT OVERVIEW</span><h2>Tổng quan phiên hiện tại</h2></div><b>{completion}% hoàn thành</b></header>
         <div className="kc-overview-grid">
@@ -61,4 +63,3 @@ export function DashboardView({
     </div>
   );
 }
-
