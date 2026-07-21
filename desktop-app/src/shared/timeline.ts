@@ -26,6 +26,31 @@ export type ProjectAspectRatio = "16:9";
 export type SceneChainRole = "single" | "start" | "continue";
 export type SceneDurationSeconds = 4 | 6 | 8;
 export type VideoWorkflowMode = "automatic" | "two_step";
+export type ChainRisk = "low" | "medium" | "high";
+export type PolicyFlag = "real_person" | "violence" | "weapons" | "dangerous_activity" | "sexual_content" | "child_safety" | "copyrighted_character";
+
+export interface PlannedContinuityOut {
+  characterPositions?: string;
+  heldObjects?: string;
+  environmentState?: string;
+  screenDirection?: string;
+}
+
+export interface PolicyResolution {
+  originalFlag: PolicyFlag;
+  status: "auto_rewritten" | "rewrite_failed";
+  rewrittenMedia: Array<"image" | "video">;
+  resolvedAt?: string;
+  error?: string;
+}
+
+export interface ActualContinuityFrame {
+  path: string;
+  extractedAt?: string;
+  width?: number;
+  height?: number;
+  fileSize?: number;
+}
 
 export interface TimelineWorkflowSource {
   narrationText?: string;
@@ -93,7 +118,10 @@ export type JobProgressStatus =
   | "preparing"
   | "generating"
   | "downloading"
-  | "stopping";
+  | "stopping"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
 
 export interface Scene {
   id: string;
@@ -115,6 +143,13 @@ export interface Scene {
   chainId: string | null;
   chainRole: SceneChainRole;
   durationSeconds: SceneDurationSeconds;
+  beatSummary?: string;
+  chainRisk?: ChainRisk | null;
+  recommendedReanchor?: boolean | null;
+  policyFlag?: PolicyFlag | null;
+  policyResolution?: PolicyResolution;
+  plannedContinuityOut?: PlannedContinuityOut;
+  actualContinuityFrame?: ActualContinuityFrame;
 }
 
 export interface TimelineGenerateInput {
@@ -140,6 +175,7 @@ export interface PolicyPromptRewriteInput {
   timeEnd: string;
   pairedPrompt: string;
   visualBible: VisualBible;
+  policyFlag?: PolicyFlag | null;
 }
 
 export interface PolicyPromptRewriteResult {
@@ -402,6 +438,44 @@ function normalizePromptTokens(value: string): string {
   );
 }
 
+const POLICY_FLAGS: PolicyFlag[] = ["real_person", "violence", "weapons", "dangerous_activity", "sexual_content", "child_safety", "copyrighted_character"];
+
+function normalizePolicyFlag(value: unknown): PolicyFlag | null {
+  return typeof value === "string" && POLICY_FLAGS.includes(value as PolicyFlag)
+    ? value as PolicyFlag
+    : null;
+}
+
+function normalizePlannedContinuity(value: unknown): PlannedContinuityOut | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const result: PlannedContinuityOut = {};
+  for (const field of ["characterPositions", "heldObjects", "environmentState", "screenDirection"] as const) {
+    if (typeof source[field] === "string") result[field] = source[field].trim().slice(0, 1_000);
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+function normalizePolicyResolution(value: unknown): PolicyResolution | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const originalFlag = normalizePolicyFlag(source.originalFlag);
+  const status = source.status === "auto_rewritten" || source.status === "rewrite_failed"
+    ? source.status
+    : null;
+  if (!originalFlag || !status) return undefined;
+  const rewrittenMedia = Array.isArray(source.rewrittenMedia)
+    ? [...new Set(source.rewrittenMedia.filter((item): item is "image" | "video" => item === "image" || item === "video"))]
+    : [];
+  return {
+    originalFlag,
+    status,
+    rewrittenMedia,
+    resolvedAt: typeof source.resolvedAt === "string" ? source.resolvedAt.slice(0, 64) : undefined,
+    error: typeof source.error === "string" ? source.error.slice(0, 2_000) : undefined,
+  };
+}
+
 export function normalizeTimelineResult(value: unknown): TimelineResult {
   const result = value as { scenes?: unknown } | null;
   const scenesValue = Array.isArray(value) ? value : result?.scenes;
@@ -464,6 +538,16 @@ export function normalizeTimelineResult(value: unknown): TimelineResult {
       assignedCharacterTokens: usedCharacterTokens,
       ...chain,
       durationSeconds,
+      beatSummary: typeof scene.beatSummary === "string" ? scene.beatSummary.trim().slice(0, 500) : "",
+      chainRisk: scene.chainRisk === "low" || scene.chainRisk === "medium" || scene.chainRisk === "high"
+        ? scene.chainRisk
+        : null,
+      recommendedReanchor: typeof scene.recommendedReanchor === "boolean"
+        ? scene.recommendedReanchor
+        : null,
+      policyFlag: normalizePolicyFlag(scene.policyFlag),
+      policyResolution: normalizePolicyResolution(scene.policyResolution),
+      plannedContinuityOut: normalizePlannedContinuity(scene.plannedContinuityOut),
     };
     previousScene = normalizedScene;
     return normalizedScene;
@@ -604,6 +688,14 @@ export function normalizeStoredScenes(value: unknown): Scene[] {
       assignedCharacterTokens: characterPolicy === "selected"
         ? migratedAssignments
         : [],
+      chainRisk: scene.chainRisk,
+      recommendedReanchor: scene.recommendedReanchor,
+      policyFlag: scene.policyFlag,
+      policyResolution: scene.policyResolution,
+      plannedContinuityOut: scene.plannedContinuityOut,
+      actualContinuityFrame: typeof stored.actualContinuityFrame === "object" && stored.actualContinuityFrame
+        ? stored.actualContinuityFrame as Scene["actualContinuityFrame"]
+        : scene.actualContinuityFrame,
     };
   });
 }

@@ -41,12 +41,6 @@ export function HomeView({ onSelect }: { onSelect: (mode: HomeWorkflowMode) => v
           <span className="home-mode-tag">Kiểm soát cao</span>
         </button>
       </div>
-
-      <div className="home-output-note">
-        <strong>Đầu ra theo phiên</strong>
-        <span>Voice · SRT · source ảnh · source video · Visual Bible · prompt từng scene</span>
-      </div>
     </section>
   );
 }
-

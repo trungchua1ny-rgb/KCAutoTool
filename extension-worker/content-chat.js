@@ -6,9 +6,11 @@ if (!window.__FLOWX_CHAT_WORKER__) {
   const POLL_INTERVAL_MS = 500;
   const SCENE_DURATION_MS = 8_000;
   const SCENES_PER_BATCH = 6;
+  const MAX_CHAIN_LENGTH = 6;
   const MAX_BATCH_ATTEMPTS = 3;
   const MAX_BEAT_PLANNING_ATTEMPTS = 3;
   const ALLOWED_SCENE_DURATIONS = new Set([4, 6, 8]);
+  const POLICY_FLAGS = new Set(["real_person", "violence", "weapons", "dangerous_activity", "sexual_content", "child_safety", "copyrighted_character"]);
   const activeControllers = new Map();
 
   function stoppedError() {
@@ -133,8 +135,36 @@ if (!window.__FLOWX_CHAT_WORKER__) {
         );
     const batches = [];
 
-    for (let offset = 0; offset < boundariesSource.length; offset += SCENES_PER_BATCH) {
-      const boundaries = boundariesSource.slice(offset, offset + SCENES_PER_BATCH);
+    for (let offset = 0; offset < boundariesSource.length;) {
+      const lookahead = boundariesSource.slice(offset, offset + SCENES_PER_BATCH);
+      const complexBatch = lookahead.some((boundary) => boundary?.chainRisk === "high") ||
+        lookahead.filter((boundary) => boundary?.chainRole === "continue").length >= 3;
+      const preferredSize = complexBatch ? 4 : SCENES_PER_BATCH;
+      let endOffset = Math.min(offset + preferredSize, boundariesSource.length);
+      // Never split a batch immediately before a continue beat. Beat planning
+      // already enforces the hard chain cap, so this can extend a batch by at
+      // most the remaining part of that chain.
+      if (
+        endOffset < boundariesSource.length &&
+        boundariesSource[endOffset]?.chainRole === "continue" &&
+        boundariesSource[endOffset - 1]?.chainId === boundariesSource[endOffset]?.chainId
+      ) {
+        const crossingChainId = boundariesSource[endOffset].chainId;
+        let chainStart = endOffset - 1;
+        while (
+          chainStart > offset &&
+          boundariesSource[chainStart - 1]?.chainId === crossingChainId
+        ) chainStart -= 1;
+        if (chainStart > offset) {
+          endOffset = chainStart;
+        } else {
+          while (
+            endOffset < boundariesSource.length &&
+            boundariesSource[endOffset]?.chainId === crossingChainId
+          ) endOffset += 1;
+        }
+      }
+      const boundaries = boundariesSource.slice(offset, endOffset);
       const batchStart = boundaries[0].startMs;
       const batchEnd = boundaries.at(-1).endMs;
       const relevantCues = cues.filter(
@@ -150,6 +180,7 @@ if (!window.__FLOWX_CHAT_WORKER__) {
           )
           .join("\n\n"),
       });
+      offset = endOffset;
     }
     return batches;
   }
@@ -179,7 +210,7 @@ if (!window.__FLOWX_CHAT_WORKER__) {
     return `JOB TYPE: beat_planning
 
 Analyze the COMPLETE SRT and supporting script before scene prompt generation. Return ONLY one valid JSON object, without Markdown or commentary, using exactly this shape:
-{"beats":[{"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","durationSeconds":8,"chainId":"chain-001","chainRole":"start"}]}
+{"beats":[{"sceneIndex":1,"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","durationSeconds":8,"chainId":"chain-001","chainRole":"start","chainRisk":"low","recommendedReanchor":false,"beatSummary":"One source-grounded visible event."}]}
 
 BOUNDARY CONTRACT
 - The first beat MUST start at ${contract.start}.
@@ -187,14 +218,21 @@ BOUNDARY CONTRACT
 - The sum of durationSeconds MUST equal exactly ${contract.durationSeconds} seconds.
 - Every durationSeconds must be exactly 4, 6, or 8 and must equal timeEnd minus timeStart.
 - Beats must be chronological, consecutive, gap-free, overlap-free, and cover the contract exactly.
-- Prefer boundaries that closely match narration changes and minimize unused padding.
+- Prefer boundaries that closely match narration changes and minimize unused padding, but the exact 4/6/8-second contract ALWAYS wins when these goals conflict.
 
 CHAIN RULES
 - single: a self-contained beat. chainId must be null.
 - start: the first beat of a continuous sequence. Give it a short stable chainId such as chain-001.
-- continue: only when the same setting, characters, physical action, and story time continue directly from the immediately preceding beat. It must reuse that preceding beat's chainId.
-- Start a new chain or use single whenever location, time, subject, or action continuity breaks.
+- continue: only when location, story time, central visible subject, action direction, narrative viewpoint, environment state, screen direction, and physical continuity ALL continue directly from the immediately preceding beat. It must reuse that preceding beat's chainId.
+- Start a new chain or use single whenever ANY checklist item changes or is uncertain.
 - Never join unrelated moments merely because the narration topic is similar.
+- Starting with the fourth beat in one chain, evaluate chainRisk as low, medium, or high and set recommendedReanchor=true when a natural reset is safer. Earlier chained beats still return chainRisk, normally low.
+- A chain MUST NOT exceed ${MAX_CHAIN_LENGTH} beats. End it at the nearest source-grounded action boundary before a seventh beat.
+
+SOURCE PRIORITY AND BEAT SUMMARY
+- SRT is authoritative for timeline and visible event coverage. The script may clarify characters, setting, and context but never overrides the SRT.
+- beatSummary is one short source-grounded sentence for downstream reading. It is support metadata, never a new source of truth, and must not add interpretation or events.
+- sceneIndex is the one-based chronological beat number.
 
 ${hasStyleReference ? `STYLE REFERENCE IMAGE
 - A graphic style reference image is attached to this first message.
@@ -281,10 +319,35 @@ ${scriptText}
         error.code = "INVALID_JOB";
         throw error;
       }
+      const chainLength = chainRole === "single"
+        ? 0
+        : chainRole === "start"
+          ? 1
+          : (previous?.chainLength || 0) + 1;
+      if (chainLength > MAX_CHAIN_LENGTH) {
+        const error = new Error(`Beat ${order} exceeds the hard chain cap of ${MAX_CHAIN_LENGTH} scenes`);
+        error.code = "INVALID_JOB";
+        throw error;
+      }
+      const requestedRisk = ["low", "medium", "high"].includes(beat?.chainRisk)
+        ? beat.chainRisk
+        : null;
+      const chainRisk = chainRole === "single"
+        ? null
+        : requestedRisk || (chainLength >= 4 ? "medium" : "low");
+      const recommendedReanchor = chainRole === "single"
+        ? null
+        : typeof beat?.recommendedReanchor === "boolean"
+          ? beat.recommendedReanchor
+          : chainLength >= 4 && chainRisk === "high";
+      const beatSummary = typeof beat?.beatSummary === "string"
+        ? beat.beatSummary.trim().slice(0, 500)
+        : "";
       if (chainId) seenChains.add(chainId);
       previousEnd = endMs;
-      previous = { chainId, chainRole };
+      previous = { chainId, chainRole, chainLength };
       return {
+        sceneIndex: order,
         startMs,
         endMs,
         start: formatTimecode(startMs),
@@ -292,6 +355,9 @@ ${scriptText}
         durationSeconds,
         chainId,
         chainRole,
+        chainRisk,
+        recommendedReanchor,
+        beatSummary,
       };
     });
     if (previousEnd !== contract.endMs) {
@@ -331,10 +397,10 @@ ${scriptText}
       : "KNOWN RECURRING CHARACTER ROSTER\n- No library character name met the automatic two-mention threshold. Preserve only explicit @TOKENS found in the source.";
   }
 
-  function buildTimelinePrompt(batch, batchCount, scriptText, visualBibleInput = {}, characterRoster = [], hasStyleReference = false) {
+  function buildTimelinePrompt(batch, batchCount, scriptText, visualBibleInput = {}, characterRoster = [], hasStyleReference = false, continuityIn = null) {
     const boundaryList = batch.boundaries
       .map((boundary, index) =>
-        `${index + 1}. ${boundary.start} --> ${boundary.end} | chainRole=${boundary.chainRole} | chainId=${boundary.chainId || "null"}`
+        `${index + 1}. ${boundary.start} --> ${boundary.end} | chainRole=${boundary.chainRole} | chainId=${boundary.chainId || "null"} | chainRisk=${boundary.chainRisk || "null"} | beatSummary=${boundary.beatSummary || "use SRT as authority"}`
       )
       .join("\n");
     const scriptSource =
@@ -342,8 +408,8 @@ ${scriptText}
         ? scriptText
         : "Continue using the complete supporting script, character designs, locations, and continuity already established earlier in this same conversation.";
     const outputShape = batch.index === 0
-      ? '{"visualBible":{"style":"...","palette":"...","lighting":"...","continuityNotes":"...","aspectRatio":"16:9"},"scenes":[{"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","imagePrompt":"...","videoPrompt":"...","usedCharacterTokens":["@TOKEN"]}]}'
-      : '{"scenes":[{"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","imagePrompt":"...","videoPrompt":"...","usedCharacterTokens":["@TOKEN"]}]}';
+      ? '{"visualBible":{"style":"...","palette":"...","lighting":"...","continuityNotes":"...","aspectRatio":"16:9"},"scenes":[{"sceneIndex":1,"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","imagePrompt":"...","videoPrompt":"...","usedCharacterTokens":["@TOKEN"],"policyFlag":null,"plannedContinuityOut":{"characterPositions":"...","heldObjects":"...","environmentState":"...","screenDirection":"..."}}]}'
+      : '{"scenes":[{"sceneIndex":1,"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","imagePrompt":"...","videoPrompt":"...","usedCharacterTokens":["@TOKEN"],"policyFlag":null,"plannedContinuityOut":{"characterPositions":"...","heldObjects":"...","environmentState":"...","screenDirection":"..."}}]}';
     const requestedBible = normalizeRequestedVisualBible(visualBibleInput);
     const bibleFields = ["style", "palette", "lighting", "continuityNotes"];
     const lockedFields = bibleFields.filter((field) => requestedBible[field]);
@@ -372,6 +438,11 @@ ${requestedBibleContract}
 - Reuse the exact Visual Bible established in batch 1 of this conversation.
 - Do not redesign the style, palette, lighting, characters, wardrobe, recurring locations, or props.
 - Do not return a second visualBible object; return only scenes for this batch.`;
+    const continuityContract = `CONTINUITY INPUT
+- actualContinuityFrame from the rendered preceding video is the runtime source of truth and always overrides planned text. Phase 3 does not pretend that a rendered frame already exists.
+- The metadata below is only the best available incoming state for planning this batch: ${JSON.stringify(continuityIn || {})}.
+- When the first scene is continue, begin from that incoming state without redesigning it. At runtime the desktop app supplies the real extracted frame as the actual opening image.
+- plannedContinuityOut is a short plan, not proof of what Flow will render. Return its four string fields for start/continue; return an empty object for single.`;
     return `You are an animation director, cinematic screenwriter, and expert Prompt Engineer for AI video systems such as Google Veo, Kling, Hailuo, PixVerse, and Seedance.
 
 TASK
@@ -390,9 +461,12 @@ ${outputShape}
 
 ${visualBibleContract}
 
+${continuityContract}
+
 ${characterRosterContract(characterRoster)}
 
 STRICT SCENE SEGMENTATION
+- Source priority is strict: SRT controls time and visible event coverage; script only clarifies context; beatSummary is helper metadata and never overrides either source; Visual Bible controls appearance, not story events.
 - Do NOT create one scene per subtitle line. Merge consecutive subtitles when location, time of day, characters, and continuous action remain the same.
 - Every scene MUST use its exact required boundary from the Phase 3a contract. Do not change its 4, 6, or 8-second duration.
 - If one narrative segment spans multiple required windows, vary the camera angle, visible action, important object, or meaningful close-up in each window while preserving spatial and narrative continuity.
@@ -423,11 +497,12 @@ PROMPT RULES
 - For chainRole single or start, imagePrompt must depict the strongest keyframe of the exact story beat covered by this required SRT window. It MUST use these five labels exactly once in this order inside the single prompt string: "SUBJECT AND ACTION:", "EMOTION AND BODY LANGUAGE:", "SETTING AND BACKGROUND:", "DEPTH LAYERS:", and "CAMERA AND COMPOSITION:".
 - SUBJECT AND ACTION identifies every visible subject, their exact pose/action, interaction, and story-relevant object. EMOTION AND BODY LANGUAGE gives a concrete facial expression, eyebrow/eye/mouth state, head angle, posture, and gesture for each visible character. If nobody is visible, explicitly say no character is present and describe the observable environmental mood instead.
 - SETTING AND BACKGROUND must state the source-grounded location, time of day, weather, architecture, and readable environmental objects. A white canvas or minimalist style never permits an empty background unless the source explicitly requires empty space.
-- DEPTH LAYERS must separately identify at least one foreground element, one middle-ground subject/object, and one background element, with concrete spatial relationships. CAMERA AND COMPOSITION gives exactly one shot size, one angle, subject placement, and screen direction.
+- DEPTH LAYERS uses only source-grounded elements. When the source does not support extra layers, write exactly: "No additional foreground or background elements are required beyond the visible source-grounded setting." Never invent decoration merely to fill this section. CAMERA AND COMPOSITION gives exactly one shot size, one angle, subject placement, and screen direction.
 - Use precise visual relationships: beside, behind, across the road, framed through a doorway, reflected in glass, partially hidden by smoke. Prefer concrete nouns and observable verbs over decorative adjectives.
 - For abstract narration, translate the meaning into concrete source-grounded visual evidence, objects, behavior, or scenery. Do not fall back to a generic presenter, a random person, or unrelated symbolism.
 - When no character is visible, make the environment carry the story through specific objects, traces, architecture, maps, evidence, damage, weather, or chronological change rather than adding a person.
-- videoPrompt must use these six labels exactly once in this order: "STARTING STATE:", "PRIMARY MOTION:", "REACTION:", "ENVIRONMENTAL MOTION:", "CAMERA MOTION:", and "END FRAME:". For single/start, treat imagePrompt as the opening frame. For continue, treat the exact extracted final frame of the preceding video as the already-visible opening frame: do not redesign, reset, recap, or replace it; describe only the next continuous action from that visible state.
+- videoPrompt must use these six labels exactly once in this order: "STARTING STATE:", "PRIMARY MOTION:", "REACTION:", "ENVIRONMENTAL MOTION:", "CAMERA MOTION:", and "END FRAME:". For single/start, treat imagePrompt as the opening frame. For continue, state that the supplied actual frame is authoritative: do not redesign, reset, recap, or replace it; describe only the next continuous action from that visible state.
+- When no visible character can react, REACTION must say exactly: "No visible character reaction; the environment remains visually unchanged." Do not invent a person or emotional event to fill the section.
 - Describe one continuous, physically possible shot lasting exactly the required boundary duration without retelling the static image. Give each character ONE coherent primary action with an immediate readable reaction. Add anticipation or follow-through only when the duration budget below permits it. The END FRAME must clearly state the final pose and composition that can connect to the next scene, without requesting a long static hold.
 - Motion must use natural timing: appropriate acceleration and deceleration, visible weight transfer, balanced steps, coordinated joints, and secondary overlap in the head, torso, clothing, hair, props, or environment. Choose a purposeful static, pan, track, dolly, or handheld camera behavior at a speed appropriate to the story beat; do not force every shot to be slow. Avoid crossed or fused limbs, hidden hands during critical actions, full-body spins, acrobatics, detailed finger manipulation, multiple unrelated actions, limb transformation, body morphing, or a camera move that hides the main action.
 - VIDEO PACING BUDGET — infer the exact duration from each required boundary and obey the matching rule. For 4s: begin the primary motion immediately; omit anticipation and final settle, or keep each at no more than 0.3s only when physically necessary; primary motion occupies about 2.5–3.5s and reaction overlaps it. For 6s: anticipation is optional and at most 1s; primary motion occupies about 3.5–4.5s; reaction is brief; settle is optional and at most 1s; setup plus final settle total at most 1.5s. For 8s: anticipation is at most 1.5s; primary motion occupies about 4.5–5.5s; reaction is visible; settle is at most 1.5s; setup plus final settle total at most 2s. Primary motion must visibly occupy at least 60% of every clip. An 8s clip must not stretch one small gesture; extended anticipation or settle requires a source-supported emotional beat or establishing shot.
@@ -437,6 +512,8 @@ PROMPT RULES
 - Spend the prompt budget on the other visible parts of the shot: subjects, exact action, facial expression and body language, location, foreground/middle-ground/background objects, spatial relationships, camera framing, motion, reaction, environment, and end-frame continuity.
 - Do NOT include meta phrases such as "according to the Visual Bible", "keep consistent", "same style", or lists of negative rendering instructions in scene prompts. The desktop app attaches the Visual Bible separately.
 - Do not leave characters motionless when the source implies an action. Use specific motion such as walking slowly, turning, opening a door, typing, wind moving objects, or rain falling.
+- Detect policy risk without silently rewriting it inside this scene-generation pass. policyFlag must be null or one of: "real_person", "violence", "weapons", "dangerous_activity", "sexual_content", "child_safety", "copyrighted_character". Flag only a concrete visible risk; the worker will run a separate auditable compliance-rewrite pass before production.
+- plannedContinuityOut must record expected character positions, held objects, environment state, and screen direction for start/continue. It is planning metadata only; the real extracted frame remains authoritative at production time.
 - Before returning JSON, silently audit every scene: it matches the exact timeline, contains no dialogue or internal thought, is not generic, does not invent an event, does not repeat the Visual Bible, gives image and video prompts distinct jobs for single/start, and uses an empty imagePrompt for every continue boundary.
 
 CHARACTER AND SHOT CONTINUITY
@@ -446,6 +523,7 @@ CHARACTER AND SHOT CONTINUITY
 
 CHARACTER TOKENS
 - Use a canonical @CHARACTER token when it appears explicitly in the source OR its mapped natural-language name appears in the source and that person is visibly present in the scene.
+- Visible presence includes a clearly identifiable partial appearance such as a hand, silhouette, reflection, or back view when the prompt actually shows it; an off-screen mention alone does not count.
 - Never invent a character, character token, crowd, narrator avatar, presenter, or human figure merely to make an empty scene more interesting.
 - If a scene has no visible character, focus on source-grounded environments, objects, evidence, maps, architecture, weather, or other visible details.
 - usedCharacterTokens must contain unique uppercase @TOKEN values in order of appearance. Use [] when no character token applies.
@@ -461,15 +539,15 @@ ${scriptSource}
 </SCRIPT_SOURCE>`;
   }
 
-  function buildTimelineRetryPrompt(batch, batchCount, reason, attempt, visualBibleInput = {}, characterRoster = [], hasStyleReference = false) {
+  function buildTimelineRetryPrompt(batch, batchCount, reason, attempt, visualBibleInput = {}, characterRoster = [], hasStyleReference = false, continuityIn = null) {
     const boundaryList = batch.boundaries
       .map((boundary, index) =>
         `${index + 1}. ${boundary.start} --> ${boundary.end} | chainRole=${boundary.chainRole} | chainId=${boundary.chainId || "null"}`
       )
       .join("\n");
     const outputShape = batch.index === 0
-      ? '{"visualBible":{"style":"...","palette":"...","lighting":"...","continuityNotes":"...","aspectRatio":"16:9"},"scenes":[{"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","imagePrompt":"...","videoPrompt":"...","usedCharacterTokens":["@TOKEN"]}]}'
-      : '{"scenes":[{"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","imagePrompt":"...","videoPrompt":"...","usedCharacterTokens":["@TOKEN"]}]}';
+      ? '{"visualBible":{"style":"...","palette":"...","lighting":"...","continuityNotes":"...","aspectRatio":"16:9"},"scenes":[{"sceneIndex":1,"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","imagePrompt":"...","videoPrompt":"...","usedCharacterTokens":["@TOKEN"],"policyFlag":null,"plannedContinuityOut":{}}]}'
+      : '{"scenes":[{"sceneIndex":1,"timeStart":"00:00:00,000","timeEnd":"00:00:08,000","imagePrompt":"...","videoPrompt":"...","usedCharacterTokens":["@TOKEN"],"policyFlag":null,"plannedContinuityOut":{}}]}';
     const requestedBible = normalizeRequestedVisualBible(visualBibleInput);
     const bibleRequirement = batch.index === 0
       ? `Return a complete non-empty visualBible. Preserve every non-empty field from this user input EXACTLY and generate only blank palette, lighting, or continuityNotes fields: ${JSON.stringify(requestedBible)}. visualBible.style is mandatory external Google Flow configuration: copy it character-for-character and never rewrite, translate, expand, summarize, analyze, or append reference-image observations. ${hasStyleReference ? "The attached reference creates no exception to this immutable style rule." : ""} Its aspectRatio must be exactly 16:9. Do not invent characters absent from the source. Scene prompts must describe only visible scene content and must not contain graphic-style wording.`
@@ -485,10 +563,12 @@ ${bibleRequirement}
 
 ${characterRosterContract(characterRoster)}
 
+Source priority remains SRT > script > beatSummary. Incoming continuity metadata is ${JSON.stringify(continuityIn || {})}; it is planning context only, while the real extracted frame is authoritative at runtime. policyFlag must be null or one supported risk category. Return plannedContinuityOut for start/continue and {} for single.
+
 Return exactly ${batch.boundaries.length} scenes with these exact boundaries in this exact order:
 ${boundaryList}
 
-For chainRole single/start, keep imagePrompt at 80-150 English words and use exactly these labels in order: SUBJECT AND ACTION, EMOTION AND BODY LANGUAGE, SETTING AND BACKGROUND, DEPTH LAYERS, CAMERA AND COMPOSITION. For chainRole continue, imagePrompt must be exactly "" because the preceding video's extracted final frame is the opening frame. Keep every videoPrompt at 80-150 English words and use exactly these labels in order: STARTING STATE, PRIMARY MOTION, REACTION, ENVIRONMENTAL MOTION, CAMERA MOTION, END FRAME. A continue videoPrompt must begin from that already-visible extracted frame and describe only the next continuous action without redesigning or resetting the scene. Image prompts require a readable source-grounded setting plus foreground, middle-ground, and background even on a white canvas. Video prompts require one coherent primary action with natural acceleration/deceleration, weight transfer, immediate reaction, secondary motion, and camera behavior suited to the story beat. Primary motion visibly occupies at least 60% of the clip. For 4s, begin immediately and omit anticipation/final settle unless physically essential (each at most 0.3s). For 6s, primary motion occupies about 3.5–4.5s and setup plus settle total at most 1.5s. For 8s, primary motion occupies about 4.5–5.5s and setup plus settle total at most 2s; never stretch a small gesture to fill 8s. Motion is natural real-world speed, never slow-motion, floaty, or dreamlike unless explicitly source-supported. Avoid fused or crossed limbs, spins, hidden hands during critical actions, detailed finger manipulation, body morphing, and multiple unrelated actions. Do not repeat style, palette, default lighting, aspect ratio, or stable designs already stored in the Visual Bible. Escape every quote and control character inside JSON strings. Do not truncate the response.
+For chainRole single/start, keep imagePrompt at 80-150 English words and use exactly these labels in order: SUBJECT AND ACTION, EMOTION AND BODY LANGUAGE, SETTING AND BACKGROUND, DEPTH LAYERS, CAMERA AND COMPOSITION. For chainRole continue, imagePrompt must be exactly "" because the preceding video's extracted final frame is the opening frame. Keep every videoPrompt at 80-150 English words and use exactly these labels in order: STARTING STATE, PRIMARY MOTION, REACTION, ENVIRONMENTAL MOTION, CAMERA MOTION, END FRAME. A continue videoPrompt must begin from the supplied actual frame and describe only the next continuous action without redesigning or resetting it. Never invent props to fill DEPTH LAYERS; use the explicit no-additional-elements sentence when needed. Never invent a reaction when no character is visible; use the explicit no-visible-character sentence. Video prompts require one coherent primary action with natural acceleration/deceleration, weight transfer, secondary motion, and camera behavior suited to the story beat. Primary motion visibly occupies at least 60% of the clip. For 4s, begin immediately and omit anticipation/final settle unless physically essential (each at most 0.3s). For 6s, primary motion occupies about 3.5–4.5s and setup plus settle total at most 1.5s. For 8s, primary motion occupies about 4.5–5.5s and setup plus settle total at most 2s; never stretch a small gesture to fill 8s. Motion is natural real-world speed, never slow-motion, floaty, or dreamlike unless explicitly source-supported. Avoid fused or crossed limbs, spins, hidden hands during critical actions, detailed finger manipulation, body morphing, and multiple unrelated actions. Do not repeat style, palette, default lighting, aspect ratio, or stable designs already stored in the Visual Bible. Escape every quote and control character inside JSON strings. Do not truncate the response.
 
 Relevant SRT for this batch:
 <SRT_SOURCE>
@@ -774,7 +854,7 @@ ${batch.srtText}
     throw error;
   }
 
-  function validateBatchResult(result, batch) {
+  function validateBatchResult(result, batch, characterRoster = []) {
     if (result.scenes.length !== batch.boundaries.length) {
       const error = new Error(
         `ChatGPT trả về ${result.scenes.length} scene thay vì ${batch.boundaries.length} scene`,
@@ -801,6 +881,7 @@ ${batch.srtText}
 
     result.scenes.forEach((scene, index) => {
       const boundary = batch.boundaries[index];
+      scene.sceneIndex = boundary.sceneIndex || index + 1;
       const startMs = parseTimecode(String(scene?.timeStart || ""));
       const endMs = parseTimecode(String(scene?.timeEnd || ""));
       if (startMs !== boundary.startMs || endMs !== boundary.endMs) {
@@ -814,6 +895,29 @@ ${batch.srtText}
       if (isContinuation) {
         scene.imagePrompt = "";
       }
+      if (scene.policyFlag !== null && scene.policyFlag !== undefined && !POLICY_FLAGS.has(scene.policyFlag)) {
+        const error = new Error(`Scene ${index + 1} has unsupported policyFlag`);
+        error.code = "INVALID_JOB";
+        throw error;
+      }
+      scene.policyFlag = POLICY_FLAGS.has(scene.policyFlag) ? scene.policyFlag : null;
+      if (!scene.plannedContinuityOut || typeof scene.plannedContinuityOut !== "object" || Array.isArray(scene.plannedContinuityOut)) {
+        scene.plannedContinuityOut = {};
+      } else {
+        const normalizedContinuity = {};
+        for (const field of ["characterPositions", "heldObjects", "environmentState", "screenDirection"]) {
+          if (typeof scene.plannedContinuityOut[field] === "string") {
+            normalizedContinuity[field] = scene.plannedContinuityOut[field].trim().slice(0, 1_000);
+          }
+        }
+        scene.plannedContinuityOut = boundary.chainRole === "single" ? {} : normalizedContinuity;
+      }
+      const rosterTokens = new Set(normalizeCharacterRoster(characterRoster).map((entry) => entry.token));
+      const explicitSourceTokens = new Set((batch.srtText.match(/@[A-Za-z0-9_]{1,40}\b/g) || []).map((token) => token.toUpperCase()));
+      const requestedTokens = Array.isArray(scene.usedCharacterTokens)
+        ? [...new Set(scene.usedCharacterTokens.map((token) => String(token).trim().toUpperCase()).filter((token) => /^@[A-Z0-9_]{1,40}$/.test(token)))]
+        : [];
+      scene.usedCharacterTokens = requestedTokens.filter((token) => rosterTokens.has(token) || explicitSourceTokens.has(token));
       for (const field of isContinuation ? ["videoPrompt"] : ["imagePrompt", "videoPrompt"]) {
         const prompt = typeof scene?.[field] === "string" ? scene[field].trim() : "";
         const wordCount = prompt ? prompt.split(/\s+/).length : 0;
@@ -928,6 +1032,7 @@ ${batch.srtText}
     const batches = createTimelineBatches(payload.srtText, beatPlan);
     const scenes = [];
     let visualBible = null;
+    let continuityIn = null;
 
     for (const batch of batches) {
       const label = `lô ${batch.index + 1}/${batches.length}`;
@@ -959,6 +1064,7 @@ ${batch.srtText}
                   payload.visualBible,
                   payload.characterRoster,
                   Boolean(payload.styleReference),
+                  continuityIn,
                 )
               : buildTimelineRetryPrompt(
                   batch,
@@ -968,6 +1074,7 @@ ${batch.srtText}
                   payload.visualBible,
                   payload.characterRoster,
                   Boolean(payload.styleReference),
+                  continuityIn,
                 );
           const attemptLabel =
             attempt === 1 ? label : `${label}, lần thử ${attempt}/${MAX_BATCH_ATTEMPTS}`;
@@ -984,7 +1091,7 @@ ${batch.srtText}
               ),
           );
           const result = parseJsonResponse(responseText);
-          validateBatchResult(result, batch);
+          validateBatchResult(result, batch, payload.characterRoster);
           if (batch.index === 0) visualBible = result.visualBible;
           scenes.push(...result.scenes.map((scene, index) => {
             const boundary = batch.boundaries[index];
@@ -993,8 +1100,14 @@ ${batch.srtText}
               durationSeconds: boundary.durationSeconds,
               chainId: boundary.chainId,
               chainRole: boundary.chainRole,
+              chainRisk: boundary.chainRisk,
+              recommendedReanchor: boundary.recommendedReanchor,
+              beatSummary: boundary.beatSummary,
+              policyFlag: scene.policyFlag || null,
+              plannedContinuityOut: scene.plannedContinuityOut || {},
             };
           }));
+          continuityIn = result.scenes.at(-1)?.plannedContinuityOut || null;
           lastInvalidError = null;
           break;
         } catch (error) {
@@ -1025,6 +1138,16 @@ ${batch.srtText}
     }
 
     notifyProgress(jobId, "Đang kiểm tra và ghép toàn bộ timeline");
+    const flaggedScenes = scenes.filter((scene) => scene.policyFlag).length;
+    if (flaggedScenes > 0) {
+      notifyProgress(jobId, `Đã phát hiện ${flaggedScenes} scene có rủi ro; đang tự động tạo prompt an toàn`);
+      await autoResolvePolicyFlags(jobId, scenes, visualBible, payload.characterRoster, signal);
+      const unresolved = scenes.filter((scene) => scene.policyFlag).length;
+      const resolved = flaggedScenes - unresolved;
+      notifyProgress(jobId, unresolved > 0
+        ? `Đã tự sửa ${resolved} scene; còn ${unresolved} scene không thể tự sửa và đã được giữ lại để kiểm tra`
+        : `Đã tự động làm an toàn ${resolved} scene; có thể tiếp tục Production Queue`);
+    }
     return { visualBible, scenes };
   }
 
@@ -1032,9 +1155,21 @@ ${batch.srtText}
     const required = payload.mediaType === "image"
       ? "SUBJECT AND ACTION:, EMOTION AND BODY LANGUAGE:, SETTING AND BACKGROUND:, DEPTH LAYERS:, CAMERA AND COMPOSITION:"
       : "STARTING STATE:, PRIMARY MOTION:, REACTION:, ENVIRONMENTAL MOTION:, CAMERA MOTION:, END FRAME:";
+    const categoryGuidance = {
+      real_person: "Remove the real person's name, aliases, @tokens, recognizable likeness, signature wardrobe, voice imitation, and uniquely identifying biographical details from the generated depiction. Replace only the depicted identity with an original, fictional, non-identifiable person serving the same narrative role. Preserve the source-grounded action, emotion, setting, camera, and historical function.",
+      copyrighted_character: "Replace the protected character with an original generic archetype. Remove the protected name, @token, logos, signature costume, signature props, and distinctive visual traits while preserving only the source-grounded narrative role and action.",
+      violence: "Use non-graphic implication, distance, reaction, aftermath, or environmental evidence. Remove visible wounds, gore, impact detail, suffering, and celebration or encouragement of violence.",
+      weapons: "Do not provide operational weapon detail or glorify use. Keep weapons non-functional, distant, secured, obscured, or replace them with a safe story-equivalent object when the exact weapon is not essential.",
+      dangerous_activity: "Remove actionable instructions, procedural detail, imitation cues, and glorification. Show only a safe consequence, supervised context, warning, or non-actionable aftermath.",
+      sexual_content: "Remove nudity, sexualized framing, explicit contact, fetish detail, and sexual intent. Replace it with a fully clothed, non-sexual, age-appropriate interaction while preserving only the safe narrative beat.",
+      child_safety: "Remove every sexualized, exploitative, dangerous, or humiliating depiction involving a minor. Use a fully clothed, age-appropriate, protected setting with no adult-coded pose or framing; if the beat cannot be made safe, replace it with a neutral environment or caregiver reaction.",
+    }[payload.policyFlag] || "Remove the flagged unsafe element conservatively while preserving only the safe, source-grounded narrative function.";
     return `JOB TYPE: policy_safe_prompt_rewrite
 
 Rewrite exactly one ${payload.mediaType} prompt that Google Flow rejected. Preserve the same source-grounded story beat, characters, setting, emotion, camera intent, continuity, and ${payload.timeStart}–${payload.timeEnd} timeline. Remove or soften only details likely to trigger a safety policy. Do not evade, disguise, encode, or work around safety rules. Replace unsafe graphic detail with non-graphic, implied, aftermath, reaction, distance, silhouette, or environmental storytelling as appropriate.
+
+FLAG-SPECIFIC COMPLIANCE ACTION
+${categoryGuidance}
 
 Keep the prompt in English, 80–150 words, and retain these exact section labels in order: ${required}.
 Do not add dialogue, new characters, new events, copyrighted character imitation, or conflicting visual style. Do not repeat the global Visual Bible unless needed to resolve the unsafe wording.
@@ -1070,7 +1205,7 @@ Return JSON only, exactly: {"prompt":"rewritten prompt"}.${previousError ? `\nTh
         const required = mediaType === "image"
           ? ["SUBJECT AND ACTION:", "EMOTION AND BODY LANGUAGE:", "SETTING AND BACKGROUND:", "DEPTH LAYERS:", "CAMERA AND COMPOSITION:"]
           : ["STARTING STATE:", "PRIMARY MOTION:", "REACTION:", "ENVIRONMENTAL MOTION:", "CAMERA MOTION:", "END FRAME:"];
-        if (words >= 50 && words <= 180 && required.every((label) => prompt.toUpperCase().includes(label))) {
+        if (words >= 80 && words <= 150 && required.every((label) => prompt.toUpperCase().includes(label))) {
           return { prompt };
         }
       } catch (_) {}
@@ -1110,6 +1245,81 @@ Return JSON only, exactly: {"prompt":"rewritten prompt"}.${previousError ? `\nTh
     throw new Error("ChatGPT không tạo được prompt thay thế");
   }
 
+  async function autoResolvePolicyFlags(jobId, scenes, visualBible, characterRoster, signal) {
+    const flagged = scenes.filter((scene) => POLICY_FLAGS.has(scene.policyFlag));
+    for (let index = 0; index < flagged.length; index += 1) {
+      const scene = flagged[index];
+      const originalFlag = scene.policyFlag;
+      const originalTokens = new Set(Array.isArray(scene.usedCharacterTokens) ? scene.usedCharacterTokens : []);
+      const identityEntries = normalizeCharacterRoster(characterRoster)
+        .filter((entry) => originalTokens.has(entry.token));
+      const rewrittenMedia = [];
+      notifyProgress(jobId, `Đang tự động làm an toàn scene ${scene.sceneIndex || "?"} · ${index + 1}/${flagged.length}`);
+      try {
+        if (scene.imagePrompt) {
+          const rewrittenImage = await rewritePolicyPrompt(jobId, {
+            sceneId: `scene-${String(scene.sceneIndex || 1).padStart(3, "0")}`,
+            mediaType: "image",
+            prompt: scene.imagePrompt,
+            policyError: `Preflight policy flag: ${originalFlag}. Create a genuinely compliant replacement; do not evade a safety filter.`,
+            policyFlag: originalFlag,
+            timeStart: scene.timeStart,
+            timeEnd: scene.timeEnd,
+            pairedPrompt: scene.videoPrompt,
+            visualBible,
+          }, signal);
+          scene.imagePrompt = rewrittenImage.prompt;
+          rewrittenMedia.push("image");
+        }
+        const rewrittenVideo = await rewritePolicyPrompt(jobId, {
+          sceneId: `scene-${String(scene.sceneIndex || 1).padStart(3, "0")}`,
+          mediaType: "video",
+          prompt: scene.videoPrompt,
+          policyError: `Preflight policy flag: ${originalFlag}. Create a genuinely compliant replacement; do not evade a safety filter.`,
+          policyFlag: originalFlag,
+          timeStart: scene.timeStart,
+          timeEnd: scene.timeEnd,
+          pairedPrompt: scene.imagePrompt,
+          visualBible,
+        }, signal);
+        scene.videoPrompt = rewrittenVideo.prompt;
+        rewrittenMedia.push("video");
+        const rewrittenText = `${scene.imagePrompt}\n${scene.videoPrompt}`;
+        if (originalFlag === "real_person" || originalFlag === "copyrighted_character") {
+          const unsafeIdentity = identityEntries.find((entry) =>
+            rewrittenText.toLowerCase().includes(entry.name.toLowerCase()) ||
+            rewrittenText.toUpperCase().includes(entry.token)
+          );
+          if (unsafeIdentity) {
+            throw new Error(`Compliance rewrite retained identifiable subject ${unsafeIdentity.name}`);
+          }
+          // Do not upload any original character reference into a real-person or
+          // protected-character replacement. The replacement must be original.
+          scene.usedCharacterTokens = [];
+        } else {
+          scene.usedCharacterTokens = [...new Set(
+            rewrittenText.match(/@[A-Za-z0-9_]{1,40}\b/g) || [],
+          )].map((token) => token.toUpperCase());
+        }
+        scene.policyFlag = null;
+        scene.policyResolution = {
+          originalFlag,
+          status: "auto_rewritten",
+          rewrittenMedia,
+          resolvedAt: new Date().toISOString(),
+        };
+      } catch (error) {
+        scene.policyResolution = {
+          originalFlag,
+          status: "rewrite_failed",
+          rewrittenMedia,
+          error: String(error?.message || error).slice(0, 2_000),
+        };
+      }
+    }
+    return scenes;
+  }
+
   window.__FLOWX_CHAT_INTERNALS__ = {
     createTimelineBatches,
     beatPlanningContract,
@@ -1122,6 +1332,7 @@ Return JSON only, exactly: {"prompt":"rewritten prompt"}.${previousError ? `\nTh
     validateBatchResult,
     buildPolicyRewritePrompt,
     parsePolicyRewriteResponse,
+    autoResolvePolicyFlags,
   };
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

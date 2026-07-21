@@ -26,11 +26,31 @@ export function SettingsView({
   onRefresh: () => void;
 }) {
   const [extensionMessage, setExtensionMessage] = useState("");
+  const [storageMessage, setStorageMessage] = useState("");
+  const [pendingStorageRoot, setPendingStorageRoot] = useState("");
   const openExtensionFolder = async () => {
     const error = await window.flowx?.system.openExtensionFolder();
     setExtensionMessage(
       error || "Đã mở thư mục KC Dev. Trong Chrome, hãy chọn Tải tiện ích đã giải nén và chọn thư mục này.",
     );
+  };
+  const openStorage = async (target: "root" | "data" | "outputs") => {
+    const error = await window.flowx?.system.openStorage(target);
+    setStorageMessage(error || "Đã mở thư mục lưu trữ trên máy.");
+  };
+  const selectStorage = async () => {
+    const result = await window.flowx?.system.selectStorage();
+    if (!result?.selected) return;
+    if (!result.restartRequired) {
+      setStorageMessage("Thư mục này đang được sử dụng.");
+      return;
+    }
+    setPendingStorageRoot(result.rootPath);
+    setStorageMessage(`Đã chọn ${result.rootPath}. Hãy khởi động lại để chuyển dữ liệu.`);
+  };
+  const restart = () => {
+    if (!window.confirm("Khởi động lại KC Auto Tool và chuyển dữ liệu sang nơi lưu mới?")) return;
+    void window.flowx?.system.restart();
   };
 
   return (
@@ -65,6 +85,27 @@ export function SettingsView({
         <div><span><HardDrive size={15} /> GPU</span><b>{system?.gpuPercent === null || !system ? "Không có telemetry" : `${system.gpuPercent.toFixed(1)}%`}</b></div>
         <div><span>FFmpeg</span><b className={system?.ffmpegAvailable ? "is-ready" : "is-missing"}>{system?.ffmpegAvailable ? "Đã sẵn sàng" : "Chưa cài"}</b></div>
         <div><span>Phiên bản</span><b>KC Auto Tool v{system?.appVersion || "…"}</b></div>
+      </div>
+
+      <div className="kc-extension-setup kc-storage-setup">
+        <div>
+          <strong>Lưu trữ tập trung</strong>
+          <span>Dữ liệu dự án và media đầu ra được tách khỏi ổ hệ thống. Máy có ổ D mặc định dùng D:\KC Auto Tool.</span>
+        </div>
+        <div className="kc-storage-paths">
+          <p><b>Thư mục gốc</b><code>{system?.storageRoot || "Đang kiểm tra…"}</code></p>
+          <p><b>Dữ liệu phiên</b><code>{system?.dataRoot || "Đang kiểm tra…"}</code></p>
+          <p><b>Ảnh, video, audio</b><code>{system?.outputRoot || "Đang kiểm tra…"}</code></p>
+        </div>
+        <div className="kc-storage-actions">
+          <button type="button" disabled={!system} onClick={() => void selectStorage()}><HardDrive size={14} /> Chọn nơi lưu</button>
+          <button type="button" disabled={!system} onClick={() => void openStorage("root")}><FolderOpen size={14} /> Mở thư mục gốc</button>
+          <button type="button" disabled={!system} onClick={() => void openStorage("data")}><FolderOpen size={14} /> Mở dữ liệu</button>
+          <button type="button" disabled={!system} onClick={() => void openStorage("outputs")}><FolderOpen size={14} /> Mở đầu ra</button>
+        </div>
+        {pendingStorageRoot && <button className="kc-storage-restart" type="button" onClick={restart}><RefreshCcw size={14} /> Khởi động lại và chuyển dữ liệu</button>}
+        <p className="kc-storage-note">Có thể ghi đè vị trí bằng biến môi trường <code>KC_AUTO_TOOL_STORAGE_ROOT</code>; thay đổi có hiệu lực sau khi khởi động lại app.</p>
+        {storageMessage && <p>{storageMessage}</p>}
       </div>
 
       <div className="kc-extension-setup">

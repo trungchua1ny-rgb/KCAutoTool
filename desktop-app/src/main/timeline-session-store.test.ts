@@ -125,3 +125,30 @@ test("migrates the version 2 single session without losing its timeline", async 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("does not let a stale empty save erase an existing Phase 3 timeline", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flowx-timeline-stale-save-"));
+  try {
+    const store = new TimelineSessionStore(directory);
+    await store.save({
+      scenes: SCENES,
+      visualBible: { style: "locked production style" },
+      workflowMode: "automatic",
+    });
+
+    const saved = await store.save({
+      scenes: [],
+      visualBible: { style: "updated metadata" },
+      workflowMode: "automatic",
+    });
+
+    assert.equal(saved.scenes.length, 1);
+    assert.equal(saved.scenes[0].id, "scene-001");
+    assert.equal(saved.visualBible.style, "updated metadata");
+
+    await store.clear();
+    assert.equal((await store.load())?.scenes.length, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

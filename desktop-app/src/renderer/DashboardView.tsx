@@ -1,20 +1,17 @@
-import { AlertTriangle, CheckCircle2, Clock3, Layers3, LoaderCircle, TimerReset } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type { ProductionQueueSnapshot } from "../shared/production-queue";
 import type { OutputInspection } from "../shared/system";
 import type { TimelineSession } from "../shared/timeline";
 import type { WorkerStatuses } from "../shared/worker-status";
-import { HomeView } from "./HomeView";
-import type { HomeWorkflowMode } from "./integrated-workflow";
-import { OutputLibrary } from "./OutputLibrary";
-import { ProjectJourney } from "./ProjectJourney";
-import { ChatGPTWorkerPanel, GoogleFlowWorkerPanel } from "./WorkerPanels";
 import type { AppPage } from "./app-navigation";
+import { readHomeWorkflowMode } from "./home-workflow-state";
+import type { HomeWorkflowMode } from "./integrated-workflow";
+import { deriveHomepageState, type HomeCharacterSummary } from "./home/homepage-model";
+import { NewSessionHome } from "./home/NewSessionHome";
+import { ProductionHome } from "./home/ProductionHome";
+import { SetupHome } from "./home/SetupHome";
 
-function durationLabel(seconds: number): string {
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
-}
+const EMPTY_CHARACTERS: HomeCharacterSummary = { total: 0, main: 0, recurring: 0 };
 
 export function DashboardView({
   session,
@@ -22,44 +19,71 @@ export function DashboardView({
   output,
   workers,
   onStartWorkflow,
+  onStartConfiguredWorkflow,
+  onRenameSession,
+  onDeleteSession,
   onNavigate,
+  onOpenScene,
+  onStartProduction,
+  onPause,
+  onResume,
+  onStop,
+  onRetry,
+  onBuildVideo,
+  onCheckConnections,
 }: {
   session: TimelineSession | null;
   queue: ProductionQueueSnapshot | null;
   output: OutputInspection | null;
   workers: WorkerStatuses;
-  onStartWorkflow: (mode: HomeWorkflowMode) => void;
+  onStartWorkflow: (mode: HomeWorkflowMode) => Promise<boolean>;
+  onStartConfiguredWorkflow: () => Promise<boolean>;
+  onRenameSession: (name: string) => Promise<boolean>;
+  onDeleteSession: () => Promise<boolean>;
   onNavigate: (page: AppPage) => void;
+  onOpenScene: (sceneId: string) => void;
+  onStartProduction: () => Promise<void>;
+  onPause: () => Promise<void>;
+  onResume: () => Promise<void>;
+  onStop: () => Promise<void>;
+  onRetry: (sceneIds?: string[]) => Promise<void>;
+  onBuildVideo: () => void;
+  onCheckConnections: () => Promise<void>;
 }) {
-  const scenes = session?.scenes || [];
-  const totalDuration = scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0);
-  const completed = scenes.filter((scene) => scene.videoResultPath).length;
-  const completion = scenes.length ? Math.round((completed / scenes.length) * 100) : 0;
-  return (
-    <div className="kc-dashboard">
-      <HomeView onSelect={onStartWorkflow} />
-      <ProjectJourney session={session} queue={queue} output={output} onNavigate={onNavigate} />
-      <section className="kc-project-overview">
-        <header><div><span>PROJECT OVERVIEW</span><h2>Tổng quan phiên hiện tại</h2></div><b>{completion}% hoàn thành</b></header>
-        <div className="kc-overview-grid">
-          <article><Layers3 size={17} /><span>Tổng scene</span><strong>{scenes.length}</strong></article>
-          <article><Clock3 size={17} /><span>Tổng thời lượng</span><strong>{durationLabel(totalDuration)}</strong></article>
-          <article><CheckCircle2 size={17} /><span>Video hoàn thành</span><strong>{completed}/{scenes.length}</strong></article>
-          <article><LoaderCircle size={17} /><span>Đang xử lý</span><strong>{queue?.activeJobId ? 1 : 0}</strong></article>
-          <article className="is-error"><AlertTriangle size={17} /><span>Công việc lỗi</span><strong>{queue?.errors.length || 0}</strong></article>
-          <article><TimerReset size={17} /><span>Đang chờ</span><strong>{queue?.queuedJobs || 0}</strong></article>
-        </div>
-        <i className="kc-project-progress"><span style={{ width: `${completion}%` }} /></i>
-      </section>
-      <div className="kc-worker-grid"><ChatGPTWorkerPanel session={session} workers={workers} queue={queue} onNavigate={onNavigate} /><GoogleFlowWorkerPanel session={session} workers={workers} queue={queue} onNavigate={onNavigate} /></div>
-      <section className="kc-dashboard-timeline">
-        <header><div><span>SCENE TIMELINE</span><h2>Timeline gần nhất</h2></div><button type="button" onClick={() => onNavigate("timeline")}>Mở toàn bộ timeline</button></header>
-        <div className="kc-mini-timeline">
-          {scenes.slice(0, 16).map((scene) => <button key={scene.id} type="button" className={`is-${scene.chainRole} duration-${scene.durationSeconds}`} onClick={() => onNavigate("timeline")}><span>Scene {scene.order}</span><strong>{scene.durationSeconds}s</strong><small>{scene.chainRole} · {scene.videoStatus === "done" ? "video xong" : scene.imageStatus === "done" ? "đã có ảnh" : "đang chờ"}</small></button>)}
-          {!scenes.length && <div className="kc-empty-panel">Chưa có scene. Chọn một chế độ ở phía trên để bắt đầu.</div>}
-        </div>
-      </section>
-      <OutputLibrary inspection={output} session={session} compact />
-    </div>
-  );
+  const [characters, setCharacters] = useState<HomeCharacterSummary>(EMPTY_CHARACTERS);
+  const mode = readHomeWorkflowMode(session);
+  const state = deriveHomepageState(session, mode);
+
+  useEffect(() => {
+    document.querySelector<HTMLElement>(".kc-main-workspace")?.scrollTo({ top: 0 });
+  }, [session?.id, state]);
+
+  useEffect(() => {
+    let active = true;
+    if (state !== "setup-in-progress") return () => { active = false; };
+    void window.flowx?.characters.list().then((items) => {
+      if (!active) return;
+      setCharacters({
+        total: items.length,
+        main: items.filter((item) => item.isMain).length,
+        recurring: items.filter((item) => item.isRecurring !== false).length,
+      });
+    }, () => { if (active) setCharacters(EMPTY_CHARACTERS); });
+    return () => { active = false; };
+  }, [session?.id, state]);
+
+  const view = useMemo(() => {
+    if (state === "new-session") {
+      return <NewSessionHome session={session} onSelectMode={onStartWorkflow} onRename={onRenameSession} onOpenSessions={() => onNavigate("sessions")} onDelete={onDeleteSession} />;
+    }
+    if (state === "setup-in-progress" && session && mode) {
+      return <SetupHome session={session} mode={mode} characters={characters} workers={workers} onNavigate={onNavigate} onStart={onStartConfiguredWorkflow} />;
+    }
+    if (session && mode) {
+      return <ProductionHome session={session} mode={mode} queue={queue} output={output} workers={workers} onNavigate={onNavigate} onOpenScene={onOpenScene} onStart={onStartProduction} onPause={onPause} onResume={onResume} onStop={onStop} onRetry={onRetry} onBuildVideo={onBuildVideo} onCheckConnections={onCheckConnections} />;
+    }
+    return null;
+  }, [characters, mode, onBuildVideo, onCheckConnections, onDeleteSession, onNavigate, onOpenScene, onPause, onRenameSession, onResume, onRetry, onStartConfiguredWorkflow, onStartProduction, onStartWorkflow, onStop, output, queue, session, state, workers]);
+
+  return <div className={`kc-dashboard-v2 is-${state}`} data-homepage-state={state}>{view}</div>;
 }

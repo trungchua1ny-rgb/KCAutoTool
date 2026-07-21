@@ -65,6 +65,10 @@ class FakeGroup {
   querySelectorAll(): FakeControl[] {
     return this.controls;
   }
+
+  getBoundingClientRect(): Record<string, number> {
+    return { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 };
+  }
 }
 
 class FakeRenderAnchor {
@@ -72,6 +76,7 @@ class FakeRenderAnchor {
   href = "https://labs.google/fx/tools/flow/project/test/render-active";
   completedTrigger: FakeControl | null = null;
   firstElementChild: FakeRenderTarget | null = null;
+  parentElement: FakeGroup | null = null;
 
   getAttribute(name: string): string | null {
     return name === "href" ? this.href : null;
@@ -84,9 +89,11 @@ class FakeRenderAnchor {
 
 class FakeRenderTarget {
   clickCount = 0;
+  textContent: string;
 
-  constructor(private readonly anchor: FakeRenderAnchor, private readonly progress: number) {
+  constructor(private readonly anchor: FakeRenderAnchor, private readonly progress: number, text = "") {
     anchor.firstElementChild = this;
+    this.textContent = text;
   }
 
   getBoundingClientRect(): Record<string, number> {
@@ -222,6 +229,8 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
     clickActiveRenderingVideoCard: () => Promise<Record<string, unknown>>;
     videoViewerState: () => Record<string, unknown>;
     clickViewerDownload: () => Promise<Record<string, unknown>>;
+    inspectAndCloseFailedVideoViewer: () => Promise<Record<string, unknown>>;
+    videoViewerGenerationFailure: () => Record<string, unknown> | null;
     generationFailureSnapshot: () => Map<string, number>;
     newGenerationFailure: () => Record<string, unknown> | null;
     promptTextMatches: (actual: string, expected: string) => boolean;
@@ -449,7 +458,10 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   const videoTrigger = new FakeControl("latest-video", "", {});
   const nativeDownload = new FakeControl("native-download", "download Tải xuống", {});
   const done = new FakeControl("viewer-done", "Xong", {});
-  videoTrigger.onClick = () => controls.push(nativeDownload, done);
+  videoTrigger.onClick = () => {
+    new FakeGroup([nativeDownload, done]);
+    controls.push(nativeDownload, done);
+  };
   newVideo.trigger = videoTrigger;
   const nativeDownloadResult = await internals.startNativeVideoDownload(videoBaseline);
   assert.equal(nativeDownloadResult.ok, true);
@@ -457,14 +469,27 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   assert.equal(nativeDownload.clickCount, 1);
   assert.equal(done.clickCount > 0, true);
 
+  const oldRenderAnchor = new FakeRenderAnchor();
+  oldRenderAnchor.href = "https://labs.google/fx/tools/flow/project/test/render-old";
+  const oldRenderingTarget = new FakeRenderTarget(oldRenderAnchor, 88, "An older video prompt");
   const renderAnchor = new FakeRenderAnchor();
-  const renderingTarget = new FakeRenderTarget(renderAnchor, 11);
-  renderAnchors.push(renderAnchor);
-  renderTargets.push(renderingTarget);
+  const renderingTarget = new FakeRenderTarget(renderAnchor, 11, "PRIMARY MOTION: the current scene action");
+  renderAnchors.push(oldRenderAnchor, renderAnchor);
+  renderTargets.push(oldRenderingTarget, renderingTarget);
+  windowValue.__flowx_render_anchor_baseline = new Set([oldRenderAnchor]);
+  windowValue.__flowx_active_prompt_text = "PRIMARY MOTION: the current scene action";
+  const staleFailure = new FakeControl(
+    "stale-render-failure",
+    "Không thành công Rất tiếc, đã xảy ra lỗi!",
+    { role: "alert" },
+  );
+  controls.push(staleFailure);
+  assert.equal(internals.videoViewerGenerationFailure(), null);
   const clickedRenderCard = await internals.clickActiveRenderingVideoCard();
   assert.equal(clickedRenderCard.ok, true);
   assert.equal(clickedRenderCard.progress, 11);
   assert.equal(renderingTarget.clickCount > 0, true);
+  assert.equal(oldRenderingTarget.clickCount, 0);
   const completedRenderTrigger = new FakeControl("completed-render", "", {});
   renderAnchor.completedTrigger = completedRenderTrigger;
   renderTargets.length = 0;
@@ -484,6 +509,57 @@ test("confirms Flow LANDSCAPE and duration tabs by stable identity", async () =>
   const enabledDownloadAttempt = await internals.clickViewerDownload();
   assert.equal(enabledDownloadAttempt.clicked, true);
   assert.equal(nativeDownload.clickCount, downloadCountBeforeDisabledCheck + 1);
+
+  const titleOnlyWarning = new FakeControl("viewer-title-only-warning", "warning", {});
+  const titleOnlyPanel = {
+    parentElement: null as FakeGroup | null,
+    textContent: "warningKhông thành công",
+    getBoundingClientRect: () => ({ left: 410, top: 80, right: 760, bottom: 180, width: 350, height: 100 }),
+    querySelectorAll: () => [],
+  };
+  const titleOnlyViewerRoot = new FakeGroup([done, titleOnlyWarning]);
+  titleOnlyWarning.parentElement = titleOnlyPanel as unknown as FakeGroup;
+  titleOnlyPanel.parentElement = titleOnlyViewerRoot;
+  controls.push(titleOnlyWarning);
+  assert.equal(internals.videoViewerGenerationFailure(), null);
+
+  controls.length = 0;
+  const failedViewerDone = new FakeControl("failed-viewer-done", "Xong", {});
+  const failedViewerWarning = new FakeControl("failed-viewer-warning", "warning", {});
+  const failedViewerPanel = {
+    parentElement: null as FakeGroup | null,
+    textContent: "Không thành công Rất tiếc, đã xảy ra lỗi! Thử lại Xoá",
+    getBoundingClientRect: () => ({ left: 10, top: 10, right: 330, bottom: 190, width: 320, height: 180 }),
+    querySelectorAll: () => [],
+  };
+  const failedViewerRoot = new FakeGroup([failedViewerDone, failedViewerWarning]);
+  failedViewerWarning.parentElement = failedViewerPanel as unknown as FakeGroup;
+  failedViewerPanel.parentElement = failedViewerRoot;
+  const outsidePolicyFailure = new FakeControl(
+    "outside-policy-failure",
+    "Video could not be generated because it might violate our safety policy.",
+    { role: "alert" },
+  );
+  const failedOuterPanel = {
+    parentElement: null,
+    textContent: outsidePolicyFailure.textContent,
+    getBoundingClientRect: () => ({ left: 10, top: 10, right: 330, bottom: 190, width: 320, height: 180 }),
+    querySelectorAll: () => [outsidePolicyFailure],
+    querySelector: () => null,
+  };
+  renderAnchor.parentElement = failedOuterPanel as unknown as FakeGroup;
+  failedViewerDone.onClick = () => {
+    controls.splice(0, controls.length, outsidePolicyFailure);
+  };
+  controls.push(failedViewerDone, failedViewerWarning);
+  windowValue.__flowx_generation_error_baseline = new Map();
+  assert.equal(internals.videoViewerGenerationFailure()?.code, "FLOW_GENERATION_FAILED");
+  const failedViewerResult = await internals.inspectAndCloseFailedVideoViewer();
+  assert.equal(failedViewerResult.viewerFailure, true);
+  assert.equal(failedViewerResult.viewerClosed, true);
+  assert.equal(failedViewerResult.code, "FLOW_POLICY_VIOLATION");
+  assert.match(String(failedViewerResult.outsideError), /safety policy/i);
+  assert.equal(internals.newGenerationFailure(), null);
 
   controls.length = 0;
   const previousFailure = new FakeControl(

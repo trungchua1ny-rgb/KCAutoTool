@@ -216,7 +216,11 @@ export class TimelineSessionStore {
         this.database.data.sessions.push(session);
         this.database.data.activeSessionId = session.id;
       }
-      session.scenes = scenes;
+      // Empty scene arrays from a stale renderer must never erase a completed
+      // Phase 3 timeline. Explicit deletion uses clear(), not save().
+      if (scenes.length > 0 || session.scenes.length === 0) {
+        session.scenes = scenes;
+      }
       session.visualBible = input
         ? normalizeVisualBible(input.visualBible)
         : session.visualBible;

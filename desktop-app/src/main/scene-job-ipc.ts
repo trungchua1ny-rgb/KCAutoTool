@@ -8,6 +8,7 @@ import {
 } from "../shared/scene-job";
 import { WorkerServer } from "./worker-server";
 import type { CharacterStore } from "./character-store";
+import { relocateSceneJobResult } from "./media-relocation";
 
 function broadcastProgress(progress: SceneJobProgress): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -18,6 +19,7 @@ function broadcastProgress(progress: SceneJobProgress): void {
 export function registerSceneJobIpcHandlers(
   server: WorkerServer,
   characterStore: CharacterStore,
+  generatedMediaRoot?: string,
 ): void {
   ipcMain.handle(SCENE_JOB_CANCEL_CHANNEL, () => server.stopActiveJob("flow-worker"));
   ipcMain.handle(SCENE_JOB_RUN_CHANNEL, async (_event, value: unknown) => {
@@ -25,6 +27,9 @@ export function registerSceneJobIpcHandlers(
     const refImages = input.mediaType === "image"
       ? await characterStore.resolveReferences(input.characterTokens)
       : [];
-    return server.runSceneJob({ ...input, refImages }, broadcastProgress);
+    const result = await server.runSceneJob({ ...input, refImages }, broadcastProgress);
+    return generatedMediaRoot
+      ? relocateSceneJobResult(result, generatedMediaRoot, input.outputFolder || "default-session")
+      : result;
   });
 }

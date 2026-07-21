@@ -1,10 +1,11 @@
 import { Bell, Check, Play, Search, Settings, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TimelineSessionSummary } from "../shared/timeline";
+import type { WorkerStatuses } from "../shared/worker-status";
 import { PAGE_COPY, type AppPage } from "./app-navigation";
 
 const SEARCHABLE_PAGES: AppPage[] = [
-  "home", "sessions", "voice", "visual-bible", "characters", "timeline", "queue", "output", "settings",
+  "home", "sessions", "voice", "visual-bible", "characters", "timeline", "edit", "queue", "output", "settings",
 ];
 
 export function TopHeader({
@@ -13,6 +14,8 @@ export function TopHeader({
   sessions,
   errorCount,
   saving,
+  sessionSavedAt,
+  workers,
   onNavigate,
   onSave,
   onSelectSession,
@@ -22,6 +25,8 @@ export function TopHeader({
   sessions: TimelineSessionSummary[];
   errorCount: number;
   saving: boolean;
+  sessionSavedAt: string;
+  workers: WorkerStatuses;
   onNavigate: (page: AppPage) => void;
   onSave: () => void;
   onSelectSession: (id: string) => void;
@@ -29,6 +34,7 @@ export function TopHeader({
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const copy = PAGE_COPY[page];
+  const savedAt = sessionSavedAt ? new Date(sessionSavedAt) : null;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
@@ -62,9 +68,7 @@ export function TopHeader({
         <button className="kc-header-save" type="button" onClick={onSave} disabled={saving}>
           <Check size={15} /> {saving ? "Đang lưu" : "Lưu trạng thái"}
         </button>
-        <button className="kc-header-continue" type="button" onClick={() => onNavigate("timeline")}>
-          <Play size={14} /> Tiếp tục dự án
-        </button>
+        {page === "home" ? <div className="kc-home-header-meta"><span>{savedAt && !Number.isNaN(savedAt.getTime()) ? `Lưu ${savedAt.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}` : "Chưa có lần lưu"}</span><span><Check size={12} /> Autosave</span><button type="button" className={workers["chat-worker"].connected ? "is-connected" : "is-disconnected"} title="Mở cài đặt kết nối" onClick={() => onNavigate("settings")}>ChatGPT</button><button type="button" className={workers["flow-worker"].connected ? "is-connected" : "is-disconnected"} title="Mở cài đặt kết nối" onClick={() => onNavigate("settings")}>Flow</button></div> : <button className="kc-header-continue" type="button" onClick={() => onNavigate("timeline")}><Play size={14} /> Tiếp tục dự án</button>}
         <div className="kc-search">
           <Search size={15} />
           <input ref={searchRef} value={query} placeholder="Tìm kiếm…" onChange={(event) => setQuery(event.target.value)} />

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ProductionQueueSnapshot } from "../shared/production-queue";
 import type { OutputInspection, SystemStatus } from "../shared/system";
-import type { TimelineSession, TimelineSessionSummary } from "../shared/timeline";
+import type { TimelineProgress, TimelineSession, TimelineSessionSummary } from "../shared/timeline";
 
 export interface WorkspaceData {
   session: TimelineSession | null;
@@ -10,6 +10,7 @@ export interface WorkspaceData {
   sessionQueues: Record<string, ProductionQueueSnapshot>;
   output: OutputInspection | null;
   system: SystemStatus | null;
+  timelineProgress: TimelineProgress | null;
   loading: boolean;
   refresh: () => Promise<void>;
 }
@@ -21,6 +22,7 @@ export function useWorkspaceData(): WorkspaceData {
   const [sessionQueues, setSessionQueues] = useState<Record<string, ProductionQueueSnapshot>>({});
   const [output, setOutput] = useState<OutputInspection | null>(null);
   const [system, setSystem] = useState<SystemStatus | null>(null);
+  const [timelineProgress, setTimelineProgress] = useState<TimelineProgress | null>(null);
   const [loading, setLoading] = useState(true);
   const activeSessionId = useRef("");
 
@@ -43,6 +45,9 @@ export function useWorkspaceData(): WorkspaceData {
     const inspection = active
       ? await bridge.system.inspectOutput(active.id).catch(() => null)
       : null;
+    if (activeSessionId.current && activeSessionId.current !== (active?.id || "")) {
+      setTimelineProgress(null);
+    }
     setSession(active);
     activeSessionId.current = active?.id || "";
     setSessions(summaries);
@@ -76,5 +81,11 @@ export function useWorkspaceData(): WorkspaceData {
     };
   }, [refresh]);
 
-  return { session, sessions, queue, sessionQueues, output, system, loading, refresh };
+  useEffect(() => {
+    const bridge = window.flowx?.timeline;
+    if (!bridge) return undefined;
+    return bridge.onProgress(setTimelineProgress);
+  }, []);
+
+  return { session, sessions, queue, sessionQueues, output, system, timelineProgress, loading, refresh };
 }

@@ -1,41 +1,38 @@
 import {
+  AlertTriangle,
   ArrowLeft,
-  AudioLines,
-  CheckCircle2,
+  ArrowRight,
+  Check,
+  ChevronDown,
+  Clipboard,
+  Clock3,
   FileAudio,
   FileText,
   FolderOpen,
-  LoaderCircle,
+  Pause,
   Play,
-  Square,
-  WandSparkles,
+  RotateCcw,
+  Search,
+  Trash2,
+  Upload,
+  Volume2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_VISUAL_BIBLE,
   type TimelineSession,
-  type TimelineStyleReference,
   type TimelineWorkflowSource,
-  type VisualBible,
 } from "../shared/timeline";
-import type { GraphicStylePreset } from "../shared/visual-style";
-import type {
-  VoiceCatalogEntry,
-  VoiceGenerateResult,
-  VoicePauseLevel,
-  VoiceProgress,
-} from "../shared/voice";
-import { VisualBiblePanel } from "./VisualBiblePanel";
+import type { VoiceCatalogEntry, VoicePauseLevel } from "../shared/voice";
 import type { HomeWorkflowMode, IntegratedWorkflowHandoff } from "./integrated-workflow";
 
-const EMOTION_PRESETS = {
-  natural: { label: "Tự nhiên", rate: 0, pitch: 0, volume: 0 },
-  warm: { label: "Ấm áp", rate: -5, pitch: -5, volume: 0 },
-  inspiring: { label: "Truyền cảm", rate: 5, pitch: 5, volume: 5 },
-  climax: { label: "Kịch tính", rate: 10, pitch: 10, volume: 20 },
-  urgent: { label: "Khẩn cấp", rate: 20, pitch: 5, volume: 10 },
-  whisper: { label: "Thì thầm", rate: -10, pitch: -10, volume: -25 },
-} as const;
+const VOICE_PRESETS = [
+  { key: "natural", label: "Tự nhiên", rate: 0, pitch: 0, volume: 0 },
+  { key: "clear", label: "Chậm, rõ ràng", rate: -15, pitch: -5, volume: 0 },
+  { key: "story", label: "Kể chuyện", rate: -5, pitch: -5, volume: 0 },
+  { key: "fast", label: "Nhanh, năng động", rate: 15, pitch: 5, volume: 5 },
+  { key: "news", label: "Tin tức", rate: 5, pitch: 0, volume: 5 },
+] as const;
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -52,24 +49,34 @@ function localeLabel(locale: string): string {
     const regions = new Intl.DisplayNames(["vi"], { type: "region" });
     const language = languages.of(parsed.language) || parsed.language;
     const country = parsed.region ? regions.of(parsed.region) || parsed.region : "Không xác định";
-    return `${country} · ${language} (${locale})`;
+    return `${country} · ${language}`;
   } catch {
     return locale;
   }
 }
 
+function initials(name: string): string {
+  return name.split(/\s+/).filter(Boolean).slice(-2).map((part) => part[0]).join("").toUpperCase() || "VO";
+}
+
+function wordCount(text: string): number {
+  return text.trim() ? text.trim().split(/\s+/).length : 0;
+}
+
+function estimatedDuration(words: number): string {
+  if (!words) return "0:00";
+  const seconds = Math.max(1, Math.round(words / 2.5));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 export function VoiceWorkflow({
   mode,
   session,
-  chatConnected,
-  flowConnected,
   onBack,
   onComplete,
 }: {
   mode: Exclude<HomeWorkflowMode, "srt_script">;
   session?: TimelineSession | null;
-  chatConnected: boolean;
-  flowConnected: boolean;
   onBack: () => void;
   onComplete: (handoff: IntegratedWorkflowHandoff) => void;
 }) {
@@ -82,6 +89,7 @@ export function VoiceWorkflow({
   const [voiceLoading, setVoiceLoading] = useState(true);
   const [voiceSearch, setVoiceSearch] = useState("");
   const [voiceLocale, setVoiceLocale] = useState("");
+  const [voiceGender, setVoiceGender] = useState<"all" | "Female" | "Male">("all");
   const [selectedVoice, setSelectedVoice] = useState(session?.workflowSource.voiceName || "");
   const [rate, setRate] = useState(session?.workflowSource.voiceRate ?? 0);
   const [pitch, setPitch] = useState(session?.workflowSource.voicePitch ?? 0);
@@ -90,20 +98,17 @@ export function VoiceWorkflow({
   const [splitMode, setSplitMode] = useState<"paragraph" | "sentence">(session?.workflowSource.voiceSplitMode || "paragraph");
   const [maxCharsPerChunk, setMaxCharsPerChunk] = useState(session?.workflowSource.voiceMaxCharsPerChunk || 3000);
   const [exportWordSrt, setExportWordSrt] = useState(Boolean(session?.workflowSource.voiceExportWordSrt));
-  const [visualBible, setVisualBible] = useState<VisualBible>(() => structuredClone(session?.visualBible || DEFAULT_VISUAL_BIBLE));
-  const [styleReference, setStyleReference] = useState<TimelineStyleReference | null>(session?.styleReference || null);
-  const [stylePresets, setStylePresets] = useState<GraphicStylePreset[]>([]);
-  const [styleError, setStyleError] = useState("");
-  const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState<VoiceProgress | null>(null);
+  const [scriptOpen, setScriptOpen] = useState(Boolean(session?.workflowSource.scriptText || session?.workflowSource.scriptFileName));
+  const [longTextOpen, setLongTextOpen] = useState(false);
+  const [previewTab, setPreviewTab] = useState<"quick" | "content">("quick");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewPlaying, setPreviewPlaying] = useState(false);
+  const [previewCurrent, setPreviewCurrent] = useState(0);
+  const [previewDuration, setPreviewDuration] = useState(0);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [result, setResult] = useState<VoiceGenerateResult | null>(null);
-  const [audioUrl, setAudioUrl] = useState("");
-  const [pendingHandoff, setPendingHandoff] = useState<IntegratedWorkflowHandoff | null>(null);
   const previewAudio = useRef<HTMLAudioElement | null>(null);
-  const projectSession = useRef<{ id: string; name: string } | null>(
-    session ? { id: session.id, name: session.name } : null,
-  );
+  const projectSession = useRef<{ id: string; name: string } | null>(session ? { id: session.id, name: session.name } : null);
 
   useEffect(() => {
     if (!session) return;
@@ -121,35 +126,16 @@ export function VoiceWorkflow({
     setSplitMode(session.workflowSource.voiceSplitMode || "paragraph");
     setMaxCharsPerChunk(session.workflowSource.voiceMaxCharsPerChunk || 3000);
     setExportWordSrt(Boolean(session.workflowSource.voiceExportWordSrt));
-    setVisualBible(structuredClone(session.visualBible));
-    setStyleReference(session.styleReference);
-    setResult(null);
-    setPendingHandoff(null);
+    setScriptOpen(Boolean(session.workflowSource.scriptText || session.workflowSource.scriptFileName));
     setError("");
   }, [session?.id]);
 
   useEffect(() => {
     let active = true;
-    if (!result?.audioPath) {
-      setAudioUrl("");
-      return undefined;
-    }
-    void window.flowx?.media.getStreamUrl(result.audioPath).then(
-      (url) => { if (active) setAudioUrl(url); },
-      () => { if (active) setAudioUrl(""); },
-    );
-    return () => { active = false; };
-  }, [result?.audioPath]);
-
-  useEffect(() => {
-    let active = true;
     const bridge = window.flowx;
     if (!bridge) return undefined;
-    const unsubscribe = bridge.voice.onProgress((next) => {
-      if (active) setProgress(next);
-    });
-    void Promise.all([bridge.voice.list(), bridge.visualStyles.list()]).then(
-      ([catalog, presets]) => {
+    void bridge.voice.list().then(
+      (catalog) => {
         if (!active) return;
         const sorted = [...catalog].sort((left, right) => {
           const leftRank = left.locale.startsWith("vi-") ? 0 : 1;
@@ -157,7 +143,6 @@ export function VoiceWorkflow({
           return leftRank - rightRank || left.locale.localeCompare(right.locale) || left.friendlyName.localeCompare(right.friendlyName);
         });
         setVoices(sorted);
-        setStylePresets(presets);
         const restored = session?.workflowSource.voiceName;
         const preferred = sorted.find((voice) => voice.shortName === restored)
           || sorted.find((voice) => voice.shortName === "vi-VN-HoaiMyNeural")
@@ -173,7 +158,6 @@ export function VoiceWorkflow({
     );
     return () => {
       active = false;
-      unsubscribe();
       previewAudio.current?.pause();
     };
   }, [session?.id]);
@@ -182,12 +166,12 @@ export function VoiceWorkflow({
     const query = voiceSearch.trim().toLocaleLowerCase();
     return voices.filter((voice) => {
       if (voiceLocale && voice.locale !== voiceLocale) return false;
+      if (voiceGender !== "all" && voice.gender !== voiceGender) return false;
       if (!query) return true;
-      return `${voice.friendlyName} ${voice.shortName}`.toLocaleLowerCase().includes(query);
+      return `${voice.friendlyName} ${voice.shortName} ${voice.locale}`.toLocaleLowerCase().includes(query);
     });
-  }, [voiceLocale, voiceSearch, voices]);
-  const voiceLocales = useMemo(() => [...new Set(voices.map((voice) => voice.locale))]
-    .sort((left, right) => localeLabel(left).localeCompare(localeLabel(right), "vi")), [voices]);
+  }, [voiceGender, voiceLocale, voiceSearch, voices]);
+  const voiceLocales = useMemo(() => [...new Set(voices.map((voice) => voice.locale))].sort((left, right) => localeLabel(left).localeCompare(localeLabel(right), "vi")), [voices]);
 
   useEffect(() => {
     if (!filteredVoices.length || filteredVoices.some((voice) => voice.shortName === selectedVoice)) return;
@@ -195,13 +179,12 @@ export function VoiceWorkflow({
   }, [filteredVoices, selectedVoice]);
 
   const selected = voices.find((voice) => voice.shortName === selectedVoice) || null;
-  const workersReady = mode !== "full_auto" || (chatConnected && flowConnected);
-  const canStart = Boolean(narrationText.trim() && selectedVoice && visualBible.style.trim() && !running && workersReady);
+  const words = wordCount(narrationText);
+  const canContinue = Boolean(narrationText.trim() && selectedVoice && !saving);
+  const contentPreview = narrationText.trim().slice(0, 180) || "Chưa có nội dung để preview.";
+  const previewPercent = previewDuration ? Math.min(100, (previewCurrent / previewDuration) * 100) : 0;
 
-  const chooseTextFile = async (
-    file: File | undefined,
-    kind: "narration" | "script",
-  ) => {
+  const chooseTextFile = async (file: File | undefined, kind: "narration" | "script") => {
     if (!file) return;
     if (file.size > 2 * 1024 * 1024) {
       setError("File văn bản vượt quá giới hạn 2 MB.");
@@ -215,74 +198,79 @@ export function VoiceWorkflow({
     } else {
       setScriptFileName(file.name);
       setScriptText(text);
+      setScriptOpen(true);
     }
     setError("");
   };
 
-  const preview = async () => {
-    if (!selected || !window.flowx) return;
+  const preview = async (voiceOverride?: VoiceCatalogEntry) => {
+    const voice = voiceOverride || selected;
+    if (!voice || !window.flowx) return;
     setError("");
+    setPreviewLoading(true);
     try {
       previewAudio.current?.pause();
-      const dataUrl = await window.flowx.voice.preview(selected.shortName, selected.locale);
+      const dataUrl = await window.flowx.voice.preview(voice.shortName, voice.locale);
       const audio = new Audio(dataUrl);
       previewAudio.current = audio;
+      audio.addEventListener("loadedmetadata", () => setPreviewDuration(audio.duration || 0));
+      audio.addEventListener("timeupdate", () => setPreviewCurrent(audio.currentTime));
+      audio.addEventListener("play", () => setPreviewPlaying(true));
+      audio.addEventListener("pause", () => setPreviewPlaying(false));
+      audio.addEventListener("ended", () => { setPreviewPlaying(false); setPreviewCurrent(0); });
       await audio.play();
     } catch (caught) {
       setError(`Không nghe thử được giọng: ${message(caught)}`);
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
-  const saveStylePreset = (name: string) => {
-    void window.flowx?.visualStyles.save({ name, style: visualBible.style }).then(
-      (saved) => setStylePresets(saved),
-      (caught) => setStyleError(message(caught)),
-    );
+  const togglePreview = () => {
+    const audio = previewAudio.current;
+    if (!audio) {
+      void preview();
+      return;
+    }
+    if (audio.paused) void audio.play();
+    else audio.pause();
   };
 
-  const deleteStylePreset = (id: string) => {
-    void window.flowx?.visualStyles.remove(id).then(
-      (saved) => setStylePresets(saved),
-      (caught) => setStyleError(message(caught)),
-    );
+  const pasteFromClipboard = async () => {
+    try {
+      setNarrationText(await navigator.clipboard.readText());
+      setNarrationFileName("");
+      setError("");
+    } catch (caught) {
+      setError(`Không thể dán clipboard: ${message(caught)}`);
+    }
   };
 
-  const start = async () => {
+  const continueSetup = async (advance = true) => {
     const bridge = window.flowx;
-    if (!bridge || !canStart) return;
-    setRunning(true);
-    setResult(null);
-    setPendingHandoff(null);
-    setProgress(null);
+    if (!bridge || (advance && !canContinue)) return;
+    setSaving(true);
     setError("");
     try {
-      const workspaceSession = projectSession.current ||
-        await bridge.timeline.createSession(projectName.trim() || "Video mới");
+      const workspaceSession = projectSession.current || await bridge.timeline.createSession(projectName.trim() || "Video mới");
       projectSession.current = { id: workspaceSession.id, name: workspaceSession.name };
-      const generated = await bridge.voice.generate({
-        projectId: workspaceSession.id,
-        projectName: workspaceSession.name,
-        narrationText,
-        narrationFileName: narrationFileName || "loi-thoai.txt",
-        voice: selectedVoice,
-        prosody: { rate, pitch, volume, pauseLevel },
-        splitMode,
-        maxCharsPerChunk,
-        exportWordSrt,
-      });
-      const effectiveScript = scriptText.trim() || narrationText.trim();
+      const nextName = projectName.trim() || workspaceSession.name;
+      if (nextName !== workspaceSession.name) {
+        await bridge.timeline.renameSession(workspaceSession.id, nextName);
+        projectSession.current = { id: workspaceSession.id, name: nextName };
+      }
       const source: TimelineWorkflowSource = {
         narrationText,
         narrationFileName: narrationFileName || "loi-thoai.txt",
         narrationPath: "",
-        srtText: generated.srtText,
-        scriptText: effectiveScript,
-        srtFileName: generated.srtFileName,
+        srtText: "",
+        scriptText: scriptText.trim() || narrationText.trim(),
+        srtFileName: "",
         scriptFileName: scriptFileName || narrationFileName || "loi-thoai.txt",
-        srtPath: generated.srtPath,
+        srtPath: "",
         scriptPath: "",
-        audioPath: generated.audioPath,
-        audioFileName: generated.audioFileName,
+        audioPath: "",
+        audioFileName: "",
         voiceName: selectedVoice,
         voiceRate: rate,
         voicePitch: pitch,
@@ -294,160 +282,115 @@ export function VoiceWorkflow({
       };
       const workflowMode = mode === "full_auto" ? "automatic" : "two_step";
       await bridge.timeline.saveSession({
-        scenes: [],
-        visualBible,
-        styleReference,
+        scenes: session?.scenes || [],
+        visualBible: session?.visualBible || DEFAULT_VISUAL_BIBLE,
+        styleReference: session?.styleReference || null,
         workflowMode,
         workflowSource: source,
       });
-      const handoff: IntegratedWorkflowHandoff = {
-        id: `${workspaceSession.id}:${Date.now()}`,
-        sessionId: workspaceSession.id,
-        workflowMode,
-        workflowSource: source,
-        visualBible,
-        styleReference,
-        autoGenerateTimeline: mode === "full_auto",
-      };
-      setResult(generated);
-      setPendingHandoff(handoff);
-      if (mode === "full_auto") onComplete(handoff);
+      if (advance) {
+        onComplete({
+          id: `${workspaceSession.id}:${Date.now()}`,
+          sessionId: workspaceSession.id,
+          workflowMode,
+          workflowSource: source,
+          visualBible: session?.visualBible || DEFAULT_VISUAL_BIBLE,
+          styleReference: session?.styleReference || null,
+          autoGenerateTimeline: false,
+        });
+      }
     } catch (caught) {
       setError(message(caught));
     } finally {
-      setRunning(false);
+      setSaving(false);
     }
   };
 
   return (
-    <section className="voice-workflow">
-      <header className="voice-workflow-header">
-        <button className="button secondary compact" type="button" disabled={running} onClick={onBack}>
-          <ArrowLeft size={15} /> Trang chủ
-        </button>
+    <section className="kc-voice-studio">
+      <header className="kc-voice-page-header">
         <div>
-          <p className="eyebrow">Voice → SRT → Video</p>
-          <h2>{mode === "full_auto" ? "Tạo tự động toàn bộ video" : "Tạo video từng bước"}</h2>
-          <p>File thoại là bắt buộc. Kịch bản hình ảnh có thể bỏ trống; khi đó app dùng chính nội dung thoại để dựng cảnh.</p>
+          <div className="kc-voice-breadcrumb"><span>VOICE STUDIO</span><i>•</i><b>{projectName || "Video mới"}</b></div>
+          <h1>Voice Studio</h1>
+          <p>Chuẩn bị nội dung thoại và cấu hình giọng đọc.</p>
+        </div>
+        <div className="kc-voice-header-meta">
+          <span className="kc-voice-session-pill"><i />{mode === "full_auto" ? "Tự động toàn bộ" : "Tạo từng bước"}</span>
+          <span className="kc-voice-saved"><Check size={13} /> {saving ? "Đang lưu…" : "Đã lưu tự động"}</span>
+          <button className="kc-voice-outline-button" type="button" disabled={saving} onClick={() => void continueSetup(false)}>Lưu bản nháp</button>
         </div>
       </header>
 
-      <div className="voice-form-grid">
-        <section className="voice-card">
-          <span className="voice-step-number">01</span>
-          <div className="voice-card-heading"><FileText size={18} /><div><strong>Nội dung dự án</strong><small>Thoại bắt buộc · kịch bản tùy chọn</small></div></div>
-          <label className="field"><span>Tên phiên</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label>
-          <div className="voice-file-row">
-            <label className="button secondary compact">Chọn file thoại
-              <input className="visually-hidden-file" type="file" accept=".txt,.md,text/plain,text/markdown" onChange={(event) => void chooseTextFile(event.target.files?.[0], "narration")} />
-            </label>
-            <span>{narrationFileName || "Chưa chọn · bắt buộc"}</span>
+      <div className="kc-voice-stepper" aria-label="Tiến trình thiết lập">
+        {[
+          ["01", "Nội dung & giọng đọc", "Đang thực hiện", "active"],
+          ["02", "Nhân vật", "Tiếp theo", "locked"],
+          ["03", "Visual Bible", "Tiếp theo", "locked"],
+          ["04", "Bắt đầu workflow", "Sau khi hoàn tất", "locked"],
+        ].map(([number, title, detail, state], index) => (
+          <div className={`kc-voice-step ${state}`} key={number}>
+            <span className="kc-voice-step-index">{state === "locked" ? "🔒" : number}</span>
+            <div><strong>{title}</strong><small>{detail}</small></div>
+            {index < 3 && <span className="kc-voice-step-line" />}
           </div>
-          <textarea className="voice-script-preview" value={narrationText} placeholder="Hoặc dán toàn bộ nội dung cần đọc vào đây…" onChange={(event) => setNarrationText(event.target.value)} />
-          <div className="voice-file-row">
-            <label className="button secondary compact">Chọn kịch bản hình ảnh
-              <input className="visually-hidden-file" type="file" accept=".txt,.md,text/plain,text/markdown" onChange={(event) => void chooseTextFile(event.target.files?.[0], "script")} />
-            </label>
-            <span>{scriptFileName || "Không có · sẽ dùng nội dung thoại"}</span>
-          </div>
-        </section>
-
-        <section className="voice-card">
-          <span className="voice-step-number">02</span>
-          <div className="voice-card-heading"><FileAudio size={18} /><div><strong>Chọn và điều chỉnh giọng</strong><small>Microsoft Edge neural TTS</small></div></div>
-          <div className="voice-engine-grid">
-            <label className="field"><span>TTS engine</span><select value="edge" disabled><option value="edge">Microsoft Edge TTS</option></select></label>
-            <label className="field"><span>Ngôn ngữ</span><input value={selected?.locale || "—"} readOnly /></label>
-            <label className="field"><span>Giới tính</span><input value={selected?.gender || "—"} readOnly /></label>
-          </div>
-          <div className="voice-filter-grid">
-            <label className="field"><span>Quốc gia / ngôn ngữ</span><select value={voiceLocale} onChange={(event) => setVoiceLocale(event.target.value)}><option value="">Tất cả quốc gia</option>{voiceLocales.map((locale) => <option key={locale} value={locale}>{localeLabel(locale)}</option>)}</select></label>
-            <label className="field"><span>Tên người đọc</span><input value={voiceSearch} placeholder="Ví dụ: Hoài My, Nam Minh…" onChange={(event) => setVoiceSearch(event.target.value)} /></label>
-          </div>
-          <div className="voice-select-row">
-            <select disabled={voiceLoading} value={selectedVoice} onChange={(event) => setSelectedVoice(event.target.value)}>
-              {filteredVoices.map((voice) => <option key={voice.shortName} value={voice.shortName}>{voice.friendlyName} · {localeLabel(voice.locale)} · {voice.gender}</option>)}
-            </select>
-            <button className="icon-button" type="button" title="Nghe thử" disabled={!selected} onClick={() => void preview()}><Play size={16} /></button>
-          </div>
-          <div className="emotion-row">
-            {Object.entries(EMOTION_PRESETS).map(([key, preset]) => (
-              <button key={key} type="button" onClick={() => { setRate(preset.rate); setPitch(preset.pitch); setVolume(preset.volume); }}>{preset.label}</button>
-            ))}
-          </div>
-          <label className="voice-slider"><span>Tốc độ <b>{rate >= 0 ? "+" : ""}{rate}%</b></span><input type="range" min="-50" max="50" step="5" value={rate} onChange={(event) => setRate(Number(event.target.value))} /></label>
-          <label className="voice-slider"><span>Cao độ <b>{pitch >= 0 ? "+" : ""}{pitch}Hz</b></span><input type="range" min="-50" max="50" step="5" value={pitch} onChange={(event) => setPitch(Number(event.target.value))} /></label>
-          <label className="voice-slider"><span>Âm lượng <b>{volume >= 0 ? "+" : ""}{volume}%</b></span><input type="range" min="-50" max="50" step="5" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>
-          <label className="field"><span>Ngắt nghỉ theo câu</span><select value={pauseLevel} onChange={(event) => setPauseLevel(event.target.value as VoicePauseLevel)}><option value="off">Tắt</option><option value="medium">Vừa</option><option value="strong">Mạnh</option><option value="dramatic">Kịch tính</option></select></label>
-          <div className="voice-split-controls">
-            <label className="field"><span>Tách kịch bản dài</span><select value={splitMode} onChange={(event) => setSplitMode(event.target.value as "paragraph" | "sentence")}><option value="paragraph">Ưu tiên theo đoạn văn</option><option value="sentence">Ưu tiên theo câu</option></select></label>
-            <label className="field"><span>Giới hạn mỗi đoạn</span><select value={maxCharsPerChunk} onChange={(event) => setMaxCharsPerChunk(Number(event.target.value))}><option value={1000}>1.000 ký tự</option><option value={2000}>2.000 ký tự</option><option value={3000}>3.000 ký tự</option></select></label>
-          </div>
-        </section>
+        ))}
       </div>
 
-      <section className="voice-processing-panel">
-        <header><AudioLines size={17} /><div><strong>Xử lý kịch bản dài</strong><span>{progress?.message || "Sẵn sàng xử lý bằng Edge TTS và FFmpeg"}</span></div></header>
-        <div className="voice-stage-track">
-          {["Kịch bản gốc", "Tách đoạn", "TTS xử lý", "Gộp audio", "Cân chỉnh timing", "Voice hoàn chỉnh"].map((label, index) => {
-            const stageIndex = progress?.stage === "preparing" ? 1 : progress?.stage === "synthesizing" ? 2 : progress?.stage === "joining" ? 3 : progress?.stage === "pauses" || progress?.stage === "subtitles" ? 4 : progress?.stage === "done" ? 5 : 0;
-            return <div key={label} className={index < stageIndex ? "is-done" : index === stageIndex && running ? "is-active" : ""}><i>{index + 1}</i><span>{label}</span></div>;
-          })}
-        </div>
-        <div className="voice-waveform" aria-label="Tiến độ tạo voice">
-          {Array.from({ length: 38 }, (_, index) => <i key={index} />)}
-          <span style={{ width: `${progress?.total ? Math.round((progress.completed / progress.total) * 100) : result ? 100 : 0}%` }} />
-        </div>
-        {audioUrl && <audio className="voice-audio-player" controls preload="metadata" src={audioUrl} />}
-        <div className="voice-srt-status">
-          <div><span>Trạng thái</span><strong>{result ? "Hoàn thành" : running ? "Đang xuất" : "Chưa tạo"}</strong></div>
-          <div><span>Tổng số từ</span><strong>{result?.words.length || 0}</strong></div>
-          <div><span>Tổng số dòng SRT</span><strong>{result?.srtText.match(/-->/g)?.length || 0}</strong></div>
-          <div className="is-path"><span>File SRT</span><strong title={result?.srtPath}>{result?.srtPath || "Chưa có đường dẫn"}</strong></div>
-          <label><input type="checkbox" checked={exportWordSrt} disabled={running} onChange={(event) => setExportWordSrt(event.target.checked)} /> Xuất thêm SRT theo từng từ</label>
-          <button className="button secondary compact" type="button" disabled={!projectSession.current} onClick={() => projectSession.current && void window.flowx?.system.openOutput(projectSession.current.id, "audio")}><FolderOpen size={14} /> Mở thư mục</button>
-        </div>
-      </section>
+      <div className="kc-voice-layout">
+        <div className="kc-voice-left-column">
+          <article className="kc-voice-card kc-voice-script-card">
+            <div className="kc-voice-card-header"><div className="kc-voice-card-title"><span className="kc-voice-card-number">01</span><div><h2>Nội dung thoại <em>*</em></h2><p>Nội dung bắt buộc để tạo Voice và SRT ở bước cuối.</p></div></div><span className="kc-voice-required">BẮT BUỘC</span></div>
+            <div className="kc-voice-toolbar">
+              <button type="button" onClick={() => void pasteFromClipboard()}><Clipboard size={14} /> Dán clipboard</button>
+              <label><Upload size={14} /> Nhập .txt<input className="visually-hidden-file" type="file" accept=".txt,text/plain" onChange={(event) => void chooseTextFile(event.target.files?.[0], "narration")} /></label>
+              <label><Upload size={14} /> Nhập .md<input className="visually-hidden-file" type="file" accept=".md,text/markdown" onChange={(event) => void chooseTextFile(event.target.files?.[0], "narration")} /></label>
+              <button type="button" disabled={!narrationText} onClick={() => { setNarrationText(""); setNarrationFileName(""); }}><Trash2 size={14} /> Xóa</button>
+              {narrationFileName && <span className="kc-voice-file-chip"><FileText size={12} /> {narrationFileName}</span>}
+            </div>
+            <textarea className="kc-voice-main-textarea" value={narrationText} placeholder="Nhập hoặc dán toàn bộ nội dung cần đọc…" onChange={(event) => setNarrationText(event.target.value)} />
+            <div className="kc-voice-textarea-footer"><span>{narrationText.length.toLocaleString("vi-VN")} ký tự</span><span>{words.toLocaleString("vi-VN")} từ</span><span><Clock3 size={13} /> Ước tính {estimatedDuration(words)}</span><label>Tên phiên <input value={projectName} onChange={(event) => setProjectName(event.target.value)} /></label></div>
+            {narrationText.length > 120_000 && <div className="kc-voice-inline-warning"><AlertTriangle size={14} /> Nội dung dài; app sẽ tự chia đoạn để xử lý ổn định.</div>}
+            {!narrationText.trim() && <div className="kc-voice-inline-hint">Bắt đầu bằng cách dán nội dung thoại hoặc nhập file văn bản.</div>}
+          </article>
 
-      <div className="voice-visual-bible">
-        <span className="voice-step-number">03</span>
-        <VisualBiblePanel
-          value={visualBible}
-          onChange={setVisualBible}
-          presets={stylePresets}
-          presetError={styleError}
-          onSavePreset={saveStylePreset}
-          onDeletePreset={deleteStylePreset}
-          styleReference={styleReference}
-          onStyleReferenceChange={setStyleReference}
-        />
+          <article className={`kc-voice-card kc-voice-script-optional ${scriptOpen ? "is-open" : ""}`}>
+            <button className="kc-voice-collapsible-header" type="button" onClick={() => setScriptOpen((value) => !value)}><span><FileText size={16} /><b>Kịch bản hình ảnh tùy chọn</b><small>{scriptText.trim() ? "Đã có kịch bản riêng" : "Bỏ trống để dùng nội dung thoại"}</small></span><ChevronDown size={17} /></button>
+            {scriptOpen && <div className="kc-voice-collapsible-body"><div className="kc-voice-toolbar"><label><Upload size={14} /> Nhập .txt/.md<input className="visually-hidden-file" type="file" accept=".txt,.md,text/plain,text/markdown" onChange={(event) => void chooseTextFile(event.target.files?.[0], "script")} /></label>{scriptFileName && <span className="kc-voice-file-chip"><FileText size={12} /> {scriptFileName}</span>}<button type="button" disabled={!scriptText} onClick={() => { setScriptText(""); setScriptFileName(""); }}><Trash2 size={14} /> Xóa</button></div><textarea className="kc-voice-script-textarea" value={scriptText} placeholder="Nhập mô tả hình ảnh riêng nếu không muốn dùng nguyên văn nội dung thoại…" onChange={(event) => setScriptText(event.target.value)} /><p className="kc-voice-muted-note">Nếu bỏ trống, nội dung thoại sẽ được sử dụng làm nguồn phân tích hình ảnh.</p></div>}
+          </article>
+
+          <article className="kc-voice-card">
+            <div className="kc-voice-card-header"><div className="kc-voice-card-title"><span className="kc-voice-card-number">02</span><div><h2>Điều chỉnh giọng đọc</h2><p>Thiết lập sẽ được lưu và áp dụng khi tạo Voice cuối.</p></div></div></div>
+            <div className="kc-voice-preset-row">{VOICE_PRESETS.map((preset) => <button key={preset.key} className={rate === preset.rate && pitch === preset.pitch && volume === preset.volume ? "is-selected" : ""} type="button" onClick={() => { setRate(preset.rate); setPitch(preset.pitch); setVolume(preset.volume); }}>{preset.label}</button>)}</div>
+            <div className="kc-voice-slider-grid">
+              <label><span>Tốc độ <b>{rate >= 0 ? "+" : ""}{rate}%</b></span><input type="range" min="-50" max="50" step="5" value={rate} onChange={(event) => setRate(Number(event.target.value))} /></label>
+              <label><span>Cao độ <b>{pitch >= 0 ? "+" : ""}{pitch}Hz</b></span><input type="range" min="-50" max="50" step="5" value={pitch} onChange={(event) => setPitch(Number(event.target.value))} /></label>
+              <label><span>Âm lượng <b>{volume >= 0 ? "+" : ""}{volume}%</b></span><input type="range" min="-50" max="50" step="5" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /></label>
+            </div>
+            <div className="kc-voice-control-grid"><label><span>Khoảng nghỉ giữa đoạn</span><select value={pauseLevel} onChange={(event) => setPauseLevel(event.target.value as VoicePauseLevel)}><option value="off">Tắt</option><option value="medium">Vừa</option><option value="strong">Mạnh</option><option value="dramatic">Kịch tính</option></select></label><label className="kc-voice-disabled-control" title="Engine hiện tại chưa hỗ trợ tùy chọn này."><span>Cảm xúc / phong cách đọc</span><select disabled><option>Đang phát triển</option></select></label></div>
+            <div className="kc-voice-card-actions"><button type="button" onClick={() => { setRate(0); setPitch(0); setVolume(0); setPauseLevel("medium"); }}><RotateCcw size={14} /> Đặt lại mặc định</button><button type="button" disabled={!selected || previewLoading} onClick={() => void preview()}><Volume2 size={14} /> Nghe thử cấu hình</button></div>
+          </article>
+
+          <article className={`kc-voice-card kc-voice-long-processing ${longTextOpen ? "is-open" : ""}`}>
+            <button className="kc-voice-collapsible-header" type="button" onClick={() => setLongTextOpen((value) => !value)}><span><span className="kc-voice-card-number">03</span><b>Xử lý nội dung dài</b><small>Cấu hình cách chia đoạn trước khi bắt đầu workflow</small></span><ChevronDown size={17} /></button>
+            {longTextOpen && <div className="kc-voice-collapsible-body"><div className="kc-voice-process-track">{["Kịch bản gốc", "Tách đoạn", "Tạo voice", "Gộp audio", "Cân timing", "Xuất SRT"].map((label, index) => <div key={label}><i>{index + 1}</i><span>{label}</span>{index < 5 && <b>→</b>}</div>)}</div><div className="kc-voice-control-grid"><label><span>Cách tách đoạn</span><select value={splitMode} onChange={(event) => setSplitMode(event.target.value as "paragraph" | "sentence")}><option value="paragraph">Ưu tiên theo đoạn văn</option><option value="sentence">Ưu tiên theo câu</option></select></label><label><span>Số ký tự tối đa mỗi đoạn</span><select value={maxCharsPerChunk} onChange={(event) => setMaxCharsPerChunk(Number(event.target.value))}><option value={1000}>1.000 ký tự</option><option value={2000}>2.000 ký tự</option><option value={3000}>3.000 ký tự</option></select></label></div><label className="kc-voice-checkbox"><input type="checkbox" checked={exportWordSrt} disabled={saving} onChange={(event) => setExportWordSrt(event.target.checked)} /> Xuất thêm SRT theo từng từ</label></div>}
+          </article>
+        </div>
+
+        <aside className="kc-voice-right-column">
+          <article className="kc-voice-card kc-voice-filter-card"><div className="kc-voice-card-header"><div className="kc-voice-card-title"><span className="kc-voice-card-number">A</span><div><h2>Tìm giọng đọc</h2><p>Lọc theo quốc gia, ngôn ngữ hoặc tên người đọc.</p></div></div></div><div className="kc-voice-filter-stack"><label className="kc-voice-disabled-control"><span>TTS engine</span><select value="edge" disabled><option value="edge">Microsoft Edge neural TTS</option></select></label><label><span>Quốc gia / ngôn ngữ</span><select value={voiceLocale} onChange={(event) => setVoiceLocale(event.target.value)}><option value="">Tất cả quốc gia</option>{voiceLocales.map((locale) => <option key={locale} value={locale}>{localeLabel(locale)}</option>)}</select></label><label className="kc-voice-search-field"><span>Tìm theo tên hoặc mã voice</span><Search size={14} /><input value={voiceSearch} placeholder="Ví dụ: Hoài My, Jenny…" onChange={(event) => setVoiceSearch(event.target.value)} /></label><div className="kc-voice-gender-filter">{[["all", "Tất cả"], ["Female", "Nữ"], ["Male", "Nam"]].map(([key, label]) => <button key={key} type="button" className={voiceGender === key ? "is-selected" : ""} onClick={() => setVoiceGender(key as "all" | "Female" | "Male")}>{label}</button>)}</div></div></article>
+
+          <article className="kc-voice-card kc-voice-catalog-card"><div className="kc-voice-list-header"><div><h2>Danh sách giọng</h2><p>{voiceLoading ? "Đang tải catalog…" : `${filteredVoices.length} giọng phù hợp`}</p></div><FileAudio size={17} /></div><div className="kc-voice-catalog-list">{voiceLoading ? <div className="kc-voice-empty-state"><span className="kc-voice-spinner" /> Đang tải danh sách voice…</div> : !filteredVoices.length ? <div className="kc-voice-empty-state"><Search size={18} /> Không tìm thấy giọng phù hợp.</div> : filteredVoices.map((voice) => <div role="button" tabIndex={0} key={voice.shortName} className={`kc-voice-catalog-item ${voice.shortName === selectedVoice ? "is-selected" : ""}`} onClick={() => setSelectedVoice(voice.shortName)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedVoice(voice.shortName); }}><span className="kc-voice-avatar">{initials(voice.friendlyName)}</span><span className="kc-voice-catalog-copy"><strong>{voice.friendlyName}</strong><small>{localeLabel(voice.locale)} · {voice.gender === "Female" ? "Nữ" : voice.gender === "Male" ? "Nam" : voice.gender}</small><code>{voice.shortName}</code></span><span className="kc-voice-catalog-action">{voice.shortName === selectedVoice ? <span className="kc-voice-selected-badge"><Check size={12} /> Đang chọn</span> : <button type="button" aria-label={`Nghe thử ${voice.friendlyName}`} onClick={(event) => { event.stopPropagation(); setSelectedVoice(voice.shortName); void preview(voice); }}><Play size={13} /></button>}</span></div>)}</div></article>
+
+          <article className="kc-voice-card kc-voice-selected-card"><div className="kc-voice-selected-head"><span className="kc-voice-avatar large">{selected ? initials(selected.friendlyName) : "—"}</span><div><span className="kc-voice-overline">GIỌNG ĐÃ CHỌN</span><h2>{selected?.friendlyName || "Chưa chọn giọng"}</h2><p>{selected ? `${localeLabel(selected.locale)} · ${selected.gender === "Female" ? "Nữ" : selected.gender === "Male" ? "Nam" : selected.gender}` : "Chọn một voice trong danh sách"}</p></div><span className="kc-voice-status-badge">{selected ? <><Check size={12} /> Đã chọn</> : "Thiếu"}</span></div>{selected && <div className="kc-voice-selected-meta"><code>{selected.shortName}</code><button type="button" disabled={previewLoading} onClick={() => void preview()}><Play size={13} /> Nghe thử</button><button type="button" onClick={() => document.querySelector<HTMLElement>(".kc-voice-catalog-card")?.scrollIntoView({ behavior: "smooth", block: "center" })}>Đổi giọng</button></div>}</article>
+
+          <article className="kc-voice-card kc-voice-preview-card"><div className="kc-voice-preview-tabs"><button type="button" className={previewTab === "quick" ? "is-active" : ""} onClick={() => setPreviewTab("quick")}>Preview nhanh</button><button type="button" className={previewTab === "content" ? "is-active" : ""} onClick={() => setPreviewTab("content")}>Dùng đoạn trong nội dung</button></div><div className="kc-voice-preview-copy"><span>{previewTab === "content" ? contentPreview : "Nghe thử giọng mẫu trước khi lưu cấu hình."}</span></div><div className="kc-voice-player"><button type="button" className="kc-voice-play-button" disabled={!selected || previewLoading} onClick={togglePreview}>{previewLoading ? <span className="kc-voice-spinner" /> : previewPlaying ? <Pause size={17} /> : <Play size={17} />}</button><div className="kc-voice-progress"><span style={{ width: `${previewPercent}%` }} /><input aria-label="Tiến trình preview" type="range" min="0" max={previewDuration || 1} step="0.01" value={previewCurrent} onChange={(event) => { if (previewAudio.current) previewAudio.current.currentTime = Number(event.target.value); }} /></div><small>{Math.floor(previewCurrent)}:{String(Math.floor(previewDuration) % 60).padStart(2, "0")}</small></div><p className="kc-voice-preview-note">Preview hiện dùng endpoint giọng mẫu; tốc độ/pitch sẽ được áp dụng khi tạo Voice cuối.</p></article>
+
+          <article className="kc-voice-card kc-voice-readiness-card"><div className="kc-voice-list-header"><div><h2>Kiểm tra dữ liệu</h2><p>Điều kiện trước khi tiếp tục sang Nhân vật.</p></div><Check size={17} /></div><ul><li className={narrationText.trim() ? "is-valid" : "is-missing"}><span>{narrationText.trim() ? <Check size={13} /> : <AlertTriangle size={13} />}</span><b>Nội dung thoại</b><small>{narrationText.trim() ? "Đã có" : "Còn thiếu"}</small></li><li className={selected ? "is-valid" : "is-missing"}><span>{selected ? <Check size={13} /> : <AlertTriangle size={13} />}</span><b>Giọng đọc</b><small>{selected ? "Đã chọn" : "Còn thiếu"}</small></li><li className="is-valid"><span><Check size={13} /></span><b>Cấu hình giọng</b><small>Đã lưu</small></li><li className={scriptText.trim() ? "is-valid" : "is-neutral"}><span>{scriptText.trim() ? <Check size={13} /> : <FileText size={13} />}</span><b>Kịch bản hình ảnh</b><small>{scriptText.trim() ? "Có" : "Không sử dụng"}</small></li><li className="is-deferred"><span><Clock3 size={13} /></span><b>Audio + SRT</b><small>Sẽ tạo khi bắt đầu workflow</small></li></ul><div className={`kc-voice-ready-message ${canContinue ? "is-ready" : ""}`}>{canContinue ? <><Check size={14} /> Sẵn sàng để tiếp tục.</> : <><AlertTriangle size={14} /> Cần nội dung thoại và giọng đọc.</>}</div></article>
+        </aside>
       </div>
 
-      <section className="voice-start-bar">
-        <div>
-          <strong>{running ? progress?.message || "Đang tạo voice…" : result ? "Voice và SRT đã sẵn sàng" : "Sẵn sàng bắt đầu"}</strong>
-          <span>{result
-            ? `${result.audioFileName} · ${result.srtFileName} · ${Math.round(result.durationSeconds)} giây`
-            : !visualBible.style.trim()
-              ? "Hãy nhập phong cách đồ họa bắt buộc trong Visual Bible trước khi bắt đầu."
-              : mode === "full_auto" && !workersReady
-              ? "Hãy kết nối cả ChatGPT và Google Flow trước khi chạy tự động toàn bộ."
-              : mode === "full_auto"
-                ? "App sẽ tự chuyển sang timeline và sản xuất video."
-                : "App sẽ dừng để bạn kiểm tra trước khi dựng video."}</span>
-        </div>
-        <div className="voice-start-actions">
-          {running ? (
-            <button className="button danger" type="button" onClick={() => void window.flowx?.voice.cancel()}><Square size={15} /> Dừng</button>
-          ) : pendingHandoff && mode === "step_by_step" ? (
-            <button className="button primary" type="button" onClick={() => onComplete(pendingHandoff)}><CheckCircle2 size={16} /> Đưa sang dựng video</button>
-          ) : (
-            <button className="button primary" type="button" disabled={!canStart} onClick={() => void start()}><WandSparkles size={16} /> Bắt đầu</button>
-          )}
-          {running && <LoaderCircle className="spin" size={18} />}
-        </div>
-      </section>
-      {error && <div className="form-error">{error}</div>}
+      <footer className="kc-voice-action-bar"><div className="kc-voice-action-left"><button type="button" className="kc-voice-plain-button" disabled={saving} onClick={onBack}><ArrowLeft size={15} /> Quay lại</button><button type="button" className="kc-voice-plain-button" disabled={saving} onClick={() => void continueSetup(false)}><Check size={15} /> Lưu bản nháp</button></div><span>Nội dung và cấu hình giọng đọc sẽ được lưu tự động.</span><button type="button" className="kc-voice-primary-button" disabled={!canContinue} onClick={() => void continueSetup()}>{saving ? "Đang lưu…" : "Lưu và tiếp tục đến Nhân vật"}<ArrowRight size={16} /></button></footer>
+      {error && <div className="kc-voice-error" role="alert"><AlertTriangle size={15} /> {error}</div>}
     </section>
   );
 }

@@ -10,7 +10,9 @@ import {
   MoreHorizontal,
   Palette,
   Plus,
+  ScrollText,
   Settings,
+  CircleHelp,
   UsersRound,
 } from "lucide-react";
 import { useState } from "react";
@@ -24,9 +26,10 @@ const NAVIGATION: Array<{ page: AppPage; label: string; icon: typeof House }> = 
   { page: "home", label: "Trang chủ", icon: House },
   { page: "sessions", label: "Phiên làm việc", icon: CircleUserRound },
   { page: "voice", label: "Voice Studio", icon: AudioWaveform },
-  { page: "visual-bible", label: "Visual Bible", icon: Palette },
   { page: "characters", label: "Nhân vật", icon: UsersRound },
+  { page: "visual-bible", label: "Visual Bible", icon: Palette },
   { page: "timeline", label: "Timeline & Prompt", icon: Clapperboard },
+  { page: "edit", label: "Dựng CapCut", icon: Clapperboard },
   { page: "queue", label: "Production Queue", icon: ListChecks },
   { page: "output", label: "Xuất dữ liệu", icon: FileOutput },
   { page: "settings", label: "Cài đặt", icon: Settings },
@@ -63,6 +66,7 @@ export function Sidebar({
   sessionQueues,
   system,
   errorCount,
+  workflowActivePage,
   onNavigate,
   onCreateSession,
   onSelectSession,
@@ -76,6 +80,7 @@ export function Sidebar({
   sessionQueues: Record<string, ProductionQueueSnapshot>;
   system: SystemStatus | null;
   errorCount: number;
+  workflowActivePage: AppPage | null;
   onNavigate: (page: AppPage) => void;
   onCreateSession: () => void;
   onSelectSession: (id: string) => void;
@@ -90,6 +95,8 @@ export function Sidebar({
   const diskPercent = system?.diskTotalBytes
     ? Math.min(100, (diskUsed / system.diskTotalBytes) * 100)
     : 0;
+  const activeQueue = sessionQueues[sessions.find((session) => session.active)?.id || ""];
+  const queueBadge = activeQueue?.queuedJobs || activeQueue?.errors.length || errorCount;
 
   return (
     <aside className={`kc-sidebar ${collapsed ? "is-collapsed" : ""}`}>
@@ -105,12 +112,12 @@ export function Sidebar({
       <nav className="kc-nav" aria-label="Điều hướng chính">
         {NAVIGATION.map((item) => {
           const Icon = item.icon;
-          const badge = item.page === "queue" && errorCount > 0 ? errorCount : 0;
+          const badge = item.page === "queue" ? queueBadge : 0;
           return (
             <button
               key={item.page}
               type="button"
-              className={page === item.page ? "is-active" : ""}
+              className={`${page === item.page ? "is-active" : ""} ${workflowActivePage === item.page ? "is-progress-active" : ""}`.trim()}
               aria-current={page === item.page ? "page" : undefined}
               title={collapsed ? item.label : undefined}
               onClick={() => onNavigate(item.page)}
@@ -121,6 +128,8 @@ export function Sidebar({
             </button>
           );
         })}
+        <button type="button" disabled title="TODO: Chưa có trang log tổng hợp"><ScrollText size={17} />{!collapsed && <span>Logs</span>}</button>
+        <button type="button" disabled title="TODO: Chưa có nội dung hướng dẫn tích hợp"><CircleHelp size={17} />{!collapsed && <span>Hướng dẫn</span>}</button>
       </nav>
 
       {!collapsed && (
@@ -160,11 +169,14 @@ export function Sidebar({
 
       <div className="kc-sidebar-footer">
         {!collapsed && (
-          <div className="kc-storage">
-            <div><span>Dung lượng ổ đĩa</span><strong>{diskPercent.toFixed(0)}%</strong></div>
-            <i><span style={{ width: `${diskPercent}%` }} /></i>
-            <small>{formatStorage(diskUsed)} / {formatStorage(system?.diskTotalBytes || 0)}</small>
-          </div>
+          <>
+            <div className="kc-storage">
+              <div><span>Dung lượng ổ đĩa</span><strong>{diskPercent.toFixed(0)}%</strong></div>
+              <i><span style={{ width: `${diskPercent}%` }} /></i>
+              <small>{formatStorage(diskUsed)} / {formatStorage(system?.diskTotalBytes || 0)}</small>
+            </div>
+            <div className="kc-local-profile"><span>AD</span><div><strong>Admin</strong><small><i /> Online</small></div><button type="button" disabled title="TODO: Ứng dụng chưa có hệ thống tài khoản"><MoreHorizontal size={15} /></button></div>
+          </>
         )}
         <button className="kc-collapse" type="button" onClick={onToggleCollapsed} title={collapsed ? "Mở rộng sidebar" : "Thu gọn sidebar"}>
           {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}

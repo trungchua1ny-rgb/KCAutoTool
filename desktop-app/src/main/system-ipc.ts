@@ -1,13 +1,16 @@
-import { app, ipcMain, shell } from "electron";
+import { app, dialog, ipcMain, shell } from "electron";
 import { execFile } from "node:child_process";
 import { mkdir, readdir, stat, statfs, writeFile } from "node:fs/promises";
-import { dirname, extname, join, normalize, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, normalize, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
   OUTPUT_INSPECT_CHANNEL,
   OUTPUT_EXPORT_SESSION_CHANNEL,
   OUTPUT_OPEN_CHANNEL,
   SYSTEM_OPEN_EXTENSION_FOLDER_CHANNEL,
+  SYSTEM_OPEN_STORAGE_CHANNEL,
+  SYSTEM_RESTART_CHANNEL,
+  SYSTEM_SELECT_STORAGE_CHANNEL,
   SYSTEM_STATUS_CHANNEL,
   type OutputFileView,
   type OutputGroupId,
@@ -16,6 +19,8 @@ import {
   type SystemStatus,
 } from "../shared/system";
 import type { TimelineSession } from "../shared/timeline";
+import type { StorageLayout } from "./storage-manager";
+import { writeStoragePreference } from "./storage-manager";
 
 const GROUP_IDS: OutputGroupId[] = ["audio", "srt", "images", "videos", "frames", "logs", "metadata"];
 const execFileAsync = promisify(execFile);
@@ -82,14 +87,15 @@ async function walk(directory: string): Promise<OutputFileView[]> {
   return result;
 }
 
-export function registerSystemIpcHandlers(generatedMediaRoot: string, extensionRoot: string): void {
+export function registerSystemIpcHandlers(storage: StorageLayout, extensionRoot: string, preferencePath: string): void {
+  const generatedMediaRoot = storage.outputRoot;
   ipcMain.handle(SYSTEM_STATUS_CHANNEL, async (): Promise<SystemStatus> => {
     const memory = process.getSystemMemoryInfo();
     const metrics = app.getAppMetrics();
     const cpuPercent = metrics.length
       ? metrics.reduce((sum, metric) => sum + (metric.cpu?.percentCPUUsage || 0), 0)
       : null;
-    const disk = await statfs(dirname(generatedMediaRoot)).catch(() => null);
+    const disk = await statfs(generatedMediaRoot).catch(() => null);
     const ffmpeg = await detectFfmpeg();
     return {
       appVersion: app.getVersion(),
@@ -101,6 +107,10 @@ export function registerSystemIpcHandlers(generatedMediaRoot: string, extensionR
       ffmpegVersion: ffmpeg.version,
       diskFreeBytes: disk ? Number(disk.bavail) * Number(disk.bsize) : null,
       diskTotalBytes: disk ? Number(disk.blocks) * Number(disk.bsize) : null,
+      storageRoot: storage.root,
+      dataRoot: storage.dataRoot,
+      outputRoot: storage.outputRoot,
+      storageSource: storage.source,
       updatedAt: new Date().toISOString(),
     };
   });
@@ -109,6 +119,42 @@ export function registerSystemIpcHandlers(generatedMediaRoot: string, extensionR
     const info = await stat(extensionRoot).catch(() => null);
     if (!info?.isDirectory()) return "Không tìm thấy thư mục extension KC Dev trong bộ cài.";
     return shell.openPath(extensionRoot);
+  });
+
+  ipcMain.handle(SYSTEM_OPEN_STORAGE_CHANNEL, async (_event, value: unknown): Promise<string> => {
+    const target = value === "data"
+      ? storage.dataRoot
+      : value === "outputs"
+        ? storage.outputRoot
+        : storage.root;
+    await mkdir(target, { recursive: true });
+    return shell.openPath(target);
+  });
+
+  ipcMain.handle(SYSTEM_SELECT_STORAGE_CHANNEL, async () => {
+    const selection = await dialog.showOpenDialog({
+      title: "Chọn thư mục cha để lưu dữ liệu KC Auto Tool",
+      defaultPath: dirname(storage.root),
+      properties: ["openDirectory", "createDirectory"],
+      buttonLabel: "Dùng thư mục này",
+    });
+    if (selection.canceled || !selection.filePaths[0]) {
+      return { selected: false, rootPath: storage.root, restartRequired: false };
+    }
+    const selected = resolve(selection.filePaths[0]);
+    const rootPath = basename(selected).toLocaleLowerCase("en-US") === "kc auto tool"
+      ? selected
+      : join(selected, "KC Auto Tool");
+    const restartRequired = normalize(rootPath).toLocaleLowerCase("en-US") !== normalize(storage.root).toLocaleLowerCase("en-US");
+    if (restartRequired) await writeStoragePreference(preferencePath, rootPath, storage.root);
+    return { selected: true, rootPath, restartRequired };
+  });
+
+  ipcMain.handle(SYSTEM_RESTART_CHANNEL, () => {
+    setImmediate(() => {
+      app.relaunch();
+      app.exit(0);
+    });
   });
 
   ipcMain.handle(OUTPUT_INSPECT_CHANNEL, async (_event, value: unknown): Promise<OutputInspection> => {

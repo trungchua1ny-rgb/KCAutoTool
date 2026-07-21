@@ -17,6 +17,25 @@ npm run dev
 
 `npm run dev` starts the Vite renderer and opens the Electron window.
 
+## Storage location
+
+KC Auto Tool now uses one centralized storage layout. On Windows, when drive
+`D:` exists, the default is:
+
+```text
+D:\KC Auto Tool\
+  Data\
+  Outputs\
+  Backups\
+```
+
+On first launch, the app copies and verifies the former business data under
+Electron `userData` and `Downloads/KC Auto Tool`, rebases saved JSON/SQLite
+asset paths, and only then removes the migrated legacy folders. Electron cache
+and UI local preferences remain in the normal Windows application-data folder.
+Use `KC_AUTO_TOOL_STORAGE_ROOT` to override the centralized root. Test and smoke
+scripts may continue to use `FLOWX_DATA_DIR` for an isolated data root.
+
 ## Integrated Voice → SRT → Video workflow
 
 The desktop home screen offers three entry points:

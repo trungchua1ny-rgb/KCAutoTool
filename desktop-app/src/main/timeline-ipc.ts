@@ -83,6 +83,9 @@ function validatePolicyRewriteInput(value: unknown): PolicyPromptRewriteInput {
     timeEnd: text("timeEnd", 32),
     pairedPrompt: text("pairedPrompt", 20_000, false),
     visualBible: normalizeVisualBible(input.visualBible),
+    policyFlag: ["real_person", "violence", "weapons", "dangerous_activity", "sexual_content", "child_safety", "copyrighted_character"].includes(String(input.policyFlag || ""))
+      ? input.policyFlag as PolicyPromptRewriteInput["policyFlag"]
+      : null,
   };
 }
 
@@ -93,9 +96,25 @@ function broadcastProgress(progress: TimelineProgress): void {
 }
 
 export function registerTimelineIpcHandlers(server: WorkerServer): void {
-  ipcMain.handle(TIMELINE_GENERATE_CHANNEL, (_event, value: unknown) =>
-    server.generateTimeline(validateInput(value), broadcastProgress),
-  );
+  ipcMain.handle(TIMELINE_GENERATE_CHANNEL, async (_event, value: unknown) => {
+    let jobId = "timeline";
+    const forwardProgress = (progress: TimelineProgress) => {
+      jobId = progress.jobId || jobId;
+      broadcastProgress(progress);
+    };
+    try {
+      const result = await server.generateTimeline(validateInput(value), forwardProgress);
+      broadcastProgress({ jobId, status: "succeeded", message: `Đã hoàn tất ${result.scenes.length} scene và prompt.` });
+      return result;
+    } catch (error) {
+      broadcastProgress({
+        jobId,
+        status: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  });
   ipcMain.handle(PROMPT_POLICY_REWRITE_CHANNEL, (_event, value: unknown) =>
     server.rewritePolicyPrompt(validatePolicyRewriteInput(value), broadcastProgress),
   );

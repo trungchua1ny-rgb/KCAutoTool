@@ -24,6 +24,7 @@ export type QueueRuntimeState = "idle" | "running" | "paused" | "stopped";
 export const QUEUE_ERROR_CATEGORIES = [
   "dom_element_not_found",
   "flow_policy_violation",
+  "flow_generation_failed",
   "response_schema_invalid",
   "timeout_no_response",
   "flow_quota_or_rate_limit",

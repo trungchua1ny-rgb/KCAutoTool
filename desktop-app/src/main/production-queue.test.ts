@@ -12,7 +12,7 @@ import { TimelineSessionStore } from "./timeline-session-store";
 import { WorkerJobError } from "./worker-server";
 import { DEFAULT_PROJECT_ID } from "../shared/production-queue";
 import { projectOutputFolder, type BoundSceneJobInput, type SceneJobProgress } from "../shared/scene-job";
-import type { TimelineSessionInput } from "../shared/timeline";
+import type { PolicyPromptRewriteInput, TimelineSessionInput } from "../shared/timeline";
 import type { WorkerConnectionStatus } from "../shared/worker-status";
 
 function timeline(sceneCount = 2): TimelineSessionInput {
@@ -66,10 +66,23 @@ test("classifies Flow safety blocks as non-retryable policy violations", () => {
   });
 });
 
+test("classifies a Flow generation failure separately from schema-invalid", () => {
+  assert.deepEqual(
+    classifyQueueError(new WorkerJobError("warningKhông thành công", "FLOW_GENERATION_FAILED", false)),
+    {
+      category: "flow_generation_failed",
+      message: "warningKhông thành công",
+      retryable: false,
+    },
+  );
+});
+
 class FakeQueueWorker {
   readonly calls: string[] = [];
   readonly inputs: BoundSceneJobInput[] = [];
   failFirstSceneOnce = false;
+  failFirstScenePolicyOnce = false;
+  readonly policyRewriteCalls: PolicyPromptRewriteInput[] = [];
   connected = true;
   resultDirectory = "C:\\FlowX";
   persistResults = false;
@@ -101,6 +114,17 @@ class FakeQueueWorker {
     ) {
       throw new WorkerJobError("Flow DOM element not found", "FLOW_UI_CHANGED", true);
     }
+    if (
+      this.failFirstScenePolicyOnce &&
+      input.sceneId === "scene-001" &&
+      this.calls.filter((call) => call === "scene-001:image").length === 1
+    ) {
+      throw new WorkerJobError(
+        "Google Flow blocked this real person prompt under its safety policy",
+        "POLICY_VIOLATION",
+        false,
+      );
+    }
     const resultPath = join(this.resultDirectory, `${input.sceneId}.${input.mediaType === "image" ? "png" : "mp4"}`);
     if (this.persistResults) await writeFile(resultPath, `fake-${input.mediaType}`);
     return {
@@ -110,7 +134,43 @@ class FakeQueueWorker {
       flowAssetKey: input.mediaType === "image" ? `asset:${input.sceneId}` : "",
     };
   }
+
+  async rewritePolicyPrompt(input: PolicyPromptRewriteInput) {
+    this.policyRewriteCalls.push(input);
+    return { prompt: `Safe rewritten ${input.mediaType} prompt` };
+  }
 }
+
+test("automatically rewrites and retries a Flow policy rejection", async () => {
+  const context = await fixture();
+  const worker = new FakeQueueWorker();
+  worker.failFirstScenePolicyOnce = true;
+  const queue = new ProductionQueue(
+    context.database,
+    worker,
+    context.characterStore,
+    context.sessionStore,
+    () => {},
+    { retryBackoffMs: [5], maxAttempts: 3 },
+  );
+  try {
+    await queue.start();
+    await queue.generateAllImages(DEFAULT_PROJECT_ID);
+    await waitFor(() => queue.getSnapshot().state === "idle");
+
+    assert.equal(worker.policyRewriteCalls.length, 1);
+    assert.equal(worker.policyRewriteCalls[0].policyFlag, "real_person");
+    assert.equal(worker.calls.filter((call) => call === "scene-001:image").length, 2);
+    assert.equal(queue.getSnapshot().errors.length, 0);
+    const session = await context.sessionStore.load();
+    assert.equal(session?.scenes[0].imagePrompt, "Safe rewritten image prompt");
+    assert.equal(session?.scenes[0].policyResolution?.status, "auto_rewritten");
+  } finally {
+    queue.shutdown();
+    context.database.close();
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
 
 class StuckQueueWorker extends FakeQueueWorker {
   private rejectActive: ((error: Error) => void) | null = null;
@@ -194,6 +254,56 @@ test("syncs Beat & Chain planning metadata from the saved timeline into SQLite",
   }
 });
 
+test("resuming repairs a missing continuation frame before queueing its video", async () => {
+  const context = await fixture();
+  const worker = new FakeQueueWorker();
+  worker.connected = false;
+  const original = await context.sessionStore.load();
+  assert.ok(original);
+  const planned = await context.sessionStore.save({
+    ...original,
+    scenes: original.scenes.map((scene, index) => index === 0
+      ? { ...scene, chainId: "resume-chain", chainRole: "start" as const }
+      : { ...scene, chainId: "resume-chain", chainRole: "continue" as const }),
+  });
+  syncTimelineSessionToProject(context.database, planned, []);
+  const repositories = new ProjectRepositories(context.database);
+  const [first, continued] = repositories.scenes.listByProject(DEFAULT_PROJECT_ID);
+  const previousVideo = join(context.directory, "scene-001.mp4");
+  await writeFile(previousVideo, "fake-video");
+  context.database.db.prepare(
+    "UPDATE scenes SET status = 'video_done', video_asset_path = ?, approved_video = 1 WHERE id = ?",
+  ).run(previousVideo, first.id);
+  context.database.db.prepare(
+    "UPDATE scenes SET status = 'prompt_ready', start_frame_asset_path = NULL, image_asset_path = NULL, approved_image = 0, approved_video = 0 WHERE id = ?",
+  ).run(continued.id);
+  const queue = new ProductionQueue(
+    context.database,
+    worker,
+    context.characterStore,
+    context.sessionStore,
+    () => {},
+  );
+  try {
+    await queue.start();
+    queue.stopQueue();
+    queue.resumeQueue();
+    await waitFor(() => context.database.db.prepare(
+      "SELECT COUNT(*) AS count FROM jobs WHERE scene_id = ? AND job_type = 'extract_last_frame' AND status = 'queued'",
+    ).get(continued.id)?.count === 1);
+    assert.equal(
+      context.database.db.prepare(
+        "SELECT depends_on FROM jobs WHERE scene_id = ? AND job_type = 'extract_last_frame' ORDER BY created_at DESC LIMIT 1",
+      ).get(continued.id)?.depends_on,
+      null,
+    );
+  } finally {
+    queue.shutdown();
+    context.database.close();
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
 test("uses the previous clip final frame directly for continuation video", async () => {
   const context = await fixture();
   const worker = new FakeQueueWorker();
@@ -253,6 +363,12 @@ test("uses the previous clip final frame directly for continuation video", async
       "SELECT status FROM jobs WHERE job_type = 'extract_last_frame'",
     ).get() as { status: string };
     assert.equal(extractJob.status, "succeeded");
+    const updatedSession = await context.sessionStore.load();
+    assert.match(
+      updatedSession?.scenes[1].actualContinuityFrame?.path || "",
+      /\.kc-frames[\\/].+-last-frame\.png$/,
+    );
+    assert.equal(updatedSession?.scenes[1].actualContinuityFrame?.fileSize, 14);
   } finally {
     queue.shutdown();
     context.database.close();

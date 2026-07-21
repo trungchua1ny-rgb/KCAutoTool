@@ -19,7 +19,7 @@ import { migrateLegacyProjectData } from "./legacy-project-migration";
 import { ProductionQueue } from "./production-queue";
 import { registerProductionQueueIpcHandlers } from "./production-queue-ipc";
 import { ProjectRepositories } from "./project-repositories";
-import { recoverLegacySessionFromProject } from "./legacy-session-recovery";
+import { reconcileTimelineSessionsFromProjects, recoverLegacySessionFromProject } from "./legacy-session-recovery";
 import { QUEUE_CHANGED_CHANNEL, type ProductionQueueSnapshot } from "../shared/production-queue";
 import {
   WORKER_SERVER_HOST,
@@ -30,6 +30,18 @@ import { VOICE_PROGRESS_CHANNEL, type VoiceProgress } from "../shared/voice";
 import { VoiceService } from "./voice-service";
 import { registerVoiceIpcHandlers } from "./voice-ipc";
 import { registerSystemIpcHandlers } from "./system-ipc";
+import { registerCapCutIpcHandlers } from "./capcut-ipc";
+import { CapCutService } from "./capcut-service";
+import { EditService } from "./edit-service";
+import { registerEditIpcHandlers } from "./edit-ipc";
+import {
+  finishStorageMigration,
+  prepareStorage,
+  readStoragePreference,
+  rebaseProjectDatabasePaths,
+  resolveStorageLayout,
+  writeStoragePreference,
+} from "./storage-manager";
 
 let workerServer: WorkerServer | null = null;
 let projectDatabase: ProjectDatabase | null = null;
@@ -106,24 +118,39 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return;
   app.setAppUserModelId(APP_USER_MODEL_ID);
+  const legacyUserDataRoot = app.getPath("userData");
+  const legacyOutputRoot = join(app.getPath("downloads"), "KC Auto Tool");
+  const storagePreferencePath = join(legacyUserDataRoot, "storage-location.json");
+  const storagePreference = await readStoragePreference(storagePreferencePath);
+  const storage = resolveStorageLayout({
+    environmentRoot: process.env.KC_AUTO_TOOL_STORAGE_ROOT || storagePreference?.rootPath,
+    flowxDataRoot: process.env.FLOWX_DATA_DIR,
+    documentsRoot: app.getPath("documents"),
+  });
+  let migration;
+  try {
+    migration = await prepareStorage(storage, {
+      legacyUserDataRoot,
+      legacyOutputRoot,
+      previousStorageRoot: process.env.KC_AUTO_TOOL_STORAGE_ROOT ? undefined : storagePreference?.previousRootPath,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    dialog.showErrorBox("KC Auto Tool storage migration failed", `Không thể chuyển dữ liệu sang ${storage.root}.\n\n${message}`);
+    app.quit();
+    return;
+  }
   const timelineSessionStore = new TimelineSessionStore(
-    process.env.FLOWX_DATA_DIR
-      ? join(process.env.FLOWX_DATA_DIR, "timeline-session")
-      : join(app.getPath("userData"), "timeline-session"),
+    join(storage.dataRoot, "timeline-session"),
   );
   const characterStore = new CharacterStore(
-    process.env.FLOWX_DATA_DIR ||
-      join(app.getPath("userData"), "character-library"),
+    join(storage.dataRoot, "character-library"),
   );
   const visualStyleStore = new VisualStyleStore(
-    process.env.FLOWX_DATA_DIR
-      ? join(process.env.FLOWX_DATA_DIR, "visual-style-library")
-      : join(app.getPath("userData"), "visual-style-library"),
+    join(storage.dataRoot, "visual-style-library"),
   );
   projectDatabase = new ProjectDatabase(
-    process.env.FLOWX_DATA_DIR
-      ? join(process.env.FLOWX_DATA_DIR, "project-database", "flowx.sqlite")
-      : join(app.getPath("userData"), "project-database", "flowx.sqlite"),
+    join(storage.dataRoot, "project-database", "flowx.sqlite"),
   );
   const configuredWorkerPort = Number.parseInt(
     process.env.FLOWX_WORKER_PORT || "",
@@ -143,10 +170,24 @@ app.whenReady().then(async () => {
     await timelineSessionStore.initialize();
     await visualStyleStore.initialize();
     await projectDatabase.initialize();
+    rebaseProjectDatabasePaths(projectDatabase, migration.pathMappings);
+    const storageCleanupErrors = await finishStorageMigration(storage, migration);
+    if (storageCleanupErrors.length) {
+      console.warn("[KC Auto Tool] Dữ liệu đã chuyển sang ổ mới nhưng một số bản cũ đang bị khóa:", storageCleanupErrors);
+    } else if (storagePreference?.previousRootPath) {
+      await writeStoragePreference(storagePreferencePath, storage.root);
+    }
     const recoveredSession = await recoverLegacySessionFromProject(
       projectDatabase,
       timelineSessionStore,
     );
+    const reconciledSessions = await reconcileTimelineSessionsFromProjects(
+      projectDatabase,
+      timelineSessionStore,
+    );
+    if (reconciledSessions.length) {
+      console.warn(`[KC Auto Tool] Đã tự khôi phục Timeline cho ${reconciledSessions.length} phiên từ Production Database.`);
+    }
     const legacyMigration = migrateLegacyProjectData(
       projectDatabase,
       await timelineSessionStore.load(),
@@ -163,21 +204,24 @@ app.whenReady().then(async () => {
       characterStore,
       timelineSessionStore,
       broadcastQueueSnapshot,
-      { generatedMediaRoot: join(app.getPath("downloads"), "KC Auto Tool") },
+      { generatedMediaRoot: storage.outputRoot },
     );
     await productionQueue.start();
     registerProductionQueueIpcHandlers(productionQueue);
     voiceService = new VoiceService(
-      join(app.getPath("downloads"), "KC Auto Tool"),
+      storage.outputRoot,
       broadcastVoiceProgress,
     );
     registerVoiceIpcHandlers(voiceService);
     registerSystemIpcHandlers(
-      join(app.getPath("downloads"), "KC Auto Tool"),
+      storage,
       app.isPackaged
         ? join(process.resourcesPath, "kc-dev-extension")
         : join(__dirname, "../../../extension-worker"),
+      storagePreferencePath,
     );
+    registerCapCutIpcHandlers(new CapCutService(storage.backupRoot));
+    registerEditIpcHandlers(new EditService(storage.outputRoot));
     registerTimelineSessionIpcHandlers(timelineSessionStore, {
       beforeDelete: (id) => {
         const snapshot = productionQueue?.getSnapshot(id);
@@ -196,9 +240,9 @@ app.whenReady().then(async () => {
       },
     });
     registerTimelineIpcHandlers(workerServer);
-    registerSceneJobIpcHandlers(workerServer, characterStore);
-    registerMediaIpcHandlers(join(app.getPath("downloads"), "KC Auto Tool"));
-    registerMediaProtocol(join(app.getPath("downloads"), "KC Auto Tool"));
+    registerSceneJobIpcHandlers(workerServer, characterStore, storage.outputRoot);
+    registerMediaIpcHandlers(storage.outputRoot);
+    registerMediaProtocol(storage.outputRoot);
     console.info(
       `[KC Auto Tool] Project DB schema v${projectDatabase.schemaVersion}; legacy migration: ${legacyMigration.migrated ? `${legacyMigration.sceneCount} scenes` : "up to date"}`,
     );
@@ -208,6 +252,7 @@ app.whenReady().then(async () => {
     console.info(
       `[KC Auto Tool] Worker server listening on ws://${WORKER_SERVER_HOST}:${workerServer.getListeningPort() || WORKER_SERVER_PORT}`,
     );
+    console.info(`[KC Auto Tool] Storage root: ${storage.root}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     dialog.showErrorBox(

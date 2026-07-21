@@ -266,10 +266,23 @@ export class SceneRepository {
     ).all(projectId) as Row[]).map(mapScene);
   }
 
-  updatePrompts(id: string, imagePrompt: string, videoPrompt: string): SceneRecord {
-    this.database.db.prepare(
-      "UPDATE scenes SET image_prompt = ?, video_prompt = ?, updated_at = ? WHERE id = ?",
-    ).run(imagePrompt, videoPrompt, now(), id);
+  updatePrompts(
+    id: string,
+    imagePrompt: string,
+    videoPrompt: string,
+    usedCharacterTokens?: string[],
+  ): SceneRecord {
+    this.database.db.prepare(`
+      UPDATE scenes SET image_prompt = ?, video_prompt = ?,
+        used_character_tokens = COALESCE(?, used_character_tokens), updated_at = ?
+      WHERE id = ?
+    `).run(
+      imagePrompt,
+      videoPrompt,
+      usedCharacterTokens ? JSON.stringify(usedCharacterTokens) : null,
+      now(),
+      id,
+    );
     return this.get(id)!;
   }
 
@@ -277,6 +290,22 @@ export class SceneRepository {
     this.database.db.prepare(
       "UPDATE scenes SET start_frame_asset_path = ?, updated_at = ? WHERE id = ?",
     ).run(path, now(), id);
+    return this.get(id)!;
+  }
+
+  clearContinuationFrame(id: string): SceneRecord {
+    this.database.db.prepare(`
+      UPDATE scenes SET
+        start_frame_asset_path = NULL,
+        image_asset_path = NULL,
+        flow_image_asset_id = NULL,
+        approved_image = 0,
+        approved_video = 0,
+        status = 'prompt_ready',
+        last_error = NULL,
+        updated_at = ?
+      WHERE id = ?
+    `).run(now(), id);
     return this.get(id)!;
   }
 

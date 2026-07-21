@@ -1224,6 +1224,10 @@ async function prepareVideoPromptForDebugger() {
   const rect = input.getBoundingClientRect();
   window.__flowx_verified_prompt = null;
   const videoBaseline = videoBaselineSnapshot();
+  window.__flowx_render_anchor_baseline = new Set(
+    renderingProgressCards().map((entry) => entry.anchor),
+  );
+  window.__flowx_active_prompt_text = "";
   window.__flowx_active_render_anchor = null;
   window.__flowx_active_render_parent = null;
   window.__flowx_active_render_href = "";
@@ -1716,6 +1720,7 @@ async function confirmPromptText(expectedText) {
     verifiedAt: Date.now(),
     expectedLength: normalizedPromptVerificationText(expectedText).length,
   };
+  window.__flowx_active_prompt_text = normalizedPromptVerificationText(expectedText);
   return {
     ok: true,
     actualLength: lastActualLength,
@@ -1869,7 +1874,13 @@ function getCompletedImages() {
 
 // ---------- 5. Canh tới khi có ảnh MỚI xuất hiện ----------
 const FLOW_POLICY_ERROR_PATTERN = /(?:safety|content|responsible\s+ai|prohibited\s+use)\s*(?:policy|policies|filter)?|(?:policy|safety)\s+(?:violation|blocked|restriction)|(?:may|might|could)\s+violate|violat(?:e|es|ed|ion)|vi\s*phạm|chính\s*sách|an\s*toàn\s*nội\s*dung/i;
-const FLOW_GENERATION_ERROR_PATTERN = /couldn['’]?t\s+generate|could\s+not\s+generate|unable\s+to\s+generate|generation\s+failed|not\s+generated|prompt\s+(?:was\s+)?blocked|try\s+(?:a\s+)?(?:different|another)\s+prompt|something\s+went\s+wrong|không\s+thể\s+tạo|không\s+tạo\s+được|bị\s+chặn|thử\s+(?:một\s+)?câu\s+lệnh\s+khác/i;
+const FLOW_GENERATION_ERROR_PATTERN = /couldn['’]?t\s+generate|could\s+not\s+generate|unable\s+to\s+generate|generation\s+failed|not\s+generated|prompt\s+(?:was\s+)?blocked|try\s+(?:a\s+)?(?:different|another)\s+prompt|something\s+went\s+wrong|cannot\s+generate|failed\s+to\s+render/i;
+// Flow displays a generic Vietnamese warning inside the opened viewer. It is
+// intentionally kept out of the global detector: old history cards can retain
+// the same text and must not be mistaken for the current render failure.
+const FLOW_VIEWER_ERROR_PATTERN = /unsuccessful|không\s+thành\s+công|rất\s+tiếc[^.!?]{0,80}(?:xảy\s+ra|có)\s+lỗi|đã\s+xảy\s+ra\s+lỗi|không\s+thể\s+tạo|không\s+tạo\s+được|bị\s+chặn|thử\s+(?:một\s+)?câu\s+lệnh\s+khác/i;
+const FLOW_VIEWER_ERROR_TITLE_PATTERN = /không\s+thành\s+công|unsuccessful|generation\s+failed|failed\s+to\s+generate/i;
+const FLOW_VIEWER_ERROR_DETAIL_PATTERN = /rất\s+tiếc[^.!?]{0,120}(?:xảy\s+ra|có)\s+lỗi|đã\s+xảy\s+ra\s+lỗi|something\s+went\s+wrong|sorry[^.!?]{0,120}(?:error|went\s+wrong)/i;
 
 function normalizedGenerationFailureText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -1894,6 +1905,9 @@ function visibleGenerationFailures() {
 }
 
 function generationFailureSnapshot() {
+  // A new baseline marks the beginning of another render request. Previous
+  // viewer/outside de-duplication must not suppress a later independent job.
+  window.__flowx_consumed_generation_failures = new Map();
   const counts = new Map();
   for (const entry of visibleGenerationFailures()) {
     counts.set(entry.text, (counts.get(entry.text) || 0) + 1);
@@ -1901,12 +1915,30 @@ function generationFailureSnapshot() {
   return counts;
 }
 
+function consumedGenerationFailures() {
+  if (!(window.__flowx_consumed_generation_failures instanceof Map)) {
+    window.__flowx_consumed_generation_failures = new Map();
+  }
+  const now = Date.now();
+  for (const [text, consumedAt] of window.__flowx_consumed_generation_failures) {
+    if (now - consumedAt > 60_000) window.__flowx_consumed_generation_failures.delete(text);
+  }
+  return window.__flowx_consumed_generation_failures;
+}
+
+function consumeGenerationFailure(value) {
+  const text = normalizedGenerationFailureText(value);
+  if (text) consumedGenerationFailures().set(text, Date.now());
+}
+
 function newGenerationFailure() {
   const baseline = window.__flowx_generation_error_baseline instanceof Map
     ? window.__flowx_generation_error_baseline
     : new Map();
+  const consumed = consumedGenerationFailures();
   const currentCounts = new Map();
   const failure = visibleGenerationFailures().find((entry) => {
+    if (consumed.has(entry.text)) return false;
     const count = (currentCounts.get(entry.text) || 0) + 1;
     currentCounts.set(entry.text, count);
     return count > (baseline.get(entry.text) || 0);
@@ -1916,6 +1948,109 @@ function newGenerationFailure() {
     error: failure.text,
     code: failure.policy ? "FLOW_POLICY_VIOLATION" : "FLOW_GENERATION_FAILED",
     policyViolation: failure.policy,
+  };
+}
+
+function videoViewerGenerationFailure() {
+  const doneButton = findVideoViewerButton("done");
+  if (!doneButton) return null;
+
+  // Only inspect the detail viewer that owns the Xong button. Flow keeps old
+  // failed cards visible behind the viewer; scanning document-wide would close
+  // a healthy current render as soon as any historical card contained warning.
+  const viewerHeader = doneButton.closest?.("header") || null;
+  const viewerChrome = viewerHeader?.parentElement || doneButton.parentElement;
+  const viewerRoot = viewerChrome?.parentElement || viewerChrome;
+  const viewerScopes = [...new Set([viewerChrome, viewerRoot].filter(Boolean))];
+
+  let selected = null;
+  for (const root of viewerScopes) {
+    const warningIcons = [...(root.querySelectorAll?.("i") || [])]
+      .filter(isVisible)
+      .filter((icon) => /^warning$/i.test(normalizedGenerationFailureText(icon.textContent)));
+    const candidates = [];
+    for (const icon of warningIcons) {
+      let current = icon.parentElement;
+      for (let depth = 0; current && depth < 6; depth += 1, current = current.parentElement) {
+        if (!isVisible(current)) continue;
+        const text = normalizedGenerationFailureText(current.textContent);
+        if (text.length < 8 || text.length > 900) continue;
+        // A warning icon/title alone can belong to a historical render card.
+        // Require both the explicit title and the viewer's detailed error copy.
+        if (!FLOW_VIEWER_ERROR_TITLE_PATTERN.test(text) || !FLOW_VIEWER_ERROR_DETAIL_PATTERN.test(text)) {
+          if (current === root) break;
+          continue;
+        }
+        candidates.push({ element: current, text });
+        if (current === root) break;
+      }
+    }
+    selected = candidates.sort((left, right) => left.text.length - right.text.length)[0] || null;
+    if (selected) break; // nearest viewer ancestor containing the exact error wins
+  }
+  if (!selected) return null;
+  const policy = FLOW_POLICY_ERROR_PATTERN.test(selected.text);
+  return {
+    error: selected.text,
+    code: policy ? "FLOW_POLICY_VIOLATION" : "FLOW_GENERATION_FAILED",
+    policyViolation: policy,
+  };
+}
+
+function activeRenderGenerationFailure() {
+  const anchor = activeRenderAnchor();
+  if (!anchor) return null;
+  const roots = [];
+  let current = anchor.parentElement;
+  for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
+    roots.push(current);
+  }
+  const candidates = roots.flatMap((root) => [root, ...root.querySelectorAll?.('[role="alert"], div, span') || []])
+    .filter(isVisible)
+    .flatMap((element) => {
+      const text = normalizedGenerationFailureText(element.textContent);
+      if (text.length < 8 || text.length > 1_200) return [];
+      const policy = FLOW_POLICY_ERROR_PATTERN.test(text);
+       if (!policy && !FLOW_GENERATION_ERROR_PATTERN.test(text) && !FLOW_VIEWER_ERROR_PATTERN.test(text)) return [];
+      return [{ text, policy }];
+    });
+  const selected = candidates.sort((left, right) =>
+    Number(right.policy) - Number(left.policy) || left.text.length - right.text.length
+  )[0];
+  return selected
+    ? {
+        error: selected.text,
+        code: selected.policy ? "FLOW_POLICY_VIOLATION" : "FLOW_GENERATION_FAILED",
+        policyViolation: selected.policy,
+      }
+    : null;
+}
+
+async function inspectAndCloseFailedVideoViewer() {
+  const failure = videoViewerGenerationFailure();
+  if (!failure) return { ok: true, viewerFailure: false, ...videoViewerState() };
+
+  const doneButton = findVideoViewerButton("done");
+  if (doneButton) {
+    clickFully(doneButton);
+    await waitUntil(() => !findVideoViewerButton("done"), 2_000);
+    await sleep(250);
+  }
+
+  // The result card can reveal a more useful policy explanation only after
+  // the detail viewer closes. Merge that message now and consume both DOM
+  // copies so the same render failure is never reported twice.
+  const outsideFailure = activeRenderGenerationFailure();
+  const resolved = outsideFailure?.policyViolation ? outsideFailure : failure;
+  consumeGenerationFailure(failure.error);
+  if (outsideFailure?.error) consumeGenerationFailure(outsideFailure.error);
+  return {
+    ok: false,
+    viewerFailure: true,
+    viewerClosed: !findVideoViewerButton("done"),
+    viewerError: failure.error,
+    outsideError: outsideFailure?.error || "",
+    ...resolved,
   };
 }
 
@@ -2034,7 +2169,7 @@ function videoRenderCards() {
 }
 
 function renderingProgressCards() {
-  return [...document.querySelectorAll("a > div")].flatMap((target) => {
+  return [...document.querySelectorAll("a > div")].flatMap((target, domIndex) => {
     if (!isVisible(target)) return [];
     const progressElement = [...target.querySelectorAll("div")]
       .find((element) => /^\s*\d{1,3}%\s*$/.test(element.textContent || ""));
@@ -2047,8 +2182,56 @@ function renderingProgressCards() {
       anchor,
       progress: Number.parseInt(progressElement.textContent || "0", 10) || 0,
       area: area(target),
+      domIndex,
+      text: normalizedGenerationFailureText(target.textContent),
     }];
-  }).sort((left, right) => right.progress - left.progress || right.area - left.area);
+  });
+}
+
+function videoRenderActivityState() {
+  const cards = renderingProgressCards();
+  return {
+    ok: true,
+    activeRenderCount: cards.length,
+    progressValues: cards.map((entry) => entry.progress),
+    viewerOpen: Boolean(findVideoViewerButton("done")),
+  };
+}
+
+function activePromptSignatures() {
+  const prompt = normalizedGenerationFailureText(window.__flowx_active_prompt_text);
+  if (!prompt) return [];
+  const sections = prompt.split(/(?=STARTING STATE:|PRIMARY MOTION:|REACTION:|ENVIRONMENTAL MOTION:|CAMERA MOTION:|END FRAME:)/i)
+    .map(normalizedGenerationFailureText)
+    .filter((entry) => entry.length >= 40)
+    .map((entry) => entry.slice(0, 220));
+  return [prompt, ...sections].filter((entry, index, values) => values.indexOf(entry) === index);
+}
+
+function renderCardMatchesActivePrompt(entry) {
+  const text = normalizedGenerationFailureText(entry?.text || entry?.target?.textContent);
+  if (!text) return false;
+  const signatures = activePromptSignatures();
+  return signatures.some((signature, index) =>
+    index === 0 ? text.includes(signature) : text.includes(signature)
+  );
+}
+
+function selectCurrentRenderingCard() {
+  const cards = renderingProgressCards();
+  const matchingPrompt = cards.filter(renderCardMatchesActivePrompt);
+  if (matchingPrompt.length) return matchingPrompt.sort((left, right) => left.domIndex - right.domIndex).at(-1);
+
+  const baseline = window.__flowx_render_anchor_baseline instanceof Set
+    ? window.__flowx_render_anchor_baseline
+    : new Set();
+  const fresh = cards.filter((entry) => !baseline.has(entry.anchor));
+  if (fresh.length) return fresh.sort((left, right) => left.domIndex - right.domIndex).at(-1);
+
+  // A single progress card is unambiguous even when Flow remounted it during
+  // responsive layout. Multiple unmatched cards are unsafe: wait instead of
+  // opening an older render and attributing its result to the current scene.
+  return cards.length === 1 ? cards[0] : null;
 }
 
 function activeRenderAnchor() {
@@ -2065,19 +2248,16 @@ function activeRenderAnchor() {
 }
 
 async function clickActiveRenderingVideoCard() {
-  const failure = newGenerationFailure();
-  if (failure) {
-    return { ok: false, cardFound: true, ...failure };
-  }
-  const rendering = renderingProgressCards()[0] || null;
-  if (rendering) {
+  const lockedAnchor = activeRenderAnchor();
+  const rendering = lockedAnchor ? null : selectCurrentRenderingCard();
+  if (rendering && !lockedAnchor) {
     window.__flowx_active_render_anchor = rendering.anchor;
     window.__flowx_active_render_parent = rendering.anchor.parentElement;
     window.__flowx_active_render_href = String(
       rendering.anchor.href || rendering.anchor.getAttribute("href") || "",
     );
   }
-  const anchor = rendering?.anchor || activeRenderAnchor();
+  const anchor = lockedAnchor || rendering?.anchor || activeRenderAnchor();
   const target = rendering?.target || anchor?.querySelector("button") || anchor?.firstElementChild || anchor;
   if (!target) {
     return { ok: false, cardFound: false, error: "Chưa tìm thấy ô video có phần trăm đang render." };
@@ -2155,7 +2335,7 @@ function videoViewerState() {
 }
 
 async function clickViewerDownload() {
-  const failure = newGenerationFailure();
+  const failure = videoViewerGenerationFailure();
   if (failure) {
     return {
       ok: false,
@@ -2359,9 +2539,12 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     videoBaselineSnapshot,
     startNativeVideoDownload,
     clickActiveRenderingVideoCard,
+    videoRenderActivityState,
     videoViewerState,
     clickViewerDownload,
     clickViewerDownloadAndClose,
+    inspectAndCloseFailedVideoViewer,
+    videoViewerGenerationFailure,
     generationFailureSnapshot,
     newGenerationFailure,
     promptTextMatches,
@@ -2675,6 +2858,11 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
       return;
     }
 
+    if (msg.type === "FLOWX_GET_VIDEO_RENDER_ACTIVITY") {
+      sendResponse(videoRenderActivityState());
+      return;
+    }
+
     if (msg.type === "FLOWX_NATIVE_DOWNLOAD_NEW_VIDEO") {
       startNativeVideoDownload(msg.videoBaseline)
         .then((result) => sendResponse(result))
@@ -2692,6 +2880,17 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
     if (msg.type === "FLOWX_CHECK_VIDEO_VIEWER") {
       sendResponse(videoViewerState());
       return;
+    }
+
+    if (msg.type === "FLOWX_CHECK_AND_CLOSE_FAILED_VIDEO_VIEWER") {
+      inspectAndCloseFailedVideoViewer()
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({
+          ok: false,
+          code: "FLOW_GENERATION_FAILED",
+          error: String(error?.message || error),
+        }));
+      return true;
     }
 
     if (msg.type === "FLOWX_DOWNLOAD_CURRENT_VIDEO_VIEWER") {

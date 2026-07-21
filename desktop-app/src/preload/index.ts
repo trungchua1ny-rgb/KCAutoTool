@@ -69,8 +69,29 @@ import {
   OUTPUT_INSPECT_CHANNEL,
   OUTPUT_OPEN_CHANNEL,
   SYSTEM_OPEN_EXTENSION_FOLDER_CHANNEL,
+  SYSTEM_OPEN_STORAGE_CHANNEL,
+  SYSTEM_RESTART_CHANNEL,
+  SYSTEM_SELECT_STORAGE_CHANNEL,
   SYSTEM_STATUS_CHANNEL,
 } from "../shared/system";
+import {
+  CAPCUT_BUILD_TIMELINE_CHANNEL,
+  CAPCUT_INSPECT_BUILD_CHANNEL,
+} from "../shared/capcut";
+import {
+  EDIT_EXPORT_CHANNEL,
+  EDIT_LOAD_CHANNEL,
+  EDIT_PICK_VIDEO_CHANNEL,
+  EDIT_SAVE_CHANNEL,
+  EDIT_SYNC_CHANNEL,
+} from "../shared/edit";
+import {
+  EDIT_ASSEMBLY_CANCEL_CHANNEL,
+  EDIT_ASSEMBLY_PROGRESS_CHANNEL,
+  EDIT_ASSEMBLY_START_CHANNEL,
+  EDIT_ASSEMBLY_VALIDATE_CHANNEL,
+  type AssemblyProgress,
+} from "../shared/video-assembly";
 
 const bridge: KCAutoToolBridge = {
   platform: process.platform,
@@ -173,9 +194,39 @@ const bridge: KCAutoToolBridge = {
   system: {
     getStatus: () => ipcRenderer.invoke(SYSTEM_STATUS_CHANNEL),
     openExtensionFolder: () => ipcRenderer.invoke(SYSTEM_OPEN_EXTENSION_FOLDER_CHANNEL),
+    openStorage: (target) => ipcRenderer.invoke(SYSTEM_OPEN_STORAGE_CHANNEL, target),
+    selectStorage: () => ipcRenderer.invoke(SYSTEM_SELECT_STORAGE_CHANNEL),
+    restart: () => ipcRenderer.invoke(SYSTEM_RESTART_CHANNEL),
     inspectOutput: (projectId) => ipcRenderer.invoke(OUTPUT_INSPECT_CHANNEL, projectId),
     openOutput: (projectId, group) => ipcRenderer.invoke(OUTPUT_OPEN_CHANNEL, { projectId, group }),
     exportSession: (session) => ipcRenderer.invoke(OUTPUT_EXPORT_SESSION_CHANNEL, session),
+  },
+  capcut: {
+    inspectBuild: (session, targetProjectPath) => ipcRenderer.invoke(
+      CAPCUT_INSPECT_BUILD_CHANNEL,
+      { session, targetProjectPath },
+    ),
+    buildTimeline: (session, options) => ipcRenderer.invoke(
+      CAPCUT_BUILD_TIMELINE_CHANNEL,
+      { session, options },
+    ),
+  },
+  edit: {
+    load: (session) => ipcRenderer.invoke(EDIT_LOAD_CHANNEL, session),
+    sync: (session) => ipcRenderer.invoke(EDIT_SYNC_CHANNEL, session),
+    save: (project) => ipcRenderer.invoke(EDIT_SAVE_CHANNEL, project),
+    export: (project, options) => ipcRenderer.invoke(EDIT_EXPORT_CHANNEL, { project, options }),
+    pickVideo: (sessionId: string) => ipcRenderer.invoke(EDIT_PICK_VIDEO_CHANNEL, sessionId),
+    assembly: {
+      validate: (project, settings) => ipcRenderer.invoke(EDIT_ASSEMBLY_VALIDATE_CHANNEL, { project, settings }),
+      start: (project, settings) => ipcRenderer.invoke(EDIT_ASSEMBLY_START_CHANNEL, { project, settings }),
+      cancel: (jobId: string) => ipcRenderer.invoke(EDIT_ASSEMBLY_CANCEL_CHANNEL, jobId),
+      onProgress: (callback: (progress: AssemblyProgress) => void) => {
+        const listener = (_event: Electron.IpcRendererEvent, value: AssemblyProgress) => callback(value);
+        ipcRenderer.on(EDIT_ASSEMBLY_PROGRESS_CHANNEL, listener);
+        return () => ipcRenderer.removeListener(EDIT_ASSEMBLY_PROGRESS_CHANNEL, listener);
+      },
+    },
   },
   workers: {
     getStatuses: () => ipcRenderer.invoke(WORKER_STATUS_GET_CHANNEL),

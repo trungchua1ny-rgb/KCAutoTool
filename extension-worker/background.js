@@ -375,11 +375,25 @@ async function downloadNewestVideoThroughFlow(tabId, videoBaseline, payload, job
         }
         attempt += 1;
         const attemptStartedAt = Date.now();
+        const viewerFailure = await sendImageToFlowTab(tabId, {
+          type: "FLOWX_CHECK_AND_CLOSE_FAILED_VIDEO_VIEWER",
+        });
+        if (viewerFailure?.viewerFailure) {
+          const failureError = new Error(
+            viewerFailure.error || "Google Flow không tạo được video trong cửa sổ render",
+          );
+          failureError.code = viewerFailure.code || "FLOW_GENERATION_FAILED";
+          failureError.policyViolation = viewerFailure.policyViolation === true;
+          throw failureError;
+        }
         const response = await sendImageToFlowTab(tabId, {
           type: "FLOWX_CLICK_VIDEO_VIEWER_DOWNLOAD",
         });
         if (response?.error && (response.code === "FLOW_POLICY_VIOLATION" || response.code === "FLOW_GENERATION_FAILED")) {
-          throw new Error(response.error);
+          const failureError = new Error(response.error);
+          failureError.code = response.code;
+          failureError.policyViolation = response.policyViolation === true;
+          throw failureError;
         }
         if (response?.viewerOpen === false) {
           throw new Error(response?.error || "Viewer video Flow đã đóng trước khi tải xuống");
@@ -894,13 +908,23 @@ async function openLatestViewerWithRetries(tabId, jobId) {
     attempt += 1;
     try {
       const before = await sendImageToFlowTab(tabId, { type: "FLOWX_CHECK_VIDEO_VIEWER" });
-      if (before?.viewerOpen) return { ok: true, attempts: attempt - 1 };
+      if (before?.viewerOpen) {
+        // A viewer that existed before we clicked the card selected for this
+        // prompt belongs to an older render. Close it without attributing its
+        // success or failure to the current scene.
+        await sendImageToFlowTab(tabId, { type: "FLOWX_CLOSE_VIDEO_VIEWER" });
+        await pause(250);
+      }
       const clicked = await sendImageToFlowTab(tabId, {
         type: "FLOWX_CLICK_ACTIVE_RENDER_VIDEO",
       });
       if (clicked?.error && (clicked.code === "FLOW_POLICY_VIOLATION" || clicked.code === "FLOW_GENERATION_FAILED")) {
         return clicked;
       }
+      const openedViewerFailure = await sendImageToFlowTab(tabId, {
+        type: "FLOWX_CHECK_AND_CLOSE_FAILED_VIDEO_VIEWER",
+      });
+      if (openedViewerFailure?.viewerFailure) return openedViewerFailure;
       const after = await sendImageToFlowTab(tabId, { type: "FLOWX_CHECK_VIDEO_VIEWER" });
       sendJobProgress(
         jobId,
@@ -909,11 +933,54 @@ async function openLatestViewerWithRetries(tabId, jobId) {
       );
       if (after?.viewerOpen) return { ok: true, attempts: attempt };
     } catch (error) {
+      if (error?.code === "FLOW_POLICY_VIOLATION" || error?.code === "FLOW_GENERATION_FAILED") {
+        return {
+          ok: false,
+          code: error.code,
+          error: String(error.message || error),
+          policyViolation: error.policyViolation === true,
+        };
+      }
       sendJobProgress(jobId, "generating", `Lần ${attempt} chưa mở được card render: ${String(error?.message || error)}`);
     }
     await pause(Math.max(0, 2_000 - (Date.now() - attemptStartedAt)));
   }
   return { ok: false, timeout: true, code: "TIMEOUT", error: "Không mở được card video Flow sau 10 phút thử mỗi 2 giây." };
+}
+
+async function waitForFlowVideoIdle(tabId, jobId) {
+  const deadline = Date.now() + 600_000;
+  let stableIdlePolls = 0;
+  let lastProgressAt = 0;
+  while (Date.now() < deadline) {
+    if (activeJob?.jobId !== jobId || activeJob?.stopping) {
+      return { ok: false, stopped: true, code: "STOPPED", error: "Đã dừng trong khi chờ Google Flow rảnh." };
+    }
+    const state = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_VIDEO_RENDER_ACTIVITY" });
+    if (!state?.ok) return state;
+    const activeCount = Number(state.activeRenderCount) || 0;
+    if (activeCount === 0) {
+      stableIdlePolls += 1;
+      if (stableIdlePolls >= 2) return { ok: true };
+    } else {
+      stableIdlePolls = 0;
+      if (Date.now() - lastProgressAt >= 6_000) {
+        lastProgressAt = Date.now();
+        const values = Array.isArray(state.progressValues) ? state.progressValues.join("%, ") : "";
+        sendJobProgress(
+          jobId,
+          "preparing",
+          `Google Flow còn ${activeCount} video đang render${values ? ` (${values}%)` : ""}; chưa dán prompt scene mới để tránh chạy chồng`,
+        );
+      }
+    }
+    await pause(2_000);
+  }
+  return {
+    ok: false,
+    code: "FLOW_RENDER_BUSY",
+    error: "Google Flow vẫn còn video đang render sau 10 phút; chưa gửi prompt mới để tránh tạo hai video cùng lúc.",
+  };
 }
 
 async function waitForFlowVideo(tabId, videoBaseline, jobId) {
@@ -1331,6 +1398,8 @@ async function attachFrameWithPicker(tabId, localPath, position, assetKey = "") 
 async function generateFlowVideo(tabId, payload, jobId) {
   await pressEscape(tabId).catch(() => {});
   await pause(150);
+  const idle = await waitForFlowVideoIdle(tabId, jobId);
+  if (!idle?.ok) return idle;
   const cleared = await sendImageToFlowTab(tabId, { type: "FLOWX_CLEAR_PROMPT_MEDIA" });
   if (!cleared?.ok) return cleared;
   if (cleared.removed > 0) {
@@ -1411,6 +1480,15 @@ async function generateFlowVideo(tabId, payload, jobId) {
       );
       return { ok: true, resultPath };
     } catch (error) {
+      if (error?.code === "FLOW_POLICY_VIOLATION" || error?.code === "FLOW_GENERATION_FAILED") {
+        return {
+          ok: false,
+          code: error.code,
+          error: String(error.message || error),
+          policyViolation: error.policyViolation === true,
+          viewerClosed: true,
+        };
+      }
       return {
         ok: false,
         code: "FLOW_NATIVE_DOWNLOAD_FAILED",
@@ -1605,7 +1683,7 @@ async function handleSceneJob(message) {
         jobId,
         response?.error || (response?.timeout ? `Google Flow tạo ${payload.mediaType === "image" ? "ảnh" : "video"} quá thời gian` : `Google Flow không tạo được ${payload.mediaType === "image" ? "ảnh" : "video"}`),
         code,
-        ["TIMEOUT", "FLOW_UI_CHANGED", "FLOW_REF_UPLOAD_FAILED", "FLOW_REF_ATTACH_FAILED", "FLOW_START_FRAME_ATTACH_FAILED", "FLOW_END_FRAME_ATTACH_FAILED", "FLOW_STALE_MEDIA_CLEAR_FAILED", "FLOW_VIDEO_MODE_NOT_FOUND", "FLOW_VIDEO_MODE_CHANGE_FAILED", "FLOW_VIDEO_SETTINGS_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED", "FLOW_VIDEO_DURATION_NOT_FOUND", "FLOW_VIDEO_DURATION_CHANGE_FAILED", "FLOW_VIDEO_READ_FAILED", "FLOW_PROMPT_NOT_FILLED", "FLOW_PROMPT_NOT_VERIFIED", "FLOW_SUBMIT_FAILED"].includes(code),
+        ["TIMEOUT", "FLOW_RENDER_BUSY", "FLOW_UI_CHANGED", "FLOW_REF_UPLOAD_FAILED", "FLOW_REF_ATTACH_FAILED", "FLOW_START_FRAME_ATTACH_FAILED", "FLOW_END_FRAME_ATTACH_FAILED", "FLOW_STALE_MEDIA_CLEAR_FAILED", "FLOW_VIDEO_MODE_NOT_FOUND", "FLOW_VIDEO_MODE_CHANGE_FAILED", "FLOW_VIDEO_SETTINGS_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_NOT_FOUND", "FLOW_VIDEO_ASPECT_RATIO_CHANGE_FAILED", "FLOW_VIDEO_DURATION_NOT_FOUND", "FLOW_VIDEO_DURATION_CHANGE_FAILED", "FLOW_VIDEO_READ_FAILED", "FLOW_PROMPT_NOT_FILLED", "FLOW_PROMPT_NOT_VERIFIED", "FLOW_SUBMIT_FAILED"].includes(code),
       );
       return;
     }

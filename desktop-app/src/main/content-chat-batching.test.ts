@@ -5,6 +5,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 interface Boundary {
+  sceneIndex?: number;
   startMs: number;
   endMs: number;
   start?: string;
@@ -12,6 +13,9 @@ interface Boundary {
   durationSeconds?: 4 | 6 | 8;
   chainId?: string | null;
   chainRole?: "single" | "start" | "continue";
+  chainRisk?: "low" | "medium" | "high" | null;
+  recommendedReanchor?: boolean | null;
+  beatSummary?: string;
 }
 
 interface TimelineBatch {
@@ -83,6 +87,7 @@ test("splits a long SRT into batches of six 8-second scenes", async () => {
     validateBatchResult: (
       result: { scenes: Array<Record<string, unknown>>; visualBible?: unknown },
       batch: TimelineBatch & { index: number },
+      characterRoster?: Array<{ token: string; name: string }>,
     ) => void;
     buildPolicyRewritePrompt: (payload: Record<string, unknown>) => string;
     parsePolicyRewriteResponse: (text: string, mediaType: "image" | "video") => { prompt: string };
@@ -116,6 +121,8 @@ The hero crosses the hall.`;
   const beatPrompt = internals.buildBeatPlanningPrompt(beatSrt, "A continuous walk through one hall.");
   assert.match(beatPrompt, /JOB TYPE: beat_planning/);
   assert.match(beatPrompt, /sum of durationSeconds MUST equal exactly 18 seconds/);
+  assert.match(beatPrompt, /chain MUST NOT exceed 6 beats/i);
+  assert.match(beatPrompt, /SRT is authoritative/i);
   const referenceBeatPrompt = internals.buildBeatPlanningPrompt(
     beatSrt,
     "A continuous walk through one hall.",
@@ -135,6 +142,8 @@ The hero crosses the hall.`;
   );
   assert.deepEqual(Array.from(beatPlan, (beat) => beat.durationSeconds), [8, 6, 4]);
   assert.equal(beatPlan.at(-1)?.endMs, 18_000);
+  assert.equal(beatPlan[0].sceneIndex, 1);
+  assert.equal(beatPlan[0].chainRisk, "low");
   const rewriteRequest = internals.buildPolicyRewritePrompt({
     sceneId: "scene-004",
     mediaType: "video",
@@ -144,9 +153,12 @@ The hero crosses the hall.`;
     timeEnd: "00:00:32,000",
     pairedPrompt: "Opening frame context",
     visualBible: { aspectRatio: "16:9" },
+    policyFlag: "real_person",
   });
   assert.match(rewriteRequest, /policy_safe_prompt_rewrite/);
   assert.match(rewriteRequest, /Do not evade, disguise, encode/);
+  assert.match(rewriteRequest, /original, fictional, non-identifiable person/i);
+  assert.match(rewriteRequest, /Remove the real person's name, aliases, @tokens/i);
   const safeVideoPrompt = `STARTING STATE: a worried figure pauses beside a closed doorway in a quiet hallway. PRIMARY MOTION: the figure steps backward while keeping both hands visible and turning toward a distant sound. REACTION: concern changes into alert attention through the eyes, eyebrows, head angle, and guarded posture. ENVIRONMENTAL MOTION: a loose curtain moves gently beside the window while soft dust crosses the light. CAMERA MOTION: a steady medium tracking shot follows the retreat at natural speed without sudden movement. END FRAME: the figure stops safely near the hallway corner and looks toward the unseen source.`;
   assert.equal(
     internals.parsePolicyRewriteResponse(JSON.stringify({ prompt: safeVideoPrompt }), "video").prompt,
@@ -157,6 +169,21 @@ The hero crosses the hall.`;
     { timeStart: "00:00:10,000", timeEnd: "00:00:18,000", durationSeconds: 8, chainId: null, chainRole: "single" },
   ], beatSrt), /gap, overlap/);
 
+  const longChainSrt = `1
+00:00:00,000 --> 00:00:28,000
+A single continuous action.`;
+  const sevenBeatChain = Array.from({ length: 7 }, (_, index) => ({
+    timeStart: `00:00:${String(index * 4).padStart(2, "0")},000`,
+    timeEnd: `00:00:${String((index + 1) * 4).padStart(2, "0")},000`,
+    durationSeconds: 4,
+    chainId: "too-long",
+    chainRole: index === 0 ? "start" : "continue",
+  }));
+  assert.throws(
+    () => internals.validateBeatPlanningResult(sevenBeatChain, longChainSrt),
+    /hard chain cap of 6 scenes/,
+  );
+
   const plannedBatches = (internals.createTimelineBatches as unknown as (
     srtText: string,
     boundaries: Boundary[],
@@ -165,6 +192,41 @@ The hero crosses the hall.`;
     Array.from(plannedBatches[0].boundaries, (boundary) => boundary.durationSeconds),
     [8, 6, 4],
   );
+  const chainAwareBoundaries = Array.from({ length: 10 }, (_, index): Boundary => ({
+    sceneIndex: index + 1,
+    startMs: index * 8_000,
+    endMs: (index + 1) * 8_000,
+    start: `00:00:${String(index * 8).padStart(2, "0")},000`,
+    end: `00:00:${String((index + 1) * 8).padStart(2, "0")},000`,
+    durationSeconds: 8,
+    chainId: index >= 5 && index <= 7 ? "chain-boundary" : null,
+    chainRole: index === 5 ? "start" : index === 6 || index === 7 ? "continue" : "single",
+  }));
+  const chainAwareBatches = (internals.createTimelineBatches as unknown as (
+    srtText: string,
+    boundaries: Boundary[],
+  ) => TimelineBatch[])(`1
+00:00:00,000 --> 00:01:20,000
+Continuous source.`, chainAwareBoundaries);
+  assert.deepEqual(Array.from(chainAwareBatches, (batch) => batch.boundaries.length), [5, 5]);
+  assert.deepEqual(
+    Array.from(chainAwareBatches[1].boundaries.slice(0, 3), (boundary) => boundary.chainRole),
+    ["start", "continue", "continue"],
+  );
+
+  const complexBoundaries = chainAwareBoundaries.map((boundary, index) => ({
+    ...boundary,
+    chainId: index <= 3 ? "complex" : null,
+    chainRole: index === 0 ? "start" as const : index <= 3 ? "continue" as const : "single" as const,
+    chainRisk: index === 3 ? "high" as const : "low" as const,
+  }));
+  const complexBatches = (internals.createTimelineBatches as unknown as (
+    srtText: string,
+    boundaries: Boundary[],
+  ) => TimelineBatch[])(`1
+00:00:00,000 --> 00:01:20,000
+Complex continuous source.`, complexBoundaries);
+  assert.equal(complexBatches[0].boundaries.length, 4);
   const plannedPrompt = internals.buildTimelinePrompt(
     plannedBatches[0] as TimelineBatch & { index: number },
     plannedBatches.length,
@@ -173,6 +235,11 @@ The hero crosses the hall.`;
   assert.match(plannedPrompt, /chainRole=continue \| chainId=hall/);
   assert.match(plannedPrompt, /For chainRole continue, write ONLY the video prompt/);
   assert.match(plannedPrompt, /imagePrompt MUST be exactly ""/);
+  assert.match(plannedPrompt, /actualContinuityFrame.*runtime source of truth/i);
+  assert.match(plannedPrompt, /"policyFlag":null/);
+  assert.match(plannedPrompt, /"plannedContinuityOut"/);
+  assert.match(plannedPrompt, /No additional foreground or background elements are required/);
+  assert.match(plannedPrompt, /No visible character reaction/);
   const referencedStylePrompt = internals.buildTimelinePrompt(
     plannedBatches[0] as TimelineBatch & { index: number },
     plannedBatches.length,
@@ -233,7 +300,7 @@ The hero crosses the hall.`;
   assert.match(lockedStylePrompt, /Spend the prompt budget on the other visible parts of the shot/);
   assert.match(lockedStylePrompt, /Do NOT repeat global graphic style, palette, default lighting/);
   assert.match(lockedStylePrompt, /facial expression, head angle, posture, gesture/);
-  assert.match(lockedStylePrompt, /foreground element, one middle-ground subject\/object, and one background element/);
+  assert.match(lockedStylePrompt, /No additional foreground or background elements are required/);
   assert.match(lockedStylePrompt, /one continuous, physically possible shot lasting exactly the required boundary duration/);
   assert.match(lockedStylePrompt, /SETTING AND BACKGROUND:/);
   assert.match(lockedStylePrompt, /natural timing: appropriate acceleration and deceleration/);
@@ -262,11 +329,14 @@ The hero crosses the hall.`;
     timeEnd: String((boundary as unknown as { end?: string }).end || ""),
     imagePrompt: detailedImagePrompt,
     videoPrompt: detailedVideoPrompt,
+    usedCharacterTokens: ["@GULLIT", "@NOT_IN_ROSTER"],
   }));
   assert.doesNotThrow(() => internals.validateBatchResult(
     { scenes: validationScenes },
     validationBatch,
+    [{ token: "@GULLIT", name: "Gullit" }],
   ));
+  assert.deepEqual(Array.from(validationScenes[0].usedCharacterTokens), ["@GULLIT"]);
 
   const continuationBatch = {
     ...plannedBatches[0],

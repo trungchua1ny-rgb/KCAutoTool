@@ -8,11 +8,13 @@ import {
   Image as ImageIcon,
   ListTree,
   LoaderCircle,
+  UsersRound,
 } from "lucide-react";
 import type { ProductionQueueSnapshot } from "../shared/production-queue";
 import type { OutputInspection } from "../shared/system";
 import type { TimelineSession } from "../shared/timeline";
 import type { AppPage } from "./app-navigation";
+import { readHomeCharactersReviewed } from "./home-workflow-state";
 
 type JourneyState = "done" | "running" | "error" | "ready" | "waiting";
 
@@ -70,6 +72,7 @@ export function ProjectJourney({
     source?.srtText?.trim() || source?.srtFileName?.trim() || source?.srtPath?.trim(),
   );
   const voiceReady = Boolean(source?.srtText?.trim() || source?.srtPath?.trim() || source?.srtFileName?.trim());
+  const charactersReady = Boolean(session && (scenes.length > 0 || readHomeCharactersReviewed(session.id)));
   const hasVisualBible = Boolean(session?.visualBible.style.trim());
   const promptScenes = scenes.filter((scene) =>
     Boolean(scene.videoPrompt.trim()) && (scene.chainRole === "continue" || Boolean(scene.imagePrompt.trim())),
@@ -103,11 +106,19 @@ export function ProjectJourney({
       icon: AudioLines,
     },
     {
+      id: "characters",
+      label: "Nhân vật",
+      detail: charactersReady ? "Đã xác nhận thư viện nhân vật" : "Tạo nhân vật hoặc xác nhận không sử dụng",
+      page: "characters",
+      state: stepState({ done: charactersReady, ready: voiceReady }),
+      icon: UsersRound,
+    },
+    {
       id: "visual-bible",
       label: "Visual Bible",
       detail: hasVisualBible ? "Phong cách đồ họa đã khóa" : "Cần nhập phong cách bắt buộc",
       page: "visual-bible",
-      state: stepState({ done: hasVisualBible, ready: voiceReady }),
+      state: stepState({ done: hasVisualBible, ready: charactersReady }),
       icon: BookOpenCheck,
     },
     {
@@ -146,7 +157,7 @@ export function ProjectJourney({
 
   const imageFraction = imageScenes.length ? completedImages / imageScenes.length : 0;
   const videoFraction = scenes.length ? completedVideos / scenes.length : 0;
-  const progressUnits = Number(voiceReady) + Number(hasVisualBible) + Number(promptsReady) + imageFraction + videoFraction + Number(outputReady);
+  const progressUnits = Number(voiceReady) + Number(charactersReady) + Number(hasVisualBible) + Number(promptsReady) + imageFraction + videoFraction + Number(outputReady);
   const progress = Math.max(0, Math.min(100, Math.round((progressUnits / steps.length) * 100)));
   const isMoving = hasInput && progress < 100 && queue?.state !== "stopped" && queue?.state !== "paused";
 

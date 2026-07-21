@@ -25,6 +25,13 @@ test("normalizes generated scenes and character tokens", () => {
         imagePrompt: "Portrait of @ancestor and @GUIDE",
         videoPrompt: "Slow push in",
         usedCharacterTokens: ["ancestor", "@ANCESTOR"],
+        policyFlag: null,
+        policyResolution: {
+          originalFlag: "real_person",
+          status: "auto_rewritten",
+          rewrittenMedia: ["image", "video"],
+          resolvedAt: "2026-07-21T00:00:00.000Z",
+        },
       },
     ],
   });
@@ -49,6 +56,8 @@ test("normalizes generated scenes and character tokens", () => {
   assert.equal(result.scenes[0].durationSeconds, 8);
   assert.equal(result.scenes[0].chainRole, "single");
   assert.equal(result.scenes[0].chainId, null);
+  assert.equal(result.scenes[0].policyResolution?.status, "auto_rewritten");
+  assert.deepEqual(result.scenes[0].policyResolution?.rewrittenMedia, ["image", "video"]);
 });
 
 test("rejects empty or malformed scene results", () => {

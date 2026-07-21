@@ -1,6 +1,8 @@
 import {
+  ArrowLeft,
   Check,
   CircleAlert,
+  Clapperboard,
   FileText,
   FolderPlus,
   Image as ImageIcon,
@@ -50,8 +52,7 @@ import {
 import { ImageGenerationModal } from "./ImageGenerationModal";
 import { VideoGenerationModal } from "./VideoGenerationModal";
 import { VisualBiblePanel } from "./VisualBiblePanel";
-import { SceneTimeline } from "./SceneTimeline";
-import { SceneDetailDrawer } from "./SceneDetailDrawer";
+import { WorkflowDashboard, type WorkflowDashboardActions } from "./WorkflowDashboard";
 import type { GraphicStylePreset } from "../shared/visual-style";
 import type { IntegratedWorkflowHandoff } from "./integrated-workflow";
 import {
@@ -65,6 +66,9 @@ interface TimelineImportProps {
   flowConnected: boolean;
   integratedHandoff?: IntegratedWorkflowHandoff | null;
   onIntegratedHandoffConsumed?: () => void;
+  onWorkflowReady?: () => void;
+  onBuildVideo?: () => void;
+  onBack?: () => void;
 }
 
 const TIMELINE_STORAGE_KEY = "flowx.timeline.scenes.v1";
@@ -598,6 +602,7 @@ function TimelineTable({
 const ERROR_CATEGORY_LABELS: Record<QueueErrorView["category"], string> = {
   dom_element_not_found: "Không tìm thấy phần tử Flow",
   flow_policy_violation: "Vi phạm chính sách Flow",
+  flow_generation_failed: "Flow không tạo được video",
   response_schema_invalid: "Phản hồi không hợp lệ",
   timeout_no_response: "Quá thời gian phản hồi",
   flow_quota_or_rate_limit: "Giới hạn Google Flow",
@@ -655,6 +660,9 @@ export function TimelineImport({
   flowConnected,
   integratedHandoff = null,
   onIntegratedHandoffConsumed,
+  onWorkflowReady,
+  onBuildVideo,
+  onBack,
 }: TimelineImportProps) {
   const [srtFile, setSrtFile] = useState<File | null>(null);
   const [scriptFile, setScriptFile] = useState<File | null>(null);
@@ -693,7 +701,6 @@ export function TimelineImport({
   const [queueSnapshot, setQueueSnapshot] = useState<ProductionQueueSnapshot | null>(null);
   const [queueCommandError, setQueueCommandError] = useState("");
   const [selectedSceneId, setSelectedSceneId] = useState("");
-  const [sceneDetailOpen, setSceneDetailOpen] = useState(false);
   const [repairingPromptKey, setRepairingPromptKey] = useState("");
   const [policyRepairModal, setPolicyRepairModal] = useState<PolicyRepairModalState | null>(null);
   const [policyReason, setPolicyReason] = useState<PolicyReason>("auto");
@@ -704,7 +711,17 @@ export function TimelineImport({
   const activeSessionIdRef = useRef(activeSessionId);
   const consumedHandoffIds = useRef(new Set<string>());
   const loadedThumbnailPaths = useRef(new Map<string, string>());
+  const timelineRootRef = useRef<HTMLElement>(null);
   const activeProjectId = activeSessionId || DEFAULT_PROJECT_ID;
+
+  useEffect(() => {
+    if (scenes.length === 0) return;
+    const frame = window.requestAnimationFrame(() => {
+      const dashboard = timelineRootRef.current?.querySelector<HTMLElement>(".workflow-dashboard");
+      dashboard?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [scenes.length]);
 
   const applySession = (session: TimelineSession) => {
     activeSessionIdRef.current = session.id;
@@ -729,7 +746,6 @@ export function TimelineImport({
       ? restoredSceneId
       : session.scenes[0]?.id || "";
     setSelectedSceneId(nextSceneId);
-    setSceneDetailOpen(false);
     setClearSceneMediaTarget(null);
     setClearingSceneId("");
     loadedThumbnailPaths.current.clear();
@@ -993,7 +1009,6 @@ export function TimelineImport({
 
   const selectScene = (sceneId: string) => {
     setSelectedSceneId(sceneId);
-    setSceneDetailOpen(true);
     localStorage.setItem(`kc-auto-tool:selected-scene:${activeProjectId}`, sceneId);
   };
 
@@ -1173,6 +1188,20 @@ export function TimelineImport({
       setScenes((current) => applyQueueSnapshotToScenes(current, snapshot));
     } catch (caught) {
       if (activeSessionIdRef.current !== commandSessionId) return;
+      setQueueCommandError(errorMessage(caught));
+    }
+  };
+
+  const refreshQueueSnapshot = async () => {
+    const bridge = window.flowx?.productionQueue;
+    if (!bridge) return;
+    setQueueCommandError("");
+    try {
+      const snapshot = await bridge.getSnapshot(activeProjectId);
+      setQueueSnapshot(snapshot);
+      setScenes((current) => applyQueueSnapshotToScenes(current, snapshot));
+      setWorkflowNotice("Đã làm mới trạng thái workflow từ queue.");
+    } catch (caught) {
       setQueueCommandError(errorMessage(caught));
     }
   };
@@ -1459,29 +1488,26 @@ export function TimelineImport({
     const bibleInput = handoff?.visualBible || visualBible;
     const referenceInput = handoff ? handoff.styleReference : styleReference;
     const modeInput = handoff?.workflowMode || workflowMode;
+    const automaticInput = modeInput === "automatic";
     const targetProjectId = handoff?.sessionId || activeProjectId;
+    const hasDeferredVoice = Boolean(sourceInput.narrationText?.trim() && sourceInput.voiceName?.trim());
     setError("");
     setWorkflowNotice("");
     if (!bibleInput.style.trim()) {
       setError("Phong cách đồ họa trong Visual Bible là bắt buộc. Hãy nhập hoặc chọn một phong cách đã lưu.");
       return;
     }
-    if (!handoff && srtFile && !validateFile(srtFile, "File phụ đề", [".srt"])) return;
-    if (!handoff && scriptFile && !validateFile(scriptFile, "File kịch bản", [".txt", ".md"])) return;
-    if (!srtFile && !sourceInput.srtText.trim()) {
-      setError("Hãy chọn file phụ đề SRT");
-      return;
-    }
-    if (!scriptFile && !sourceInput.scriptText.trim()) {
-      setError("Hãy chọn file kịch bản");
-      return;
+    if (automaticInput) {
+      if (!sourceInput.narrationText?.trim()) { setError("Chế độ Tự động hoàn toàn chưa nhận được nội dung thoại từ Voice Studio."); return; }
+      if (!sourceInput.voiceName?.trim()) { setError("Chế độ Tự động hoàn toàn chưa nhận được giọng đọc từ Voice Studio."); return; }
+    } else {
+      if (!handoff && srtFile && !validateFile(srtFile, "File phụ đề", [".srt"])) return;
+      if (!handoff && scriptFile && !validateFile(scriptFile, "File kịch bản", [".txt", ".md"])) return;
+      if (!srtFile && !sourceInput.srtText.trim()) { setError("Hãy chọn file phụ đề SRT."); return; }
+      if (!scriptFile && !sourceInput.scriptText.trim()) { setError("Hãy chọn file kịch bản."); return; }
     }
     if (!chatConnected) {
       setError("ChatGPT worker chưa kết nối");
-      return;
-    }
-    if (modeInput === "automatic" && !flowConnected) {
-      setError("Chế độ tự động hoàn toàn cần Google Flow worker kết nối trước khi bắt đầu");
       return;
     }
     if (!window.flowx?.timeline) {
@@ -1492,17 +1518,60 @@ export function TimelineImport({
     setRunning(true);
     setProgress(null);
     try {
+      let preparedSource = sourceInput;
+      if (!srtFile && !sourceInput.srtText.trim() && hasDeferredVoice) {
+        const voice = window.flowx?.voice;
+        if (!voice || !sourceInput.narrationText?.trim() || !sourceInput.voiceName?.trim()) {
+          throw new Error("Cấu hình Voice chưa đầy đủ để bắt đầu workflow");
+        }
+        setWorkflowNotice("Bước 1/3 · Đang tạo Voice và SRT từ cấu hình đã lưu…");
+        const generatedVoice = await voice.generate({
+          projectId: targetProjectId,
+          projectName: sessionNameDraft,
+          narrationText: sourceInput.narrationText,
+          narrationFileName: sourceInput.narrationFileName || "loi-thoai.txt",
+          voice: sourceInput.voiceName,
+          prosody: {
+            rate: sourceInput.voiceRate ?? 0,
+            pitch: sourceInput.voicePitch ?? 0,
+            volume: sourceInput.voiceVolume ?? 0,
+            pauseLevel: sourceInput.voicePauseLevel || "medium",
+          },
+          splitMode: sourceInput.voiceSplitMode || "paragraph",
+          maxCharsPerChunk: sourceInput.voiceMaxCharsPerChunk || 3000,
+          exportWordSrt: Boolean(sourceInput.voiceExportWordSrt),
+        });
+        preparedSource = {
+          ...sourceInput,
+          srtText: generatedVoice.srtText,
+          srtFileName: generatedVoice.srtFileName,
+          srtPath: generatedVoice.srtPath,
+          audioPath: generatedVoice.audioPath,
+          audioFileName: generatedVoice.audioFileName,
+          scriptText: sourceInput.scriptText.trim() || sourceInput.narrationText.trim(),
+          scriptFileName: sourceInput.scriptFileName || sourceInput.narrationFileName || "loi-thoai.txt",
+        };
+        setWorkflowSource(preparedSource);
+        await window.flowx.timeline.saveSession({
+          scenes,
+          visualBible: bibleInput,
+          styleReference: referenceInput,
+          workflowMode: modeInput,
+          workflowSource: preparedSource,
+        });
+        setWorkflowNotice("Bước 2/3 · Voice và SRT đã hoàn thành. Đang chia Timeline và viết Prompt…");
+      }
       const [srtText, scriptText, availableCharacters] = await Promise.all([
-        !handoff && srtFile ? srtFile.text() : Promise.resolve(sourceInput.srtText),
-        !handoff && scriptFile ? scriptFile.text() : Promise.resolve(sourceInput.scriptText),
+        !automaticInput && !handoff && srtFile ? srtFile.text() : Promise.resolve(preparedSource.srtText),
+        !automaticInput && !handoff && scriptFile ? scriptFile.text() : Promise.resolve(preparedSource.scriptText),
         window.flowx?.characters.list() || Promise.resolve(characters),
       ]);
       const nextWorkflowSource: TimelineWorkflowSource = {
-        ...sourceInput,
+        ...preparedSource,
         srtText,
         scriptText,
-        srtFileName: (!handoff ? srtFile?.name : "") || sourceInput.srtFileName || "timeline.srt",
-        scriptFileName: (!handoff ? scriptFile?.name : "") || sourceInput.scriptFileName || "kich-ban.txt",
+        srtFileName: (!automaticInput && !handoff ? srtFile?.name : "") || preparedSource.srtFileName || "timeline.srt",
+        scriptFileName: (!automaticInput && !handoff ? scriptFile?.name : "") || preparedSource.scriptFileName || "kich-ban.txt",
       };
       setWorkflowSource(nextWorkflowSource);
       setCharacters(availableCharacters);
@@ -1553,10 +1622,18 @@ export function TimelineImport({
           workflowMode: saved.workflowMode,
         }
         : { ...entry, active: false }));
+      onWorkflowReady?.();
 
       if (modeInput === "automatic") {
         const queue = window.flowx?.productionQueue;
         if (!queue) throw new Error("Production queue chưa sẵn sàng");
+        const policyFlaggedScenes = preparedScenes.filter((scene) => scene.policyFlag);
+        if (policyFlaggedScenes.length > 0) {
+          setWorkflowNotice(
+            `Timeline và prompt đã được lưu. Có ${policyFlaggedScenes.length} scene cần kiểm tra chính sách trước khi bắt đầu sản xuất.`,
+          );
+          return;
+        }
         try {
           await queue.setApprovalPolicy(true, true, targetProjectId);
           const snapshot = await queue.generateAllImages(targetProjectId);
@@ -1565,10 +1642,12 @@ export function TimelineImport({
           setWorkflowNotice("Đã tạo timeline. App đang tự động chuyển sang sản xuất ảnh và video.");
         } catch (queueError) {
           setQueueCommandError(errorMessage(queueError));
-          setWorkflowNotice("Timeline và prompt đã được lưu. Hàng đợi tự động chưa khởi động; có thể tiếp tục từ Bước 2.");
+          setWorkflowNotice(flowConnected
+            ? "Timeline và prompt đã được lưu. Hàng đợi tự động chưa khởi động; có thể tiếp tục từ Production Queue."
+            : "Voice, SRT, Timeline và prompt đã được lưu. Hãy mở Google Flow để extension kết nối, sau đó tiếp tục Production Queue.");
         }
       } else {
-        setWorkflowNotice("Bước 1 đã hoàn tất. Hãy kiểm tra prompt rồi bấm Bắt đầu bước 2 để dựng video.");
+        setWorkflowNotice("Timeline và prompt đã hoàn tất. Hãy kiểm tra rồi chạy tạo ảnh và video.");
       }
     } catch (caught) {
       const message = errorMessage(caught);
@@ -1601,7 +1680,13 @@ export function TimelineImport({
         setSessions(await timeline.listSessions());
         onIntegratedHandoffConsumed?.();
         if (integratedHandoff.autoGenerateTimeline) {
-          await generate(integratedHandoff);
+          await generate({
+            ...integratedHandoff,
+            workflowMode: session.workflowMode,
+            workflowSource: session.workflowSource,
+            visualBible: session.visualBible,
+            styleReference: session.styleReference,
+          });
         } else {
           setWorkflowNotice("Voice và SRT đã được đưa vào dự án. Kiểm tra đầu vào rồi bấm Tạo timeline & prompt.");
         }
@@ -1621,30 +1706,23 @@ export function TimelineImport({
     }
   };
 
-  const stopProductionForSessionChange = async () => {
-    await window.flowx?.sceneJobs.cancel().catch(() => false);
-    const queue = window.flowx?.productionQueue;
-    if (!queue) return;
-    let snapshot = await queue.stopQueue();
-    const deadline = Date.now() + 12_000;
-    while (snapshot.activeJobId && Date.now() < deadline) {
-      await new Promise((resolve) => window.setTimeout(resolve, 250));
-      snapshot = await queue.getSnapshot(snapshot.projectId || activeProjectId);
-    }
-    if (snapshot.activeJobId) {
-      throw new Error("Công việc hiện tại chưa dừng xong. Hãy thử chuyển phiên lại sau vài giây.");
-    }
+  const canLeaveActiveSession = () => {
+    const queueBusy = Boolean(
+      queueSnapshot?.activeJobId || queueSnapshot?.state === "running" || queueSnapshot?.state === "paused",
+    );
+    if (!running && !queueBusy) return true;
+    setError("Phiên hiện tại chưa dừng. Hãy bấm “Dừng” hoặc “Dừng hàng đợi” trước khi chuyển, tạo hay xóa phiên.");
+    return false;
   };
 
   const switchSession = async (id: string) => {
     const timeline = window.flowx?.timeline;
     if (!timeline || id === activeSessionId || switchingSession || clearingGeneratedMedia || Boolean(clearingSceneId)) return;
+    if (!canLeaveActiveSession()) return;
     setSwitchingSession(true);
     setSessionReady(false);
     setError("");
     try {
-      if (running) await timeline.cancel();
-      await stopProductionForSessionChange();
       await timeline.saveSession({
         scenes,
         visualBible,
@@ -1670,11 +1748,10 @@ export function TimelineImport({
   const createSession = async () => {
     const timeline = window.flowx?.timeline;
     if (!timeline || switchingSession || clearingGeneratedMedia || Boolean(clearingSceneId)) return;
+    if (!canLeaveActiveSession()) return;
     setSwitchingSession(true);
     setSessionReady(false);
     try {
-      if (running) await timeline.cancel();
-      await stopProductionForSessionChange();
       await timeline.saveSession({
         scenes,
         visualBible,
@@ -1711,11 +1788,10 @@ export function TimelineImport({
   const deleteActiveSession = async () => {
     const timeline = window.flowx?.timeline;
     if (!timeline || switchingSession || clearingGeneratedMedia || Boolean(clearingSceneId)) return;
+    if (!canLeaveActiveSession()) return;
     setSwitchingSession(true);
     setSessionReady(false);
     try {
-      if (running) await timeline.cancel();
-      await stopProductionForSessionChange();
       const deleted = await timeline.deleteSession(activeSessionId);
       const next = deleted.activeSession || await timeline.createSession("Phiên 1");
       applySession(next);
@@ -1749,8 +1825,23 @@ export function TimelineImport({
     );
   };
 
-  const hasSrtInput = Boolean(srtFile || workflowSource.srtText.trim());
-  const hasScriptInput = Boolean(scriptFile || workflowSource.scriptText.trim());
+  const hasDeferredVoice = Boolean(workflowSource.narrationText?.trim() && workflowSource.voiceName?.trim());
+  const automaticMode = workflowMode === "automatic";
+  const hasSrtInput = Boolean(srtFile || workflowSource.srtText.trim() || hasDeferredVoice);
+  const hasScriptInput = Boolean(scriptFile || workflowSource.scriptText.trim() || workflowSource.narrationText?.trim());
+  const startInputBlockers = (automaticMode ? [
+    !workflowSource.narrationText?.trim() ? "nội dung thoại từ Voice Studio" : "",
+    !workflowSource.voiceName?.trim() ? "giọng đọc" : "",
+    !visualBible.style.trim() ? "phong cách Visual Bible" : "",
+  ] : [
+    !hasSrtInput ? "file SRT" : "",
+    !hasScriptInput ? "kịch bản" : "",
+    !visualBible.style.trim() ? "phong cách Visual Bible" : "",
+  ]).filter(Boolean);
+  const startConnectionWarnings = [
+    !chatConnected ? "ChatGPT chưa kết nối" : "",
+    workflowMode === "automatic" && !flowConnected ? "Google Flow chưa kết nối; ảnh/video sẽ chờ trong Production Queue" : "",
+  ].filter(Boolean);
   const completedVideoCount = scenes.filter((scene) => scene.videoStatus === "done").length;
   const productionStarted = Boolean(
     queueSnapshot?.activeJobId ||
@@ -1758,13 +1849,72 @@ export function TimelineImport({
     scenes.some((scene) => scene.imageStatus !== "pending" || scene.videoStatus !== "pending"),
   );
   const workflowBusy = running || queueSnapshot?.state === "running";
+  const sessionChangeLocked = Boolean(
+    running || queueSnapshot?.activeJobId || queueSnapshot?.state === "running" || queueSnapshot?.state === "paused",
+  );
+  const workflowDashboardActions: WorkflowDashboardActions = {
+    onStart: startAutomaticImageVideoPipeline,
+    onGenerateImages: () => {
+      const bridge = window.flowx?.productionQueue;
+      if (bridge) void runQueueCommand(() => bridge.generateAllImages(activeProjectId));
+    },
+    onGenerateVideos: () => {
+      const bridge = window.flowx?.productionQueue;
+      if (bridge) void runQueueCommand(() => bridge.generateAllVideos(activeProjectId, { onlyApprovedImages: true }));
+    },
+    onPause: () => {
+      const bridge = window.flowx?.productionQueue;
+      if (bridge) void runQueueCommand(() => bridge.pauseQueue(), false);
+    },
+    onResume: () => {
+      const bridge = window.flowx?.productionQueue;
+      if (bridge) void runQueueCommand(() => bridge.resumeQueue(), false);
+    },
+    onStop: () => {
+      const bridge = window.flowx?.productionQueue;
+      if (bridge) void runQueueCommand(() => bridge.stopQueue(), false);
+    },
+    onRetryErrors: () => {
+      const bridge = window.flowx?.productionQueue;
+      const sceneIds = [...new Set(queueSnapshot?.errors.map((item) => item.sceneId) || [])];
+      if (bridge && sceneIds.length) void runQueueCommand(() => bridge.retryFailed(sceneIds, activeProjectId));
+    },
+    onClearResults: () => setClearMediaConfirmOpen(true),
+    onBuildVideo: onBuildVideo || (() => undefined),
+    onRefresh: () => void refreshQueueSnapshot(),
+    onAutoApproveChange: (enabled) => {
+      const bridge = window.flowx?.productionQueue;
+      if (bridge) void runQueueCommand(() => bridge.setApprovalPolicy(enabled, queueSnapshot?.autoApproveVideos || false, activeProjectId), false);
+    },
+    onSelect: selectScene,
+    onPromptChange: updatePrompt,
+    onSave: () => void saveCurrentSession(),
+    onRun: (sceneId, mediaType, prompt) => {
+      const selectedScene = scenes.find((entry) => entry.id === sceneId);
+      if (mediaType === "video" && selectedScene?.chainRole === "continue") {
+        resumeQueueFromScene(sceneId, "video");
+        return;
+      }
+      runOrRegenerateScene(sceneId, mediaType, prompt);
+    },
+    onRegenerate: regenerateQueuedScene,
+    onApprove: approveQueuedScene,
+    onReject: (sceneId, mediaType, reason) => {
+      setWorkflowNotice(`Đã ghi nhận lý do từ chối Scene ${scenes.find((entry) => entry.id === sceneId)?.order || sceneId}: ${reason}`);
+      rejectQueuedScene(sceneId, mediaType);
+    },
+    onRepairPolicy: openPolicyRepairModal,
+    onResumeFrom: resumeQueueFromScene,
+    onClear: setClearSceneMediaTarget,
+    onOpenFolder: () => void window.flowx?.system.openOutput(activeProjectId),
+  };
 
   return (
-    <section className="timeline-import">
+    <section className="timeline-import" ref={timelineRootRef}>
       <header className="section-header">
         <div>
           <p className="eyebrow">Dựng video</p>
-          <h2>SRT + kịch bản → source video</h2>
+          <h2>{hasDeferredVoice ? "Kiểm tra thiết lập → bắt đầu toàn bộ quy trình" : "SRT + kịch bản → timeline và prompt"}</h2>
         </div>
         <div className="timeline-readiness">
           <div className={`chat-readiness ${chatConnected ? "is-ready" : ""}`}>
@@ -1778,12 +1928,21 @@ export function TimelineImport({
         </div>
       </header>
 
+      {scenes.length === 0 && (
+        <nav className="kc-start-stepper" aria-label="Tiến trình thiết lập workflow">
+          <div className="kc-start-step is-done"><span><Check size={14} /></span><div><strong>01 Nội dung & giọng đọc</strong><small>Đã hoàn thành</small></div><i /></div>
+          <div className="kc-start-step is-done"><span><Check size={14} /></span><div><strong>02 Nhân vật</strong><small>{characters.length ? "Đã hoàn thành" : "Không sử dụng"}</small></div><i /></div>
+          <div className="kc-start-step is-done"><span><Check size={14} /></span><div><strong>03 Visual Bible</strong><small>Đã hoàn thành</small></div><i /></div>
+          <div className="kc-start-step is-active"><span>04</span><div><strong>Bắt đầu workflow</strong><small>Kiểm tra và bắt đầu</small></div></div>
+        </nav>
+      )}
+
       <section className="workspace-session-bar" aria-label="Quản lý phiên làm việc">
         <label className="field workspace-session-select">
           <span>Phiên đang mở</span>
           <select
             value={activeSessionId}
-            disabled={switchingSession || running || clearingGeneratedMedia || Boolean(clearingSceneId)}
+            disabled={switchingSession || sessionChangeLocked || clearingGeneratedMedia || Boolean(clearingSceneId)}
             onChange={(event) => void switchSession(event.target.value)}
           >
             {sessions.map((session) => (
@@ -1811,57 +1970,59 @@ export function TimelineImport({
           />
         </label>
         <div className="workspace-session-actions">
-          <button className="button secondary compact" type="button" disabled={switchingSession || running || clearingGeneratedMedia || Boolean(clearingSceneId)} onClick={() => void createSession()}>
+          <button className="button secondary compact" type="button" disabled={switchingSession || sessionChangeLocked || clearingGeneratedMedia || Boolean(clearingSceneId)} onClick={() => void createSession()}>
             <FolderPlus size={15} /> Phiên mới
           </button>
-          <button className="icon-button" type="button" title="Xóa phiên đang mở" disabled={switchingSession || running || clearingGeneratedMedia || Boolean(clearingSceneId)} onClick={() => setResetConfirmOpen(true)}>
+          <button className="icon-button" type="button" title={sessionChangeLocked ? "Hãy dừng phiên trước khi xóa" : "Xóa phiên đang mở"} disabled={switchingSession || sessionChangeLocked || clearingGeneratedMedia || Boolean(clearingSceneId)} onClick={() => setResetConfirmOpen(true)}>
             <Trash2 size={16} />
           </button>
         </div>
+        {sessionChangeLocked && (
+          <div className="workspace-session-lock" role="status">
+            <ShieldCheck size={14} /> Phiên đang được khóa để tránh chuyển nhầm khi workflow chưa dừng.
+          </div>
+        )}
       </section>
 
-      <section className="video-workflow-panel" aria-label="Chế độ dựng video">
+      {running && scenes.length === 0 && (
+        <section className="workflow-preparing-dashboard" aria-live="polite" aria-label="Đang chuẩn bị quản lý scene">
+          <header>
+            <div><LoaderCircle className="spin" size={21} /><div><p className="eyebrow">ĐANG TẠO DỮ LIỆU SCENE</p><h3>Đang chuẩn bị giao diện quản lý scene</h3></div></div>
+            <div className="workflow-preparing-status"><span>{progress?.message || workflowNotice || "ChatGPT đang chia timeline và viết prompt…"}</span><button className="button danger compact" type="button" onClick={() => void cancel()}><Square size={13} /> Dừng</button></div>
+          </header>
+          <div className="workflow-preparing-steps">
+            <article className="is-done"><Check size={15} /><div><strong>Voice, SRT và dữ liệu đầu vào</strong><small>Đã khóa và sẵn sàng</small></div></article>
+            <i />
+            <article className="is-active"><LoaderCircle className="spin" size={15} /><div><strong>Timeline và Prompt</strong><small>Đang phân tích nội dung</small></div></article>
+            <i />
+            <article><Clapperboard size={15} /><div><strong>Quản lý scene</strong><small>Sẽ tự mở ngay khi có kết quả</small></div></article>
+          </div>
+          <div className="workflow-preparing-skeleton" aria-hidden="true"><span /><span /><span /><span /></div>
+          <p>Không cần nhập lại dữ liệu. Bạn có thể theo dõi tiến trình tại đây; danh sách scene sẽ thay thế màn hình này ngay khi Phase 3 hoàn tất.</p>
+        </section>
+      )}
+
+      {scenes.length > 0 && (
+        <WorkflowDashboard sessionName={sessionNameDraft} scenes={scenes} snapshot={queueSnapshot} thumbnails={thumbnails} characters={characters} selectedSceneId={selectedSceneId} flowConnected={flowConnected} busy={workflowBusy || clearingGeneratedMedia || Boolean(clearingSceneId)} actions={workflowDashboardActions} />
+      )}
+
+      <section className="video-workflow-panel is-locked-mode" aria-label="Quy trình của phiên">
         <div className="video-workflow-heading">
           <div>
-            <p className="eyebrow">Chế độ vận hành</p>
-            <strong>Chọn mức tự động hóa cho phiên “{sessionNameDraft}”</strong>
+            <p className="eyebrow">Quy trình đã chọn</p>
+            <strong>{workflowMode === "automatic" ? "Tự động hoàn toàn" : hasDeferredVoice ? "Tạo từng bước" : "Từ SRT và kịch bản"} · {sessionNameDraft}</strong>
           </div>
-          <span className="workflow-save-hint">Tùy chọn này được lưu riêng theo từng phiên</span>
-        </div>
-        <div className="workflow-mode-grid" role="radiogroup" aria-label="Mức tự động hóa">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={workflowMode === "automatic"}
-            className={`workflow-mode-card ${workflowMode === "automatic" ? "is-selected" : ""}`}
-            disabled={workflowBusy}
-            onClick={() => setWorkflowMode("automatic")}
-          >
-            <span className="workflow-mode-icon"><Sparkles size={18} /></span>
-            <span>
-              <strong>Tự động hoàn toàn</strong>
-              <small>Tạo timeline và prompt xong sẽ tự chạy ảnh → video, không cần bấm thêm.</small>
-            </span>
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={workflowMode === "two_step"}
-            className={`workflow-mode-card ${workflowMode === "two_step" ? "is-selected" : ""}`}
-            disabled={workflowBusy}
-            onClick={() => setWorkflowMode("two_step")}
-          >
-            <span className="workflow-mode-icon"><ShieldCheck size={18} /></span>
-            <span>
-              <strong>Tách 2 bước</strong>
-              <small>Bước 1 tạo timeline/prompt; kiểm tra xong mới chủ động chạy Bước 2.</small>
-            </span>
-          </button>
+          <span className="workflow-save-hint">Chế độ được khóa từ lúc tạo phiên để tránh thay đổi nhầm</span>
         </div>
         <div className="workflow-step-strip" aria-label="Tiến trình dựng video">
           <div className={scenes.length > 0 ? "is-complete" : running ? "is-active" : "is-active"}>
             <span>1</span>
-            <p><strong>Timeline & prompt</strong><small>ChatGPT phân tích SRT và kịch bản</small></p>
+            <p><strong>{hasDeferredVoice ? "Voice & SRT" : "Nguồn SRT"}</strong><small>{hasDeferredVoice ? "Tạo audio và SRT từ cấu hình Voice Studio" : "Dùng file SRT và kịch bản đã chọn"}</small></p>
+          </div>
+          <i aria-hidden="true" />
+          <div className={scenes.length > 0 ? "is-complete" : running ? "is-active" : ""}>
+            <span>2</span>
+            <p><strong>Timeline & prompt</strong><small>ChatGPT chia scene và viết prompt nội dung</small></p>
           </div>
           <i aria-hidden="true" />
           <div className={completedVideoCount === scenes.length && scenes.length > 0
@@ -1869,41 +2030,56 @@ export function TimelineImport({
             : productionStarted
               ? "is-active"
               : ""}>
-            <span>2</span>
+            <span>3</span>
             <p><strong>Sản xuất video</strong><small>Google Flow tạo ảnh, frame nối tiếp và video</small></p>
           </div>
         </div>
       </section>
 
-      <div className="timeline-file-grid">
-        <FilePicker
-          id="timeline-srt-file"
-          label="Phụ đề SRT"
-          accept=".srt,application/x-subrip,text/plain"
-          file={srtFile}
-          savedName={workflowSource.srtFileName}
-          onChange={setSrtFile}
-        />
-        <FilePicker
-          id="timeline-script-file"
-          label="Kịch bản"
-          accept=".txt,.md,text/plain,text/markdown"
-          file={scriptFile}
-          savedName={workflowSource.scriptFileName}
-          onChange={setScriptFile}
-        />
-      </div>
-
-      <VisualBiblePanel
-        value={visualBible}
-        onChange={setVisualBible}
-        presets={stylePresets}
-        presetError={stylePresetError}
-        onSavePreset={saveStylePreset}
-        onDeletePreset={deleteStylePreset}
-        styleReference={styleReference}
-        onStyleReferenceChange={setStyleReference}
-      />
+      {automaticMode ? (
+        <section className="workflow-source-review" aria-label="Thiết lập sẵn sàng để bắt đầu">
+          <header><div><p className="eyebrow">Kiểm tra trước khi chạy</p><h3>{startInputBlockers.length ? "Cần hoàn tất dữ liệu từ các bước trước" : "Đã nhận đủ dữ liệu từ các bước trước"}</h3></div><span className={startInputBlockers.length ? "is-blocked" : ""}>{startInputBlockers.length ? <CircleAlert size={14} /> : <Check size={14} />} {startInputBlockers.length ? "Thiếu dữ liệu" : "Sẵn sàng"}</span></header>
+          <div>
+            <article><FileText size={17} /><p><strong>Nội dung thoại</strong><span>{workflowSource.narrationText?.trim() ? workflowSource.narrationFileName || `${workflowSource.narrationText.trim().length.toLocaleString("vi-VN")} ký tự đã nhập` : "Chưa nhận dữ liệu từ Voice Studio"}</span></p></article>
+            <article><Play size={17} /><p><strong>Giọng đọc</strong><span>{workflowSource.voiceName || "Chưa chọn giọng đọc"}</span></p></article>
+            <article><ShieldCheck size={17} /><p><strong>Nhân vật</strong><span>{characters.length > 0 ? `${characters.length} nhân vật trong thư viện` : "Không sử dụng nhân vật"}</span></p></article>
+            <article><Sparkles size={17} /><p><strong>Phong cách đồ họa</strong><span>{visualBible.style.trim() ? "Đã khóa trong Visual Bible" : "Chưa thiết lập"}</span></p></article>
+          </div>
+          <small>Chế độ Tự động hoàn toàn không yêu cầu tải SRT hoặc kịch bản tại bước này. Khi bấm Bắt đầu, app tạo Voice + SRT, dùng nội dung thoại làm nguồn phân tích hình ảnh nếu chưa có kịch bản riêng, sau đó chia timeline và chạy Google Flow.</small>
+        </section>
+      ) : (
+        <section className="manual-timeline-source" aria-label="Nguồn SRT và kịch bản">
+          <header><p className="eyebrow">Nguồn đầu vào</p><h3>Chọn SRT và kịch bản cho chế độ không dùng Voice Studio</h3></header>
+          <div className="timeline-file-grid">
+            <FilePicker
+              id="timeline-srt-file"
+              label="Phụ đề SRT"
+              accept=".srt,application/x-subrip,text/plain"
+              file={srtFile}
+              savedName={workflowSource.srtFileName}
+              onChange={setSrtFile}
+            />
+            <FilePicker
+              id="timeline-script-file"
+              label="Kịch bản"
+              accept=".txt,.md,text/plain,text/markdown"
+              file={scriptFile}
+              savedName={workflowSource.scriptFileName}
+              onChange={setScriptFile}
+            />
+          </div>
+          <VisualBiblePanel
+            value={visualBible}
+            onChange={setVisualBible}
+            presets={stylePresets}
+            presetError={stylePresetError}
+            onSavePreset={saveStylePreset}
+            onDeletePreset={deleteStylePreset}
+            styleReference={styleReference}
+            onStyleReferenceChange={setStyleReference}
+          />
+        </section>
+      )}
 
       <div className="timeline-command-bar">
         <div className="timeline-progress" aria-live="polite">
@@ -1925,6 +2101,21 @@ export function TimelineImport({
           )}
         </div>
         <div className="timeline-actions">
+          <button className="button secondary" type="button" disabled={running || !onBack} onClick={onBack}>
+            <ArrowLeft size={14} aria-hidden="true" />
+            Quay lại Visual Bible
+          </button>
+          <button className="button secondary" type="button" disabled={running || sessionStatus === "saving"} onClick={() => void saveCurrentSession()}>
+            <Save size={14} aria-hidden="true" />
+            {sessionStatus === "saving" ? "Đang lưu" : "Lưu bản nháp"}
+          </button>
+          {(startInputBlockers.length > 0 || startConnectionWarnings.length > 0) && (
+            <small className={startInputBlockers.length > 0 ? "kc-start-check is-blocked" : "kc-start-check is-warning"}>
+              {startInputBlockers.length > 0
+                ? `Còn thiếu: ${startInputBlockers.join(", ")}`
+                : startConnectionWarnings.join(" · ")}
+            </small>
+          )}
           {running ? (
             <button className="button secondary" type="button" onClick={cancel}>
               <Square size={14} aria-hidden="true" />
@@ -1935,16 +2126,12 @@ export function TimelineImport({
               className="button primary"
               type="button"
               disabled={
-                !chatConnected ||
-                !hasSrtInput ||
-                !hasScriptInput ||
-                !visualBible.style.trim() ||
-                (workflowMode === "automatic" && !flowConnected)
+                startInputBlockers.length > 0
               }
               onClick={() => void generate()}
             >
               <Sparkles size={16} aria-hidden="true" />
-              {workflowMode === "automatic" ? "Dựng video tự động" : "Chạy bước 1: Tạo timeline"}
+              {workflowMode === "automatic" ? "Bắt đầu toàn bộ quy trình" : "Bắt đầu tạo Timeline & Prompt"}
             </button>
           )}
         </div>
@@ -1995,7 +2182,7 @@ export function TimelineImport({
               title="Chạy lần lượt ảnh scene 1 → video scene 1 → ảnh scene 2 → video scene 2"
               onClick={startAutomaticImageVideoPipeline}
             >
-              <Sparkles size={15} /> {workflowMode === "two_step" ? "Bắt đầu bước 2" : "Tiếp tục tự động"}
+              <Sparkles size={15} /> {workflowMode === "two_step" ? "Chạy tạo ảnh & video" : "Tiếp tục tự động"}
             </button>
             <button
               className="button secondary compact"
@@ -2019,6 +2206,15 @@ export function TimelineImport({
             >
               <Play size={15} /> Tạo video đã duyệt
             </button>
+            {completedVideoCount === scenes.length && scenes.length > 0 && (
+              <button
+                className="button primary compact is-build-ready"
+                type="button"
+                onClick={onBuildVideo}
+              >
+                <Clapperboard size={15} /> Dựng video hoàn chỉnh
+              </button>
+            )}
             <button
               className="button danger compact"
               type="button"
@@ -2067,11 +2263,11 @@ export function TimelineImport({
           <div className="workflow-output-grid">
             <article>
               <FileText size={17} />
-              <div><strong>SRT</strong><span>{srtFile?.name || workflowSource.srtFileName || "Chưa có"}</span></div>
+              <div><strong>SRT</strong><span>{srtFile?.name || workflowSource.srtFileName || (hasDeferredVoice ? "Sẽ tạo tự động khi bấm Bắt đầu" : "Chưa có")}</span></div>
             </article>
             <article>
               <FileText size={17} />
-              <div><strong>Voice</strong><span>{workflowSource.audioFileName || "Chưa liên kết tool voice"}</span></div>
+              <div><strong>Voice</strong><span>{workflowSource.audioFileName || (hasDeferredVoice ? `Đã liên kết Voice Studio · ${workflowSource.voiceName}` : "Phiên không sử dụng Voice Studio")}</span></div>
             </article>
             <article>
               <Play size={17} />
@@ -2089,46 +2285,10 @@ export function TimelineImport({
       />
       {scenes.length > 0 ? (
         <>
-          <SceneTimeline
-            scenes={scenes}
-            snapshot={queueSnapshot}
-            thumbnails={thumbnails}
-            selectedSceneId={selectedSceneId}
-            onSelect={selectScene}
-            onRegenerate={(sceneId, mediaType) => regenerateQueuedScene(sceneId, mediaType)}
-            onClearResult={setClearSceneMediaTarget}
-          />
-          <TimelineTable
-            scenes={scenes}
-            errors={sceneErrors}
-            thumbnails={thumbnails}
-            onPromptChange={updatePrompt}
-            onPlanningChange={updatePlanning}
-            onRun={runOrRegenerateScene}
-            onRegenerate={regenerateQueuedScene}
-            onResumeFrom={resumeQueueFromScene}
-            onClearSceneMedia={setClearSceneMediaTarget}
-            onApprove={approveQueuedScene}
-            onReject={rejectQueuedScene}
-            onRepairPolicy={openPolicyRepairModal}
-            repairingPromptKey={repairingPromptKey}
-            clearingSceneId={clearingSceneId}
-            chatConnected={chatConnected}
-          />
-          {sceneDetailOpen && (
-            <SceneDetailDrawer
-              scene={scenes.find((scene) => scene.id === selectedSceneId) || null}
-              snapshot={queueSnapshot}
-              thumbnail={thumbnails[selectedSceneId]}
-              onClose={() => setSceneDetailOpen(false)}
-              onPromptChange={updatePrompt}
-              onSave={() => void saveCurrentSession()}
-              onRun={runOrRegenerateScene}
-              onRegenerate={regenerateQueuedScene}
-              onClear={setClearSceneMediaTarget}
-              onOpenFolder={() => void window.flowx?.system.openOutput(activeProjectId)}
-            />
-          )}
+          <details className="workflow-batch-editor">
+            <summary><PencilLine size={15} /> Bảng chỉnh prompt và planning hàng loạt</summary>
+            <TimelineTable scenes={scenes} errors={sceneErrors} thumbnails={thumbnails} onPromptChange={updatePrompt} onPlanningChange={updatePlanning} onRun={runOrRegenerateScene} onRegenerate={regenerateQueuedScene} onResumeFrom={resumeQueueFromScene} onClearSceneMedia={setClearSceneMediaTarget} onApprove={approveQueuedScene} onReject={rejectQueuedScene} onRepairPolicy={openPolicyRepairModal} repairingPromptKey={repairingPromptKey} clearingSceneId={clearingSceneId} chatConnected={chatConnected} />
+          </details>
         </>
       ) : (
         <p className="empty-state timeline-empty">Chưa có dữ liệu scene.</p>

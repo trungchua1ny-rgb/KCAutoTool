@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, readdir, rm } from "node:fs/promises";
+import { access, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import type { CharacterStore } from "./character-store";
@@ -26,8 +26,15 @@ import {
   type SceneJobResult,
   type SceneMediaType,
 } from "../shared/scene-job";
-import { normalizeVisualBible, type VisualBible } from "../shared/timeline";
+import {
+  normalizeVisualBible,
+  type PolicyFlag,
+  type PolicyPromptRewriteInput,
+  type PolicyPromptRewriteResult,
+  type VisualBible,
+} from "../shared/timeline";
 import { WorkerJobError, type WorkerServer } from "./worker-server";
+import { relocateSceneJobResult } from "./media-relocation";
 
 const IMAGE_JOB = "image_generation";
 const VIDEO_JOB = "video_generation";
@@ -41,6 +48,10 @@ interface QueueWorker {
   ) => Promise<SceneJobResult>;
   stopActiveJob: (role: "flow-worker") => boolean;
   getStatuses: WorkerServer["getStatuses"];
+  rewritePolicyPrompt?: (
+    input: PolicyPromptRewriteInput,
+    onProgress?: (progress: import("../shared/timeline").TimelineProgress) => void,
+  ) => Promise<PolicyPromptRewriteResult>;
 }
 
 interface QueueOptions {
@@ -146,6 +157,17 @@ export function classifyQueueError(error: unknown): StoredQueueError {
   ) {
     return { category: "flow_policy_violation", message, retryable: false };
   }
+  if (
+    code === "FLOW_GENERATION_FAILED" ||
+    /couldn['’]?t\s+generate|could\s+not\s+generate|unable\s+to\s+generate|generation\s+failed|unsuccessful|không\s+thành\s+công|rất\s+tiếc.*(?:xảy\s+ra|có)\s+lỗi|đã\s+xảy\s+ra\s+lỗi|không\s+thể\s+tạo|không\s+tạo\s+được/.test(
+      text,
+    )
+  ) {
+    // A generic Flow viewer failure is terminal for this attempt. The user can
+    // retry explicitly after inspecting the viewer; automatic retry here could
+    // submit a duplicate prompt while Flow is still settling the failed card.
+    return { category: "flow_generation_failed", message, retryable: false };
+  }
   if (/quota|rate.?limit|credit|too many requests|429/.test(text)) {
     return { category: "flow_quota_or_rate_limit", message, retryable: true };
   }
@@ -170,6 +192,18 @@ export function classifyQueueError(error: unknown): StoredQueueError {
   };
 }
 
+function inferPolicyFlag(message: string): PolicyFlag | null {
+  const normalized = message.toLocaleLowerCase("vi-VN");
+  if (/celebrity|public figure|real person|famous person|người thật|người nổi tiếng|nhân vật công chúng/.test(normalized)) return "real_person";
+  if (/copyright|protected character|trademark|bản quyền/.test(normalized)) return "copyrighted_character";
+  if (/minor|child safety|trẻ em|vị thành niên/.test(normalized)) return "child_safety";
+  if (/sexual|nudity|explicit|khiêu dâm|tình dục/.test(normalized)) return "sexual_content";
+  if (/weapon|gun|knife|vũ khí|súng|dao/.test(normalized)) return "weapons";
+  if (/violence|violent|gore|blood|bạo lực|máu me/.test(normalized)) return "violence";
+  if (/dangerous|illegal activity|nguy hiểm|phi pháp/.test(normalized)) return "dangerous_activity";
+  return null;
+}
+
 function normalizedPath(path: string): string {
   return resolve(path).replace(/[\\/]+$/, "").toLocaleLowerCase();
 }
@@ -183,6 +217,10 @@ function isInsideDirectory(path: string, directory: string): boolean {
 function generatedMediaRootFromPath(path: string): string | null {
   let current = dirname(resolve(path));
   while (dirname(current) !== current) {
+    if (
+      basename(current).toLocaleLowerCase() === "outputs" &&
+      basename(dirname(current)).toLocaleLowerCase() === "kc auto tool"
+    ) return current;
     if (basename(current).toLocaleLowerCase() === "kc auto tool") return current;
     current = dirname(current);
   }
@@ -191,7 +229,10 @@ function generatedMediaRootFromPath(path: string): string | null {
 
 function validateGeneratedMediaRoot(path: string): string {
   const root = resolve(path);
-  if (basename(root).toLocaleLowerCase() !== "kc auto tool" || dirname(root) === root) {
+  const name = basename(root).toLocaleLowerCase();
+  const isLegacyRoot = name === "kc auto tool";
+  const isCentralOutputRoot = name === "outputs" && basename(dirname(root)).toLocaleLowerCase() === "kc auto tool";
+  if ((!isLegacyRoot && !isCentralOutputRoot) || dirname(root) === root) {
     throw new Error(`Thư mục kết quả không an toàn để xóa: ${root}`);
   }
   return root;
@@ -393,6 +434,7 @@ export class ProductionQueue {
     options: QueueGenerateOptions = {},
   ): Promise<ProductionQueueSnapshot> {
     await this.syncProject(projectId);
+    await this.repairContinuationDependencies(projectId, options.fromSceneIndex || 0);
     const automaticPipeline = Boolean(this.repositories.projects.get(projectId)?.autoApproveImages);
     if (automaticPipeline) await this.resetPendingAutomaticPipeline(projectId);
     const statuses = new Set<SceneState>(options.onlyStatuses || ["prompt_ready", "image_failed"]);
@@ -437,6 +479,7 @@ export class ProductionQueue {
     options: QueueVideoOptions = { onlyApprovedImages: true },
   ): Promise<ProductionQueueSnapshot> {
     await this.syncProject(projectId);
+    await this.repairContinuationDependencies(projectId, options.fromSceneIndex || 0);
     const statuses = new Set<SceneState>(options.onlyStatuses || ["image_approved", "video_failed"]);
     for (const scene of this.repositories.scenes.listByProject(projectId)) {
       if (scene.orderIndex < (options.fromSceneIndex || 0) || !statuses.has(scene.status)) continue;
@@ -458,7 +501,9 @@ export class ProductionQueue {
     this.state = "running";
     this.persistState();
     this.emitChanged();
-    this.schedulePump(0);
+    void this.repairContinuationDependencies(this.activeProjectId).finally(() => {
+      if (this.state === "running") this.schedulePump(0);
+    });
     return this.getSnapshot();
   }
 
@@ -1156,7 +1201,7 @@ export class ProductionQueue {
       .at(-1) || null;
     if (scene.startFrameAssetPath) return completed;
     const previousVideoJob = this.repositories.jobs.listByScene(previous.id)
-      .filter((job) => job.jobType === VIDEO_JOB)
+      .filter((job) => job.jobType === VIDEO_JOB && job.status === "succeeded")
       .at(-1) || null;
     if (!previous.videoAssetPath && !previousVideoJob) {
       throw new Error(`Clip trước của ${publicSceneId(scene.projectId, scene.id)} chưa được xếp hàng`);
@@ -1181,6 +1226,41 @@ export class ProductionQueue {
       createdAt: timestamp,
       updatedAt: timestamp,
     });
+  }
+
+  private async repairContinuationDependencies(
+    projectId: string,
+    fromSceneIndex = 0,
+  ): Promise<void> {
+    const scenes = this.repositories.scenes.listByProject(projectId);
+    for (const scene of scenes) {
+      if (scene.orderIndex < fromSceneIndex || scene.chainRole !== "continue" || !scene.chainId) continue;
+      const previous = scenes.find((candidate) => candidate.orderIndex === scene.orderIndex - 1);
+      if (!previous?.videoAssetPath) continue;
+
+      const frameExists = Boolean(scene.startFrameAssetPath) && await access(scene.startFrameAssetPath!)
+        .then(() => true)
+        .catch(() => false);
+      if (!frameExists) {
+        const refreshed = scene.startFrameAssetPath
+          ? this.repositories.scenes.clearContinuationFrame(scene.id)
+          : this.repositories.scenes.get(scene.id)!;
+        this.ensureExtractFrameJob(refreshed);
+        continue;
+      }
+
+      const refreshed = this.repositories.scenes.get(scene.id)!;
+      if (refreshed.status === "prompt_ready" || refreshed.status === "image_done") {
+        this.repositories.scenes.useContinuationFrameAsOpeningImage(
+          refreshed.id,
+          refreshed.startFrameAssetPath!,
+        );
+      }
+      const ready = this.repositories.scenes.get(scene.id)!;
+      if (ready.status === "image_approved" || ready.status === "video_failed") {
+        this.enqueueScene(ready, "video");
+      }
+    }
   }
 
   private schedulePump(delay: number): void {
@@ -1285,12 +1365,15 @@ export class ProductionQueue {
         }
       }
       const input = await this.buildWorkerInput(scene, mediaType);
-      const result = await this.worker.runSceneJob(input, () => {
+      const workerResult = await this.worker.runSceneJob(input, () => {
         const current = this.repositories.jobs.get(job.id);
         if (current?.status === "running") {
           this.repositories.jobs.updateStatus(job.id, "running", { heartbeatAt: now() });
         }
       });
+      const result = this.generatedMediaRoot
+        ? await relocateSceneJobResult(workerResult, this.generatedMediaRoot, input.outputFolder || "default-session")
+        : workerResult;
       this.database.transaction(() => {
         this.repositories.jobs.updateStatus(job.id, "succeeded", {
           heartbeatAt: now(),
@@ -1347,7 +1430,18 @@ export class ProductionQueue {
           allowRecovery: true,
         });
       } else {
-        const classified = forced || classifyQueueError(caught);
+        let classified = forced || classifyQueueError(caught);
+        if (
+          classified.category === "flow_policy_violation" &&
+          attempt < job.maxAttempts &&
+          await this.autoRewriteRejectedPrompt(scene, mediaType, classified.message)
+        ) {
+          classified = {
+            category: "flow_policy_violation",
+            message: "Prompt đã được tự động viết lại an toàn; đang chờ thử lại Google Flow.",
+            retryable: true,
+          };
+        }
         const serialized = serializeError(classified);
         const failed = this.repositories.jobs.updateStatus(job.id, "failed", {
           heartbeatAt: now(),
@@ -1365,6 +1459,63 @@ export class ProductionQueue {
     } finally {
       this.activeJobId = null;
       this.emitChanged(job.projectId);
+    }
+  }
+
+  private async autoRewriteRejectedPrompt(
+    scene: SceneRecord,
+    mediaType: SceneMediaType,
+    policyError: string,
+  ): Promise<boolean> {
+    if (!this.worker.rewritePolicyPrompt) return false;
+    try {
+      const session = await this.sessionStore.load(scene.projectId);
+      if (!session) return false;
+      const publicId = publicSceneId(scene.projectId, scene.id);
+      const timelineScene = session.scenes.find((entry) => entry.id === publicId);
+      const policyFlag = timelineScene?.policyFlag || inferPolicyFlag(policyError);
+      const rewritten = await this.worker.rewritePolicyPrompt({
+        sceneId: publicId,
+        mediaType,
+        prompt: mediaType === "image" ? scene.imagePrompt : scene.videoPrompt,
+        policyError,
+        policyFlag,
+        timeStart: scene.timeStart,
+        timeEnd: scene.timeEnd,
+        pairedPrompt: mediaType === "image" ? scene.videoPrompt : scene.imagePrompt,
+        visualBible: session.visualBible,
+      });
+      const imagePrompt = mediaType === "image" ? rewritten.prompt : scene.imagePrompt;
+      const videoPrompt = mediaType === "video" ? rewritten.prompt : scene.videoPrompt;
+      const removeIdentityReferences = policyFlag === "real_person" || policyFlag === "copyrighted_character";
+      const nextTokens = removeIdentityReferences ? [] : scene.usedCharacterTokens;
+      this.repositories.scenes.updatePrompts(scene.id, imagePrompt, videoPrompt, nextTokens);
+      await this.sessionStore.save({
+        visualBible: session.visualBible,
+        styleReference: session.styleReference,
+        scenes: session.scenes.map((entry) => entry.id === publicId
+          ? {
+              ...entry,
+              imagePrompt,
+              videoPrompt,
+              usedCharacterTokens: nextTokens,
+              assignedCharacterTokens: nextTokens,
+              characterPolicy: nextTokens.length > 0 ? "selected" as const : "none" as const,
+              policyFlag: null,
+              policyResolution: policyFlag
+                ? {
+                    originalFlag: policyFlag,
+                    status: "auto_rewritten" as const,
+                    rewrittenMedia: [mediaType],
+                    resolvedAt: now(),
+                  }
+                : entry.policyResolution,
+            }
+          : entry),
+      }, scene.projectId);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -1392,6 +1543,7 @@ export class ProductionQueue {
       );
       await mkdir(dirname(outputPath), { recursive: true });
       await this.extractLastFrame(previous.videoAssetPath, outputPath);
+      const frameStat = await stat(outputPath);
       this.database.transaction(() => {
         this.repositories.scenes.useContinuationFrameAsOpeningImage(target.id, outputPath);
         this.repositories.jobs.updateStatus(job.id, "succeeded", {
@@ -1399,6 +1551,24 @@ export class ProductionQueue {
           error: null,
         });
       });
+      const session = await this.sessionStore.load(job.projectId);
+      if (session) {
+        const targetPublicId = publicSceneId(job.projectId, target.id);
+        await this.sessionStore.save({
+          visualBible: session.visualBible,
+          styleReference: session.styleReference,
+          scenes: session.scenes.map((scene) => scene.id === targetPublicId
+            ? {
+                ...scene,
+                actualContinuityFrame: {
+                  path: outputPath,
+                  extractedAt: now(),
+                  fileSize: frameStat.size,
+                },
+              }
+            : scene),
+        }, job.projectId);
+      }
       const refreshed = this.repositories.scenes.get(target.id);
       if (refreshed) this.enqueueScene(refreshed, "video", job.id);
     } catch (caught) {
@@ -1615,6 +1785,7 @@ export class ProductionQueue {
             videoStatus: "pending" as const,
             videoResultPath: "",
             videoApproved: false,
+            actualContinuityFrame: undefined,
           }
         : scene),
     }, first.projectId);
