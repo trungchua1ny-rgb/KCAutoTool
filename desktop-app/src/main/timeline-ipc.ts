@@ -7,6 +7,8 @@ import {
   TIMELINE_PROGRESS_CHANNEL,
   normalizeVisualBible,
   normalizeStyleReference,
+  normalizeProjectProductionKind,
+  normalizeScreenplayProject,
   type TimelineGenerateInput,
   type PolicyPromptRewriteInput,
   type TimelineProgress,
@@ -56,6 +58,8 @@ function validateInput(value: unknown): TimelineGenerateInput {
     visualBible,
     characterRoster,
     styleReference: normalizeStyleReference(input.styleReference),
+    productionKind: normalizeProjectProductionKind(input.productionKind),
+    screenplay: normalizeScreenplayProject(input.screenplay),
   };
 }
 

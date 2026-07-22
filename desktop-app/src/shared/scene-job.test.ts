@@ -26,10 +26,10 @@ test("normalizes matching Phase 4 scene jobs", () => {
       aspectRatio: "16:9",
     },
     imageSettings: {
-      model: "nano-banana-pro",
+      model: "nano-banana-2",
       aspectRatio: "16:9",
       outputCount: 1,
-      expectedCredits: 0,
+      expectedCredits: null,
     },
     sourceImagePath: "",
     sourceFlowAssetKey: "",
@@ -131,7 +131,7 @@ test("normalizes First Frame video without requiring a separate end boundary", (
   assert.equal(input.startFramePath, "");
 });
 
-test("normalizes explicit character assignments and the free Ultra image preset", () => {
+test("normalizes explicit character assignments and the default image model", () => {
   const input = normalizeSceneJobInput({
     sceneId: "scene-012",
     mediaType: "image",
@@ -151,16 +151,29 @@ test("normalizes explicit character assignments and the free Ultra image preset"
   assert.equal(input.visualBible.style, "cinematic 3D");
   assert.equal(input.visualBible.aspectRatio, "16:9");
   assert.deepEqual(input.imageSettings, {
-    model: "nano-banana-pro",
+    model: "nano-banana-2",
     aspectRatio: "16:9",
     outputCount: 1,
-    expectedCredits: 0,
+    expectedCredits: null,
   });
   assert.equal(input.sourceImagePath, "");
   assert.equal(input.sourceFlowAssetKey, "");
   assert.equal(input.videoSettings.model, "veo-3.1-lite");
 });
 
+test("preserves the selected Nano Banana 2 Lite model", () => {
+  const input = normalizeSceneJobInput({
+    sceneId: "scene-013",
+    mediaType: "image",
+    prompt: "A character walks through a quiet hallway",
+    imageSettings: {
+      model: "nano-banana-2-lite",
+      expectedCredits: 1,
+    },
+  });
+  assert.equal(input.imageSettings.model, "nano-banana-2-lite");
+  assert.equal(input.imageSettings.expectedCredits, 1);
+});
 test("requires a completed scene image for Ingredients to Video", () => {
   assert.throws(() => normalizeSceneJobInput({
     sceneId: "scene-002",

@@ -60,6 +60,7 @@ test("splits a long SRT into batches of six 8-second scenes", async () => {
     validateBeatPlanningResult: (
       beats: Array<Record<string, unknown>>,
       srtText: string,
+      productionContext?: Record<string, unknown>,
     ) => Boundary[];
     buildTimelinePrompt: (
       batch: TimelineBatch & { index: number },
@@ -74,6 +75,8 @@ test("splits a long SRT into batches of six 8-second scenes", async () => {
       },
       characterRoster?: Array<{ token: string; name: string }>,
       hasStyleReference?: boolean,
+      continuityIn?: Record<string, unknown> | null,
+      productionContext?: Record<string, unknown>,
     ) => string;
     buildTimelineRetryPrompt: (
       batch: TimelineBatch & { index: number },
@@ -83,14 +86,21 @@ test("splits a long SRT into batches of six 8-second scenes", async () => {
       visualBible?: Record<string, string>,
       characterRoster?: Array<{ token: string; name: string }>,
       hasStyleReference?: boolean,
+      continuityIn?: Record<string, unknown> | null,
+      productionContext?: Record<string, unknown>,
     ) => string;
     validateBatchResult: (
       result: { scenes: Array<Record<string, unknown>>; visualBible?: unknown },
       batch: TimelineBatch & { index: number },
       characterRoster?: Array<{ token: string; name: string }>,
+      productionContext?: Record<string, unknown>,
     ) => void;
     buildPolicyRewritePrompt: (payload: Record<string, unknown>) => string;
-    parsePolicyRewriteResponse: (text: string, mediaType: "image" | "video") => { prompt: string };
+    parsePolicyRewriteResponse: (
+      text: string,
+      mediaType: "image" | "video",
+      policyFlag?: string | null,
+    ) => { prompt: string };
   };
   const batches = internals.createTimelineBatches(`1
 00:00:00,000 --> 00:00:04,000
@@ -123,6 +133,7 @@ The hero crosses the hall.`;
   assert.match(beatPrompt, /sum of durationSeconds MUST equal exactly 18 seconds/);
   assert.match(beatPrompt, /chain MUST NOT exceed 6 beats/i);
   assert.match(beatPrompt, /SRT is authoritative/i);
+  assert.match(beatPrompt, /Do not conceal or euphemize sensitive source content/i);
   const referenceBeatPrompt = internals.buildBeatPlanningPrompt(
     beatSrt,
     "A continuous walk through one hall.",
@@ -159,15 +170,33 @@ The hero crosses the hall.`;
   assert.match(rewriteRequest, /Do not evade, disguise, encode/);
   assert.match(rewriteRequest, /original, fictional, non-identifiable person/i);
   assert.match(rewriteRequest, /Remove the real person's name, aliases, @tokens/i);
+  assert.match(rewriteRequest, /not merely safer-sounding wording/i);
   const safeVideoPrompt = `STARTING STATE: a worried figure pauses beside a closed doorway in a quiet hallway. PRIMARY MOTION: the figure steps backward while keeping both hands visible and turning toward a distant sound. REACTION: concern changes into alert attention through the eyes, eyebrows, head angle, and guarded posture. ENVIRONMENTAL MOTION: a loose curtain moves gently beside the window while soft dust crosses the light. CAMERA MOTION: a steady medium tracking shot follows the retreat at natural speed without sudden movement. END FRAME: the figure stops safely near the hallway corner and looks toward the unseen source.`;
   assert.equal(
     internals.parsePolicyRewriteResponse(JSON.stringify({ prompt: safeVideoPrompt }), "video").prompt,
     safeVideoPrompt,
   );
+  const unsafeViolencePrompt = safeVideoPrompt.replace(
+    "a worried figure pauses",
+    "a bloody figure pauses",
+  );
+  assert.throws(
+    () => internals.parsePolicyRewriteResponse(
+      JSON.stringify({ prompt: unsafeViolencePrompt }),
+      "video",
+      "violence",
+    ),
+    /invalid JSON, sections, or length/,
+  );
   assert.throws(() => internals.validateBeatPlanningResult([
     { timeStart: "00:00:00,000", timeEnd: "00:00:08,000", durationSeconds: 8, chainId: null, chainRole: "single" },
     { timeStart: "00:00:10,000", timeEnd: "00:00:18,000", durationSeconds: 8, chainId: null, chainRole: "single" },
   ], beatSrt), /gap, overlap/);
+  assert.throws(() => internals.validateBeatPlanningResult([
+    { timeStart: "00:00:00,000", timeEnd: "00:00:08,000", durationSeconds: 8, chainId: null, chainRole: "single" },
+    { timeStart: "00:00:08,000", timeEnd: "00:00:14,000", durationSeconds: 6, chainId: null, chainRole: "single" },
+    { timeStart: "00:00:14,000", timeEnd: "00:00:18,000", durationSeconds: 4, chainId: null, chainRole: "single" },
+  ], beatSrt, { productionKind: "screenplay" }), /preserve all 2 approved shots/);
 
   const longChainSrt = `1
 00:00:00,000 --> 00:00:28,000
@@ -240,6 +269,9 @@ Complex continuous source.`, complexBoundaries);
   assert.match(plannedPrompt, /"plannedContinuityOut"/);
   assert.match(plannedPrompt, /No additional foreground or background elements are required/);
   assert.match(plannedPrompt, /No visible character reaction/);
+  assert.match(plannedPrompt, /POLICY-SAFE ADAPTATION CONTRACT/);
+  assert.match(plannedPrompt, /not a filter-bypass exercise/i);
+  assert.match(plannedPrompt, /Graphic style belongs exclusively to the locked Visual Bible/i);
   const referencedStylePrompt = internals.buildTimelinePrompt(
     plannedBatches[0] as TimelineBatch & { index: number },
     plannedBatches.length,
@@ -256,6 +288,31 @@ Complex continuous source.`, complexBoundaries);
   );
   assert.match(referencedStylePrompt, /Copy it character-for-character/);
   assert.match(referencedStylePrompt, /creates no exception to the immutable style rule/);
+
+  const screenplayPrompt = internals.buildTimelinePrompt(
+    plannedBatches[0] as TimelineBatch & { index: number },
+    plannedBatches.length,
+    "CẢNH 1 — PHÒNG — ĐÊM",
+    undefined,
+    [],
+    false,
+    null,
+    {
+      productionKind: "screenplay",
+      screenplay: {
+        dialogueMode: "sound-only",
+        dialogueLanguage: "vi-VN",
+        soundBible: { ambienceRules: "Keep rain continuous", soundEffectRules: "Only visible actions", dialogueRules: "No narration" },
+      },
+    },
+  );
+  assert.match(screenplayPrompt, /SCREENPLAY FILM CONTRACT — HIGHEST PRIORITY/);
+  assert.match(screenplayPrompt, /Every SRT cue is an approved shot contract/);
+  assert.match(screenplayPrompt, /SPOKEN DIALOGUE:/);
+  assert.match(screenplayPrompt, /No spoken dialogue, voice-over, narration, or off-screen speech/);
+  assert.match(screenplayPrompt, /AMBIENT SOUND:/);
+  assert.match(screenplayPrompt, /SOUND EFFECTS:/);
+  assert.match(screenplayPrompt, /Do not request background music/);
 
   const firstPrompt = internals.buildTimelinePrompt(
     batches[0] as TimelineBatch & { index: number },

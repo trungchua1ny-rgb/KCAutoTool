@@ -58,13 +58,15 @@ export function SetupHome({
   const sourceDone = sourceReady(session, mode);
   const bibleDone = Boolean(session.visualBible.style.trim());
   const chatReady = workers["chat-worker"].connected;
-  const flowRequired = mode === "full_auto";
+  const flowRequired = mode === "full_auto" || mode === "screenplay_film";
   const flowReady = workers["flow-worker"].connected;
   const setupReady = sourceDone && reviewed && bibleDone;
   const canStart = setupReady && chatReady && (!flowRequired || flowReady) && !starting;
   const stats = srtStats(session.workflowSource.srtText);
   const next = !sourceDone
-    ? { label: mode === "srt_script" ? "Tiếp tục tải SRT & kịch bản" : "Tiếp tục nhập nội dung & chọn giọng", page: mode === "srt_script" ? "timeline" : "voice" as AppPage }
+    ? mode === "screenplay_film"
+      ? { label: "Tiếp tục chuẩn bị kịch bản hình", page: "screenplay" as AppPage }
+      : { label: mode === "srt_script" ? "Tiếp tục tải SRT & kịch bản" : "Tiếp tục nhập nội dung & chọn giọng", page: mode === "srt_script" ? "timeline" : "voice" as AppPage }
     : !reviewed
       ? { label: "Tiếp tục đến Nhân vật", page: "characters" as AppPage }
       : !bibleDone
@@ -101,8 +103,8 @@ export function SetupHome({
 
           <section className="kc-home-setup-summary">
             <article>
-              <header><span><Mic2 size={16} /></span><div><small>{mode === "srt_script" ? "NGUỒN TIMELINE" : "VOICE STUDIO"}</small><strong>{mode === "srt_script" ? "SRT & kịch bản" : "Nội dung & giọng đọc"}</strong></div><b className={sourceDone ? "is-ready" : "is-missing"}>{sourceDone ? "Đã sẵn sàng" : "Còn thiếu"}</b></header>
-              <dl>{mode === "srt_script" ? <><div><dt>File SRT</dt><dd>{session.workflowSource.srtFileName || "Chưa chọn"}</dd></div><div><dt>Kịch bản</dt><dd>{session.workflowSource.scriptFileName || "Chưa chọn"}</dd></div><div><dt>Subtitle</dt><dd>{stats.cues || "—"}</dd></div><div><dt>Thời lượng</dt><dd>{stats.duration}</dd></div></> : <><div><dt>Nội dung thoại</dt><dd>{session.workflowSource.narrationText?.trim() ? "Đã có" : "Chưa có"}</dd></div><div><dt>Tên nội dung</dt><dd>{session.workflowSource.narrationFileName || "Nội dung đã dán"}</dd></div><div><dt>Giọng đọc</dt><dd>{session.workflowSource.voiceName || "Chưa chọn"}</dd></div><div><dt>Ngôn ngữ</dt><dd>{session.workflowSource.voiceName?.split("-").slice(0, 2).join("-") || "—"}</dd></div><div><dt>Audio</dt><dd>{session.workflowSource.audioFileName || "Chưa tạo"}</dd></div><div><dt>SRT</dt><dd>{session.workflowSource.srtFileName || "Chưa tạo"}</dd></div></>}</dl>{mode !== "srt_script" && !session.workflowSource.audioFileName && <p>Audio và SRT sẽ được tạo khi bắt đầu workflow.</p>}
+              <header><span><Mic2 size={16} /></span><div><small>{mode === "screenplay_film" ? "SCREENPLAY STUDIO" : mode === "srt_script" ? "NGUỒN TIMELINE" : "VOICE STUDIO"}</small><strong>{mode === "screenplay_film" ? "Kịch bản hình & âm thanh" : mode === "srt_script" ? "SRT & kịch bản" : "Nội dung & giọng đọc"}</strong></div><b className={sourceDone ? "is-ready" : "is-missing"}>{sourceDone ? "Đã sẵn sàng" : "Còn thiếu"}</b></header>
+              <dl>{mode === "screenplay_film" ? <><div><dt>Kịch bản</dt><dd>{session.screenplay.scriptFileName || "Nội dung đã nhập"}</dd></div><div><dt>Shot đã duyệt</dt><dd>{session.screenplay.shots.filter((shot) => shot.approved).length}/{session.screenplay.shots.length}</dd></div><div><dt>Chế độ thoại</dt><dd>{session.screenplay.dialogueMode === "sound-only" ? "Không thoại" : "Thoại trực tiếp (pilot)"}</dd></div><div><dt>Ambience/SFX</dt><dd>{session.screenplay.shots.reduce((sum, shot) => sum + Number(Boolean(shot.ambience)) + shot.soundEffects.length, 0)} chỉ dẫn</dd></div></> : mode === "srt_script" ? <><div><dt>File SRT</dt><dd>{session.workflowSource.srtFileName || "Chưa chọn"}</dd></div><div><dt>Kịch bản</dt><dd>{session.workflowSource.scriptFileName || "Chưa chọn"}</dd></div><div><dt>Subtitle</dt><dd>{stats.cues || "—"}</dd></div><div><dt>Thời lượng</dt><dd>{stats.duration}</dd></div></> : <><div><dt>Nội dung thoại</dt><dd>{session.workflowSource.narrationText?.trim() ? "Đã có" : "Chưa có"}</dd></div><div><dt>Tên nội dung</dt><dd>{session.workflowSource.narrationFileName || "Nội dung đã dán"}</dd></div><div><dt>Giọng đọc</dt><dd>{session.workflowSource.voiceName || "Chưa chọn"}</dd></div><div><dt>Ngôn ngữ</dt><dd>{session.workflowSource.voiceName?.split("-").slice(0, 2).join("-") || "—"}</dd></div><div><dt>Audio</dt><dd>{session.workflowSource.audioFileName || "Chưa tạo"}</dd></div><div><dt>SRT</dt><dd>{session.workflowSource.srtFileName || "Chưa tạo"}</dd></div></>}</dl>{mode !== "srt_script" && mode !== "screenplay_film" && !session.workflowSource.audioFileName && <p>Audio và SRT sẽ được tạo khi bắt đầu workflow.</p>}
             </article>
 
             <article>

@@ -361,7 +361,8 @@ try {
   })()`);
   await waitFor(client, "document.querySelector('.generation-modal')");
   const modalText = await client.evaluate("document.querySelector('.generation-modal').innerText");
-  assert.match(modalText, /Nano Banana Pro/);
+  assert.match(modalText, /Nano Banana 2/);
+  assert.match(modalText, /Nano Banana 2 Lite/);
   assert.match(modalText, /0 tín dụng/);
   assert.match(modalText, /@ANCESTOR/);
   assert.match(modalText, /Stickman, flat 2D illustration/);
@@ -371,7 +372,7 @@ try {
   assert.equal(sceneJob.payload.sceneId, "scene-001");
   assert.equal(sceneJob.payload.prompt, revisedPrompt);
   assert.deepEqual(sceneJob.payload.characterTokens, ["@ANCESTOR"]);
-  assert.equal(sceneJob.payload.imageSettings.model, "nano-banana-pro");
+  assert.equal(sceneJob.payload.imageSettings.model, "nano-banana-2");
   assert.equal(sceneJob.payload.imageSettings.expectedCredits, 0);
   assert.equal(sceneJob.payload.visualBible.style, overrideGraphicStyle);
   assert.equal(sceneJob.payload.refImages.length, 1);

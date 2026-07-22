@@ -1,4 +1,4 @@
-import { FileClock, ListChecks, Sparkles, Workflow } from "lucide-react";
+import { Clapperboard, FileClock, ListChecks, Sparkles, Workflow } from "lucide-react";
 import type { HomeWorkflowMode } from "./integrated-workflow";
 
 export function HomeView({ onSelect }: { onSelect: (mode: HomeWorkflowMode) => void }) {
@@ -39,6 +39,15 @@ export function HomeView({ onSelect }: { onSelect: (mode: HomeWorkflowMode) => v
             <small>Tạo và nghe thử voice/SRT trước, kiểm tra prompt, rồi chủ động chạy hàng đợi ảnh/video.</small>
           </span>
           <span className="home-mode-tag">Kiểm soát cao</span>
+        </button>
+
+        <button type="button" className="home-mode-card" onClick={() => onSelect("screenplay_film")}>
+          <span className="home-mode-icon"><Clapperboard size={22} /></span>
+          <span className="home-mode-copy">
+            <strong>Phim kịch bản hình</strong>
+            <small>Không voice-over: dựng phim từ hành động, nhân vật, ambience, hiệu ứng âm thanh và thoại native tùy chọn.</small>
+          </span>
+          <span className="home-mode-tag">Cinematic</span>
         </button>
       </div>
     </section>

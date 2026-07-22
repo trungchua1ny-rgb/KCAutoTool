@@ -11,6 +11,13 @@ if (!window.__FLOWX_CHAT_WORKER__) {
   const MAX_BEAT_PLANNING_ATTEMPTS = 3;
   const ALLOWED_SCENE_DURATIONS = new Set([4, 6, 8]);
   const POLICY_FLAGS = new Set(["real_person", "violence", "weapons", "dangerous_activity", "sexual_content", "child_safety", "copyrighted_character"]);
+  const POLICY_SAFE_ADAPTATION_CONTRACT = `POLICY-SAFE ADAPTATION CONTRACT
+- Safety compliance is a production requirement, not a filter-bypass exercise. Never disguise, encode, euphemize, or preserve prohibited detail under poetic, abstract, geometric, energy, lighting, color, or art terminology.
+- During scene generation, detect concrete visible risk and set policyFlag to the matching supported category. Do not clear the flag merely because risky wording was made indirect.
+- The separate compliance pass may preserve only the safe narrative function, emotion, chronology, setting, camera intent, and continuity. It must remove unsafe depiction, actionable detail, recognizable real-person identity, or protected-character imitation.
+- Prefer genuinely non-graphic storytelling through distance, off-screen implication, a safe aftermath, an observer's reaction, prevention, supervision, warning, or a neutral substitute when appropriate.
+- Never add style keywords such as Surrealism, cinematic lighting, abstract art, metaphorical representation, ethereal atmosphere, or avant-garde photography. Graphic style belongs exclusively to the locked Visual Bible and must not be changed by policy handling.
+- Do not output a safety analysis, banned-word list, or alternative prompt fields inside Phase 3 scene JSON. Keep the established schema so the desktop validator and queue remain deterministic.`;
   const activeControllers = new Map();
 
   function stoppedError() {
@@ -202,7 +209,24 @@ if (!window.__FLOWX_CHAT_WORKER__) {
     };
   }
 
-  function buildBeatPlanningPrompt(srtText, scriptText, previousError = "", hasStyleReference = false) {
+  function screenplayPromptContract(payload = {}) {
+    if (payload.productionKind !== "screenplay") return "";
+    const screenplay = payload.screenplay && typeof payload.screenplay === "object" ? payload.screenplay : {};
+    const nativeDialogue = screenplay.dialogueMode === "native-dialogue";
+    const soundBible = screenplay.soundBible && typeof screenplay.soundBible === "object" ? screenplay.soundBible : {};
+    return `SCREENPLAY FILM CONTRACT — HIGHEST PRIORITY
+- This project is a cinematic screenplay film, not a narrated explainer and not a voice-over video.
+- Every SRT cue is an approved shot contract. Return exactly one beat/scene for each cue and preserve that cue's exact start, end, and 4/6/8-second duration. Never merge or split approved shots.
+- The SHOT, ACTION, DIALOGUE, AMBIENCE, and SFX lines inside each cue are authoritative production directions, not narration.
+- Every videoPrompt must additionally contain these exact labels once: "SPOKEN DIALOGUE:", "AMBIENT SOUND:", and "SOUND EFFECTS:".
+- ${nativeDialogue ? `SPOKEN DIALOGUE must quote only the exact approved character dialogue, identify its visible speaker, use language ${String(screenplay.dialogueLanguage || "vi-VN")}, request natural synchronized mouth movement, and never add a narrator, voice-over, or off-screen speech. Keep at most two speaking characters in one shot.` : `SPOKEN DIALOGUE must say exactly: "No spoken dialogue, voice-over, narration, or off-screen speech." Never invent spoken words.`}
+- AMBIENT SOUND describes continuous location-grounded room tone. SOUND EFFECTS contains only synchronized sounds caused by visible actions. Do not request background music in Google Flow.
+- These audio instructions are part of the scene's generated video and will be preserved when KC Auto Tool assembles the CapCut project.
+- Sound Bible: ${JSON.stringify({ ambienceRules: soundBible.ambienceRules || "", soundEffectRules: soundBible.soundEffectRules || "", dialogueRules: soundBible.dialogueRules || "", musicPolicy: "none-in-flow" })}.
+- This contract overrides generic rules that say prompts cannot contain dialogue. It does not permit invented dialogue or narration.`;
+  }
+
+  function buildBeatPlanningPrompt(srtText, scriptText, previousError = "", hasStyleReference = false, productionContext = {}) {
     const contract = beatPlanningContract(srtText);
     const correction = previousError
       ? `\nYour previous beat plan was invalid: ${previousError}\nRegenerate the complete plan from scratch.`
@@ -233,6 +257,9 @@ SOURCE PRIORITY AND BEAT SUMMARY
 - SRT is authoritative for timeline and visible event coverage. The script may clarify characters, setting, and context but never overrides the SRT.
 - beatSummary is one short source-grounded sentence for downstream reading. It is support metadata, never a new source of truth, and must not add interpretation or events.
 - sceneIndex is the one-based chronological beat number.
+- Do not conceal or euphemize sensitive source content in beatSummary. Keep it short, neutral, non-graphic, and source-grounded; detailed policy adaptation occurs only after scene prompts receive a policyFlag.
+
+${screenplayPromptContract(productionContext)}
 
 ${hasStyleReference ? `STYLE REFERENCE IMAGE
 - A graphic style reference image is attached to this first message.
@@ -274,13 +301,19 @@ ${scriptText}
     throw error;
   }
 
-  function validateBeatPlanningResult(beats, srtText) {
+  function validateBeatPlanningResult(beats, srtText, productionContext = {}) {
     if (!Array.isArray(beats) || beats.length === 0 || beats.length > 1_000) {
       const error = new Error("beat_planning must return between 1 and 1000 beats");
       error.code = "INVALID_JOB";
       throw error;
     }
     const contract = beatPlanningContract(srtText);
+    const approvedShots = productionContext.productionKind === "screenplay" ? parseSrtCues(srtText) : null;
+    if (approvedShots && beats.length !== approvedShots.length) {
+      const error = new Error(`Screenplay beat plan must preserve all ${approvedShots.length} approved shots`);
+      error.code = "INVALID_JOB";
+      throw error;
+    }
     let previousEnd = contract.startMs;
     let previous = null;
     const seenChains = new Set();
@@ -296,6 +329,11 @@ ${scriptText}
       }
       if (startMs !== previousEnd || endMs - startMs !== durationSeconds * 1_000) {
         const error = new Error(`Beat ${order} creates a gap, overlap, or duration mismatch`);
+        error.code = "INVALID_JOB";
+        throw error;
+      }
+      if (approvedShots && (startMs !== approvedShots[index].startMs || endMs !== approvedShots[index].endMs)) {
+        const error = new Error(`Beat ${order} changed an approved screenplay shot boundary`);
         error.code = "INVALID_JOB";
         throw error;
       }
@@ -397,7 +435,7 @@ ${scriptText}
       : "KNOWN RECURRING CHARACTER ROSTER\n- No library character name met the automatic two-mention threshold. Preserve only explicit @TOKENS found in the source.";
   }
 
-  function buildTimelinePrompt(batch, batchCount, scriptText, visualBibleInput = {}, characterRoster = [], hasStyleReference = false, continuityIn = null) {
+  function buildTimelinePrompt(batch, batchCount, scriptText, visualBibleInput = {}, characterRoster = [], hasStyleReference = false, continuityIn = null, productionContext = {}) {
     const boundaryList = batch.boundaries
       .map((boundary, index) =>
         `${index + 1}. ${boundary.start} --> ${boundary.end} | chainRole=${boundary.chainRole} | chainId=${boundary.chainId || "null"} | chainRisk=${boundary.chainRisk || "null"} | beatSummary=${boundary.beatSummary || "use SRT as authority"}`
@@ -464,6 +502,10 @@ ${visualBibleContract}
 ${continuityContract}
 
 ${characterRosterContract(characterRoster)}
+
+${POLICY_SAFE_ADAPTATION_CONTRACT}
+
+${screenplayPromptContract(productionContext)}
 
 STRICT SCENE SEGMENTATION
 - Source priority is strict: SRT controls time and visible event coverage; script only clarifies context; beatSummary is helper metadata and never overrides either source; Visual Bible controls appearance, not story events.
@@ -539,7 +581,7 @@ ${scriptSource}
 </SCRIPT_SOURCE>`;
   }
 
-  function buildTimelineRetryPrompt(batch, batchCount, reason, attempt, visualBibleInput = {}, characterRoster = [], hasStyleReference = false, continuityIn = null) {
+  function buildTimelineRetryPrompt(batch, batchCount, reason, attempt, visualBibleInput = {}, characterRoster = [], hasStyleReference = false, continuityIn = null, productionContext = {}) {
     const boundaryList = batch.boundaries
       .map((boundary, index) =>
         `${index + 1}. ${boundary.start} --> ${boundary.end} | chainRole=${boundary.chainRole} | chainId=${boundary.chainId || "null"}`
@@ -562,6 +604,10 @@ ${outputShape}
 ${bibleRequirement}
 
 ${characterRosterContract(characterRoster)}
+
+${POLICY_SAFE_ADAPTATION_CONTRACT}
+
+${screenplayPromptContract(productionContext)}
 
 Source priority remains SRT > script > beatSummary. Incoming continuity metadata is ${JSON.stringify(continuityIn || {})}; it is planning context only, while the real extracted frame is authoritative at runtime. policyFlag must be null or one supported risk category. Return plannedContinuityOut for start/continue and {} for single.
 
@@ -854,7 +900,7 @@ ${batch.srtText}
     throw error;
   }
 
-  function validateBatchResult(result, batch, characterRoster = []) {
+  function validateBatchResult(result, batch, characterRoster = [], productionContext = {}) {
     if (result.scenes.length !== batch.boundaries.length) {
       const error = new Error(
         `ChatGPT trả về ${result.scenes.length} scene thay vì ${batch.boundaries.length} scene`,
@@ -954,6 +1000,14 @@ ${batch.srtText}
           error.code = "INVALID_JOB";
           throw error;
         }
+        if (field === "videoPrompt" && productionContext.productionKind === "screenplay") {
+          const missingAudioSections = ["SPOKEN DIALOGUE:", "AMBIENT SOUND:", "SOUND EFFECTS:"].filter((section) => !prompt.toUpperCase().includes(section));
+          if (missingAudioSections.length) {
+            const error = new Error(`Scene ${index + 1} videoPrompt is missing screenplay audio sections: ${missingAudioSections.join(", ")}`);
+            error.code = "INVALID_JOB";
+            throw error;
+          }
+        }
       }
     });
   }
@@ -993,6 +1047,7 @@ ${batch.srtText}
             payload.scriptText,
             lastInvalidError?.message || "",
             styleReferenceAttached,
+            payload,
           ),
           signal,
         );
@@ -1008,6 +1063,7 @@ ${batch.srtText}
         return validateBeatPlanningResult(
           parseBeatPlanningResponse(responseText),
           payload.srtText,
+          payload,
         );
       } catch (error) {
         if (error?.code === "INVALID_JOB" && attempt < MAX_BEAT_PLANNING_ATTEMPTS) {
@@ -1065,6 +1121,7 @@ ${batch.srtText}
                   payload.characterRoster,
                   Boolean(payload.styleReference),
                   continuityIn,
+                  payload,
                 )
               : buildTimelineRetryPrompt(
                   batch,
@@ -1075,6 +1132,7 @@ ${batch.srtText}
                   payload.characterRoster,
                   Boolean(payload.styleReference),
                   continuityIn,
+                  payload,
                 );
           const attemptLabel =
             attempt === 1 ? label : `${label}, lần thử ${attempt}/${MAX_BATCH_ATTEMPTS}`;
@@ -1091,7 +1149,7 @@ ${batch.srtText}
               ),
           );
           const result = parseJsonResponse(responseText);
-          validateBatchResult(result, batch, payload.characterRoster);
+          validateBatchResult(result, batch, payload.characterRoster, payload);
           if (batch.index === 0) visualBible = result.visualBible;
           scenes.push(...result.scenes.map((scene, index) => {
             const boundary = batch.boundaries[index];
@@ -1168,11 +1226,13 @@ ${batch.srtText}
 
 Rewrite exactly one ${payload.mediaType} prompt that Google Flow rejected. Preserve the same source-grounded story beat, characters, setting, emotion, camera intent, continuity, and ${payload.timeStart}–${payload.timeEnd} timeline. Remove or soften only details likely to trigger a safety policy. Do not evade, disguise, encode, or work around safety rules. Replace unsafe graphic detail with non-graphic, implied, aftermath, reaction, distance, silhouette, or environmental storytelling as appropriate.
 
+${POLICY_SAFE_ADAPTATION_CONTRACT}
+
 FLAG-SPECIFIC COMPLIANCE ACTION
 ${categoryGuidance}
 
 Keep the prompt in English, 80–150 words, and retain these exact section labels in order: ${required}.
-Do not add dialogue, new characters, new events, copyrighted character imitation, or conflicting visual style. Do not repeat the global Visual Bible unless needed to resolve the unsafe wording.
+Do not add dialogue, new characters, new events, copyrighted character imitation, or conflicting visual style. Never repeat, rewrite, expand, or supplement the global Visual Bible. The replacement must be genuinely safer in what it depicts, not merely safer-sounding wording for the same prohibited visual.
 
 Google Flow error:
 ${payload.policyError || "Policy violation"}
@@ -1189,7 +1249,18 @@ ${payload.prompt}
 Return JSON only, exactly: {"prompt":"rewritten prompt"}.${previousError ? `\nThe previous response was invalid: ${previousError}` : ""}`;
   }
 
-  function parsePolicyRewriteResponse(text, mediaType) {
+  function hasDirectPolicyRisk(prompt, policyFlag) {
+    const patterns = {
+      violence: /\b(?:blood|bloody|bleeding|gore|gory|corpse|dead\s+body|severed|dismembered|mutilated|stab(?:bing|bed)?|kill(?:ing|ed)?)\b/i,
+      weapons: /\b(?:gun|pistol|rifle|shotgun|firearm|ammunition|bullet|bomb|explosive|grenade|knife|sword|shoot(?:ing|s|er)?|stab(?:bing|bed)?)\b/i,
+      dangerous_activity: /\b(?:suicide|self-harm|overdose|drug\s+use|torture|bomb-making|weapon-making)\b/i,
+      sexual_content: /\b(?:nude|nudity|naked|sexual|erotic|fetish|explicit\s+contact|pornographic)\b/i,
+      child_safety: /\b(?:sexualized\s+minor|nude\s+child|child\s+abuse|exploit(?:ed|ation)\s+minor)\b/i,
+    };
+    return patterns[policyFlag]?.test(prompt) === true;
+  }
+
+  function parsePolicyRewriteResponse(text, mediaType, policyFlag = null) {
     const candidates = [text.trim()];
     for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
       candidates.push(match[1].trim());
@@ -1205,7 +1276,12 @@ Return JSON only, exactly: {"prompt":"rewritten prompt"}.${previousError ? `\nTh
         const required = mediaType === "image"
           ? ["SUBJECT AND ACTION:", "EMOTION AND BODY LANGUAGE:", "SETTING AND BACKGROUND:", "DEPTH LAYERS:", "CAMERA AND COMPOSITION:"]
           : ["STARTING STATE:", "PRIMARY MOTION:", "REACTION:", "ENVIRONMENTAL MOTION:", "CAMERA MOTION:", "END FRAME:"];
-        if (words >= 80 && words <= 150 && required.every((label) => prompt.toUpperCase().includes(label))) {
+        if (
+          words >= 80 &&
+          words <= 150 &&
+          required.every((label) => prompt.toUpperCase().includes(label)) &&
+          !hasDirectPolicyRisk(prompt, policyFlag)
+        ) {
           return { prompt };
         }
       } catch (_) {}
@@ -1236,7 +1312,7 @@ Return JSON only, exactly: {"prompt":"rewritten prompt"}.${previousError ? `\nTh
         (seconds) => notifyProgress(jobId, `Đang chờ prompt thay thế · ${seconds} giây`),
       );
       try {
-        return parsePolicyRewriteResponse(response, payload.mediaType);
+        return parsePolicyRewriteResponse(response, payload.mediaType, payload.policyFlag);
       } catch (error) {
         previousError = String(error?.message || error);
         if (attempt === 2) throw error;

@@ -56,6 +56,9 @@ export function deriveHomepageState(session: TimelineSession | null, mode: HomeW
 }
 
 export function sourceReady(session: TimelineSession, mode: HomeWorkflowMode): boolean {
+  if (mode === "screenplay_film") {
+    return session.screenplay.parseStatus === "approved" && session.screenplay.shots.length > 0;
+  }
   const source = session.workflowSource;
   if (mode === "srt_script") {
     return Boolean(
@@ -81,11 +84,11 @@ export function setupSteps(
   const definitions: Array<Pick<SetupStepView, "id" | "title" | "description">> = [
     {
       id: "source",
-      title: mode === "srt_script" ? "SRT & kịch bản" : "Nội dung & giọng đọc",
-      description: mode === "srt_script" ? "Chuẩn bị nguồn timeline có timestamp" : "Lưu nội dung và cấu hình Voice Studio",
+      title: mode === "screenplay_film" ? "Kịch bản hình" : mode === "srt_script" ? "SRT & kịch bản" : "Nội dung & giọng đọc",
+      description: mode === "screenplay_film" ? "Duyệt shot, thoại, ambience và SFX" : mode === "srt_script" ? "Chuẩn bị nguồn timeline có timestamp" : "Lưu nội dung và cấu hình Voice Studio",
     },
     { id: "characters", title: "Nhân vật", description: "Tạo nhân vật hoặc xác nhận không sử dụng" },
-    { id: "visual-bible", title: "Visual Bible", description: "Khóa phong cách đồ họa và tính nhất quán" },
+    { id: "visual-bible", title: mode === "screenplay_film" ? "Visual & Sound Bible" : "Visual Bible", description: mode === "screenplay_film" ? "Khóa hình ảnh và quy tắc âm thanh xuyên shot" : "Khóa phong cách đồ họa và tính nhất quán" },
     { id: "start", title: "Bắt đầu workflow", description: "Tạo Voice/SRT, Timeline/Prompt và sản xuất" },
   ];
   return definitions.map((definition, index) => ({

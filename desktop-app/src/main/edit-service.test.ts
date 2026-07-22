@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import type { TimelineSession } from "../shared/timeline";
+import { DEFAULT_SCREENPLAY_PROJECT } from "../shared/screenplay";
 import { EditService } from "./edit-service";
 
 const execFileAsync = promisify(execFile);
@@ -39,6 +40,7 @@ test("creates and persists a real 1080p 60 FPS edit manifest from session output
     scenes: [scene(1, firstVideo), scene(2, secondVideo)],
     visualBible: { style: "style", palette: "palette", lighting: "light", continuityNotes: "notes", aspectRatio: "16:9" },
     styleReference: null, workflowMode: "automatic",
+    productionKind: "narrated", screenplay: structuredClone(DEFAULT_SCREENPLAY_PROJECT),
     workflowSource: { narrationText: "", narrationFileName: "", narrationPath: "", srtText: "", scriptText: "", srtFileName: "", scriptFileName: "", srtPath, scriptPath: "", audioPath, audioFileName: "voice.wav", voiceName: "Voice", voiceRate: 0, voicePitch: 0, voiceVolume: 0, voicePauseLevel: "off" },
   };
   try {
@@ -84,6 +86,7 @@ test("reloads a stale empty edit manifest from the current session outputs", asy
     id: "session-reload", name: "Reload", createdAt: new Date().toISOString(), savedAt: new Date().toISOString(),
     scenes: [{ id: "scene-001", order: 1, timeStart: "00:00:00,000", timeEnd: "00:00:04,000", durationSeconds: 4 as const, imagePrompt: "", imageStatus: "done" as const, imageResultPath: "", imageFlowAssetKey: "", imageApproved: true, videoPrompt: "", videoStatus: "done" as const, videoResultPath: videoPath, videoApproved: true, usedCharacterTokens: [], characterPolicy: "none" as const, assignedCharacterTokens: [], chainId: null, chainRole: "single" as const }],
     visualBible: { style: "", palette: "", lighting: "", continuityNotes: "", aspectRatio: "16:9" as const }, styleReference: null, workflowMode: "automatic" as const,
+    productionKind: "narrated" as const, screenplay: structuredClone(DEFAULT_SCREENPLAY_PROJECT),
     workflowSource: { narrationText: "", narrationFileName: "", narrationPath: "", srtText: "", scriptText: "", srtFileName: "", scriptFileName: "", srtPath: "", scriptPath: "", audioPath, audioFileName: "voice.wav", voiceName: "", voiceRate: 0, voicePitch: 0, voiceVolume: 0, voicePauseLevel: "off" as const },
   } as TimelineSession;
   try {

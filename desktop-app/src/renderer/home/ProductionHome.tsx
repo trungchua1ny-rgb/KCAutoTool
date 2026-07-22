@@ -124,13 +124,14 @@ export function ProductionHome({
     return () => { active = false; };
   }, [activeQueueScene?.imageAssetPath, activeScene?.id, activeScene?.imageResultPath]);
 
+  const screenplay = session.productionKind === "screenplay";
   const stages = [
-    { id: "voice", label: "Voice/SRT", icon: AudioLines, value: session.workflowSource.srtFileName || session.workflowSource.audioFileName ? "Sẵn sàng" : "Nguồn có sẵn", done: true, page: "voice" as AppPage },
+    { id: "voice", label: screenplay ? "Kịch bản hình" : "Voice/SRT", icon: AudioLines, value: screenplay ? `${session.screenplay.shots.length} shot` : session.workflowSource.srtFileName || session.workflowSource.audioFileName ? "Sẵn sàng" : "Nguồn có sẵn", done: true, page: screenplay ? "screenplay" as AppPage : "voice" as AppPage },
     { id: "timeline", label: "Timeline/Prompt", icon: WandSparkles, value: `${session.scenes.length}/${session.scenes.length}`, done: true, page: "timeline" as AppPage },
     { id: "images", label: "Ảnh", icon: ImageIcon, value: `${summary.completedImages}/${summary.requiredImages}`, done: summary.completedImages === summary.requiredImages, page: "queue" as AppPage },
     { id: "videos", label: "Video", icon: Film, value: `${summary.completedVideos}/${summary.totalScenes}`, done: summary.progressPercent === 100, page: "queue" as AppPage },
     { id: "frames", label: "Frame cuối", icon: Frame, value: `${summary.finalFramesReady}/${summary.finalFramesRequired}`, done: summary.finalFramesReady === summary.finalFramesRequired, page: "queue" as AppPage },
-    { id: "capcut", label: "Dựng CapCut", icon: Clapperboard, value: capCutReady ? "Sẵn sàng" : "Chưa đủ đầu ra", done: false, disabled: !capCutReady, page: "output" as AppPage },
+    { id: "capcut", label: "Dựng CapCut", icon: Clapperboard, value: capCutReady ? "Sẵn sàng" : "Chưa đủ đầu ra", done: false, disabled: !capCutReady, page: "edit" as AppPage },
   ];
   return (
     <div className="kc-home-production-v2">
@@ -153,7 +154,7 @@ export function ProductionHome({
       </section>
 
       <section className="kc-home-pipeline">
-        <header><div><small>DÂY CHUYỀN WORKFLOW</small><h3>Voice/SRT đến dựng video hoàn chỉnh</h3></div></header>
+        <header><div><small>DÂY CHUYỀN WORKFLOW</small><h3>{screenplay ? "Kịch bản hình đến phim có âm thanh trong CapCut" : "Voice/SRT đến dựng video hoàn chỉnh"}</h3></div></header>
         <div>{stages.map((stage, index) => { const Icon = stage.icon; return <div key={stage.id} className={`${stage.done ? "is-done" : ""} ${stage.disabled ? "is-disabled" : ""}`}><button type="button" disabled={stage.disabled} title={stage.disabled ? "Cần đủ 100% video hợp lệ và không còn dependency bị chặn" : `Mở ${stage.label}`} onClick={() => stage.id === "capcut" ? onBuildVideo() : onNavigate(stage.page)}><span>{stage.done ? <Check size={15} /> : <Icon size={15} />}</span><strong>{stage.label}</strong><small>{stage.value}</small></button>{index < stages.length - 1 && <i><ArrowRight size={14} /></i>}</div>; })}</div>
       </section>
 

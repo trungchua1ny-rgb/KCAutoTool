@@ -1,5 +1,7 @@
 # KC Dev
 
+Version `2.57.0` adds the Screenplay Studio contract. Approved 4/6/8-second shot boundaries stay locked, cinematic prompts carry explicit spoken-dialogue, ambience, and synchronized sound-effect sections, and sound-only projects prohibit narration while preserving embedded scene audio for CapCut. It also retains the policy-safe adaptation contract introduced in 2.56.0.
+
 Manifest V3 browser worker installed from the same directory in both Chrome
 profiles. It contains:
 
@@ -45,7 +47,7 @@ does not expose the zero-credit label in the DOM, but still stops on an explicit
 non-zero value and always closes a failed model popup. The Chat worker derives one project-wide Visual Bible from
 the complete script before writing the first scene batch, then preserves it in
 every later batch. The Flow worker opens the model
-picker and requires **Nano Banana Pro** to show zero credits before continuing.
+picker and selects and confirms the requested **Nano Banana 2**, **Nano Banana 2 Lite**, or legacy **Nano Banana Pro** model before continuing.
 `GENERATE_IMAGE` then uses Chrome Debugger to reproduce the Flow popup
 sequence: prompt `+`, **Upload media**, intercepted local file selection,
 uploaded thumbnail selection, and **Add to prompt**. It only enters the Visual

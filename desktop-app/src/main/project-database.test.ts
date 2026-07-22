@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { TimelineSession } from "../shared/timeline";
+import { DEFAULT_SCREENPLAY_PROJECT } from "../shared/screenplay";
 import type { GraphicStylePreset } from "../shared/visual-style";
 import { LEGACY_PROJECT_ID, migrateLegacyProjectData } from "./legacy-project-migration";
 import { ProjectDatabase } from "./project-database";
@@ -159,6 +160,8 @@ test("migrates the latest LowDB timeline and graphic styles idempotently", async
     savedAt: "2026-07-15T01:02:03.000Z",
     styleReference: null,
     workflowMode: "two_step",
+    productionKind: "narrated",
+    screenplay: structuredClone(DEFAULT_SCREENPLAY_PROJECT),
     workflowSource: {
       srtText: "",
       scriptText: "",

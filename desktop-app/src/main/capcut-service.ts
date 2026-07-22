@@ -183,8 +183,8 @@ export class CapCutService {
       segment.render_timerange = { ...(segment.render_timerange || {}), start: 0, duration: 0 };
       segment.speed = 1;
       segment.transition = null;
-      segment.volume = 0;
-      segment.last_nonzero_volume = Number(segment.last_nonzero_volume || 1);
+      segment.volume = plan.inspection.preserveSceneAudio ? 1 : 0;
+      segment.last_nonzero_volume = 1;
 
       const referenceIds: string[] = [];
       for (const template of referenceTemplates) {
@@ -262,6 +262,7 @@ export class CapCutService {
   }
 
   private async createPlan(session: TimelineSession, targetProjectPath?: string): Promise<BuildPlan> {
+    const preserveSceneAudio = session.productionKind === "screenplay";
     const scenes = completedScenes(session);
     const totalScenes = session?.scenes?.length || 0;
     const videoDurationSeconds = scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0);
@@ -285,7 +286,7 @@ export class CapCutService {
     const explicitTarget = targetProjectPath
       ? projects.find((project) => normalizePath(project.directory) === normalizePath(targetProjectPath)) || null
       : null;
-    const target = explicitTarget || this.findAudioProject(projects, session) || projects[0] || null;
+    const target = explicitTarget || (preserveSceneAudio ? projects[0] : this.findAudioProject(projects, session)) || projects[0] || null;
     const base: CapCutBuildInspection = {
       ready: false,
       reason: "",
@@ -299,6 +300,7 @@ export class CapCutService {
       existingSessionMatch: false,
       selectedProjectPath: target?.directory || "",
       availableProjects,
+      preserveSceneAudio,
     };
     if (!totalScenes || scenes.length !== totalScenes) {
       return {
@@ -321,7 +323,7 @@ export class CapCutService {
     }
     if (!target) {
       return {
-        inspection: { ...base, reason: "Không tìm thấy project CapCut. Hãy tạo project, thêm voice, lưu rồi đóng CapCut." },
+        inspection: { ...base, reason: preserveSceneAudio ? "Không tìm thấy project CapCut. Hãy tạo một project trống, lưu rồi đóng CapCut." : "Không tìm thấy project CapCut. Hãy tạo project, thêm voice, lưu rồi đóng CapCut." },
         scenes,
         target: null,
         donor: null,
@@ -335,7 +337,7 @@ export class CapCutService {
     const existingPaths = segments.map((segment: JsonObject) => normalizePath(videoMap.get(segment.material_id)?.path));
     const existingSessionMatch = segments.length > 0 && existingPaths.every((path: string) => path.includes(normalizePath(session.id)));
     const audioMaterial = (target.draft.materials?.audios || [])[0];
-    if (!audioMaterial) {
+    if (!audioMaterial && !preserveSceneAudio) {
       return {
         inspection: {
           ...base,
@@ -355,7 +357,9 @@ export class CapCutService {
     }) || null;
     const reason = !donor
       ? "Chưa có project CapCut mẫu chứa video để tương thích với phiên bản CapCut hiện tại."
-      : `Sẵn sàng dựng trực tiếp vào project ${target.name}. Project sẽ được sao lưu trước khi thay video track.`;
+      : preserveSceneAudio
+        ? `Sẵn sàng dựng phim kịch bản hình vào ${target.name}. Âm thanh gốc của từng scene được giữ nguyên và project sẽ được sao lưu trước khi thay video track.`
+        : `Sẵn sàng dựng trực tiếp vào project ${target.name}. Project sẽ được sao lưu trước khi thay video track.`;
     return {
       inspection: {
         ...base,

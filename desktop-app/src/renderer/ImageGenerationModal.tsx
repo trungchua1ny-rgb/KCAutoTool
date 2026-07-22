@@ -8,6 +8,10 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { CharacterView } from "../shared/character";
+import {
+  IMAGE_GENERATION_MODEL_LABELS,
+  type ImageGenerationModel,
+} from "../shared/scene-job";
 import type { CharacterPolicy, Scene, VisualBible } from "../shared/timeline";
 
 interface ImageGenerationModalProps {
@@ -20,6 +24,7 @@ interface ImageGenerationModalProps {
     prompt: string;
     characterPolicy: CharacterPolicy;
     characterTokens: string[];
+    model: ImageGenerationModel;
   }) => void;
 }
 
@@ -34,6 +39,7 @@ export function ImageGenerationModal({
   const [prompt, setPrompt] = useState(initialPrompt);
   const [policy, setPolicy] = useState<CharacterPolicy>(scene.characterPolicy);
   const [tokens, setTokens] = useState(scene.assignedCharacterTokens);
+  const [model, setModel] = useState<ImageGenerationModel>("nano-banana-2");
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -77,10 +83,21 @@ export function ImageGenerationModal({
         </header>
 
         <div className="generation-settings-strip">
-          <div><ImageIcon size={16} /><span>Model</span><strong>Nano Banana Pro</strong></div>
+          <div className="generation-model-setting">
+            <ImageIcon size={16} />
+            <span>Model</span>
+            <select
+              aria-label="Chọn model tạo ảnh"
+              value={model}
+              onChange={(event) => setModel(event.target.value as ImageGenerationModel)}
+            >
+              <option value="nano-banana-2">{IMAGE_GENERATION_MODEL_LABELS["nano-banana-2"]}</option>
+              <option value="nano-banana-2-lite">{IMAGE_GENERATION_MODEL_LABELS["nano-banana-2-lite"]}</option>
+            </select>
+          </div>
           <div><Palette size={16} /><span>Tỷ lệ</span><strong>{visualBible.aspectRatio}</strong></div>
           <div><Sparkles size={16} /><span>Kết quả</span><strong>1 ảnh</strong></div>
-          <div className="credit-zero"><Check size={16} /><span>Chi phí mục tiêu</span><strong>0 tín dụng</strong></div>
+          <div className="credit-zero"><Check size={16} /><span>Chi phí</span><strong>Theo model Flow</strong></div>
         </div>
 
         <div className="generation-modal-body">
@@ -164,6 +181,7 @@ export function ImageGenerationModal({
               prompt: prompt.trim(),
               characterPolicy: policy,
               characterTokens: policy === "selected" ? tokens : [],
+              model,
             })}
           >
             <Sparkles size={16} /> Gắn ảnh và tạo

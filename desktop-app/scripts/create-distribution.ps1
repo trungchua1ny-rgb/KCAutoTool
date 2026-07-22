@@ -5,6 +5,7 @@ $repositoryRoot = (Resolve-Path (Join-Path $projectRoot "..")).Path
 $extensionRoot = Join-Path $repositoryRoot "extension-worker"
 $releaseRoot = Join-Path $projectRoot "release"
 $manifest = Get-Content -LiteralPath (Join-Path $extensionRoot "manifest.json") -Raw | ConvertFrom-Json
+$package = Get-Content -LiteralPath (Join-Path $projectRoot "package.json") -Raw | ConvertFrom-Json
 $extensionName = "KC-Dev-Extension-$($manifest.version)"
 $stageRoot = Join-Path $releaseRoot $extensionName
 $zipPath = Join-Path $releaseRoot "$extensionName.zip"
@@ -21,9 +22,12 @@ Copy-Item -LiteralPath $extensionRoot -Destination $stageRoot -Recurse
 Compress-Archive -LiteralPath $stageRoot -DestinationPath $zipPath -CompressionLevel Optimal
 Copy-Item -LiteralPath (Join-Path $projectRoot "build\INSTALL-MAY-KHAC.txt") -Destination (Join-Path $releaseRoot "INSTALL-MAY-KHAC.txt") -Force
 
-$artifacts = Get-ChildItem -LiteralPath $releaseRoot -File | Where-Object {
-  $_.Extension -in @(".exe", ".zip", ".txt") -and $_.Name -ne "SHA256SUMS.txt"
-}
+$currentNames = @(
+  "KC-Auto-Tool-Setup-$($package.version).exe",
+  "$extensionName.zip",
+  "INSTALL-MAY-KHAC.txt"
+)
+$artifacts = Get-ChildItem -LiteralPath $releaseRoot -File | Where-Object { $_.Name -in $currentNames }
 $checksums = foreach ($artifact in $artifacts) {
   $hash = Get-FileHash -LiteralPath $artifact.FullName -Algorithm SHA256
   "$($hash.Hash)  $($artifact.Name)"

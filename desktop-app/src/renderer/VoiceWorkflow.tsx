@@ -23,6 +23,7 @@ import {
   type TimelineSession,
   type TimelineWorkflowSource,
 } from "../shared/timeline";
+import { DEFAULT_SCREENPLAY_PROJECT } from "../shared/screenplay";
 import type { VoiceCatalogEntry, VoicePauseLevel } from "../shared/voice";
 import type { HomeWorkflowMode, IntegratedWorkflowHandoff } from "./integrated-workflow";
 
@@ -287,6 +288,8 @@ export function VoiceWorkflow({
         styleReference: session?.styleReference || null,
         workflowMode,
         workflowSource: source,
+        productionKind: "narrated",
+        screenplay: session?.screenplay || DEFAULT_SCREENPLAY_PROJECT,
       });
       if (advance) {
         onComplete({
@@ -297,6 +300,8 @@ export function VoiceWorkflow({
           visualBible: session?.visualBible || DEFAULT_VISUAL_BIBLE,
           styleReference: session?.styleReference || null,
           autoGenerateTimeline: false,
+          productionKind: "narrated",
+          screenplay: session?.screenplay || DEFAULT_SCREENPLAY_PROJECT,
         });
       }
     } catch (caught) {

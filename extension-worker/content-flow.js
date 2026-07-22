@@ -1019,49 +1019,61 @@ async function getImageModelPicker() {
     };
 }
 
-async function getNanoBananaProOption() {
+const IMAGE_MODEL_LABELS = {
+  "nano-banana-2": "Nano Banana 2",
+  "nano-banana-2-lite": "Nano Banana 2 Lite",
+  "nano-banana-pro": "Nano Banana Pro",
+};
+
+function matchesImageModelLabel(label, model) {
+  const value = String(label || "");
+  if (model === "nano-banana-2-lite") return /nano\s*banana\s*2\s*lite/i.test(value);
+  if (model === "nano-banana-2") {
+    return /nano\s*banana\s*2/i.test(value) && !/\blite\b/i.test(value);
+  }
+  return /nano\s*banana\s*pro/i.test(value);
+}
+
+async function getImageModelOption(model) {
+  const modelLabel = IMAGE_MODEL_LABELS[model];
+  if (!modelLabel) {
+    return { ok: false, code: "FLOW_MODEL_UNSUPPORTED", error: `Model ảnh không được hỗ trợ: ${model}` };
+  }
   const option = await waitUntil(() =>
     [...document.querySelectorAll('button, [role="button"], [role="option"], [role="menuitem"]')]
       .filter(isVisible)
-      .find((control) => /nano\s*banana\s*pro/i.test(buttonLabel(control))), 10000);
+      .find((control) => matchesImageModelLabel(buttonLabel(control), model)), 10000);
   if (!option) {
     return {
       ok: false,
       code: "FLOW_MODEL_NOT_FOUND",
-      error: "Popup model không có Nano Banana Pro. Worker sẽ không tự chuyển sang model khác.",
+      error: `Popup model không có ${modelLabel}. Worker sẽ không tự chuyển sang model khác.`,
     };
   }
   const containerText = `${buttonLabel(option)} ${option.parentElement?.textContent || ""}`;
   const creditMatch = containerText.match(/(?:^|\D)(\d+)\s*(?:credit|credits|tín\s*dụng)/i);
   const visibleCredits = creditMatch ? Number.parseInt(creditMatch[1], 10) : null;
-  if (visibleCredits !== null && visibleCredits !== 0) {
-    return {
-      ok: false,
-      code: "FLOW_CREDIT_CHANGED",
-      error: `Nano Banana Pro đang hiển thị ${visibleCredits} tín dụng. Đã dừng trước khi tạo.`,
-    };
-  }
   return {
     ok: true,
     ...centerOf(option),
-    credits: visibleCredits === 0 ? 0 : "not-exposed-in-dom",
+    model,
+    credits: visibleCredits === null ? "not-exposed-in-dom" : visibleCredits,
   };
 }
 
-async function confirmNanoBananaPro() {
+async function confirmImageModel(model) {
   const selected = await waitUntil(() => {
     const picker = findModelPickerButton();
-    return picker && /nano\s*banana\s*pro/i.test(buttonLabel(picker)) ? picker : null;
+    return picker && matchesImageModelLabel(buttonLabel(picker), model) ? picker : null;
   }, 8000);
   return selected
-    ? { ok: true, model: "nano-banana-pro", zeroCredits: true }
+    ? { ok: true, model }
     : {
       ok: false,
       code: "FLOW_MODEL_CHANGED",
-      error: "Google Flow chưa chuyển sang Nano Banana Pro.",
+      error: `Google Flow chưa chuyển sang ${IMAGE_MODEL_LABELS[model] || model}.`,
     };
 }
-
 async function prepareIngredientDrop() {
   const prompt = await wakePromptBox();
   if (!prompt) {
@@ -2689,16 +2701,15 @@ if (!window.__H2DEV_FLOW_LISTENER__) {
       return true;
     }
 
-    if (msg.type === "FLOWX_GET_NANO_BANANA_PRO_OPTION") {
-      getNanoBananaProOption().then(sendResponse);
+    if (msg.type === "FLOWX_GET_IMAGE_MODEL_OPTION") {
+      getImageModelOption(msg.model).then(sendResponse);
       return true;
     }
 
-    if (msg.type === "FLOWX_CONFIRM_NANO_BANANA_PRO") {
-      confirmNanoBananaPro().then(sendResponse);
+    if (msg.type === "FLOWX_CONFIRM_IMAGE_MODEL") {
+      confirmImageModel(msg.model).then(sendResponse);
       return true;
     }
-
     if (msg.type === "FLOWX_GET_UPLOAD_MEDIA_BUTTON") {
       getUploadMediaButton().then(sendResponse);
       return true;

@@ -6,6 +6,9 @@ import { JSONFile } from "lowdb/node";
 import {
   DEFAULT_VISUAL_BIBLE,
   DEFAULT_TIMELINE_WORKFLOW_SOURCE,
+  DEFAULT_SCREENPLAY_PROJECT,
+  normalizeProjectProductionKind,
+  normalizeScreenplayProject,
   normalizeStoredScenes,
   normalizeStyleReference,
   normalizeTimelineWorkflowSource,
@@ -26,7 +29,7 @@ interface TimelineSessionDatabase {
 }
 
 const DEFAULT_DATA: TimelineSessionDatabase = {
-  version: 4,
+  version: 5,
   activeSessionId: null,
   sessions: [],
 };
@@ -55,6 +58,8 @@ function normalizeSession(value: unknown, fallbackId: string, fallbackName: stri
       styleReference: normalizeStyleReference(input.styleReference),
       workflowMode: normalizeVideoWorkflowMode(input.workflowMode),
       workflowSource: normalizeTimelineWorkflowSource(input.workflowSource),
+      productionKind: normalizeProjectProductionKind(input.productionKind),
+      screenplay: normalizeScreenplayProject(input.screenplay),
       savedAt,
     };
   } catch {
@@ -116,6 +121,8 @@ export class TimelineSessionStore {
             styleReference: null,
             workflowMode: "two_step",
             workflowSource: structuredClone(DEFAULT_TIMELINE_WORKFLOW_SOURCE),
+            productionKind: "narrated",
+            screenplay: structuredClone(DEFAULT_SCREENPLAY_PROJECT),
             savedAt: now,
           });
         }
@@ -123,7 +130,7 @@ export class TimelineSessionStore {
           ? raw.activeSessionId
           : null;
         this.database.data = {
-          version: 4,
+          version: 5,
           activeSessionId: requestedActive && unique.has(requestedActive)
             ? requestedActive
             : normalizedSessions[0]?.id || null,
@@ -159,6 +166,8 @@ export class TimelineSessionStore {
         styleReference: null,
         workflowMode: "two_step",
         workflowSource: structuredClone(DEFAULT_TIMELINE_WORKFLOW_SOURCE),
+        productionKind: "narrated",
+        screenplay: structuredClone(DEFAULT_SCREENPLAY_PROJECT),
         savedAt: now,
       };
       this.database.data.sessions.push(session);
@@ -211,6 +220,8 @@ export class TimelineSessionStore {
           styleReference: null,
           workflowMode: "two_step",
           workflowSource: structuredClone(DEFAULT_TIMELINE_WORKFLOW_SOURCE),
+          productionKind: "narrated",
+          screenplay: structuredClone(DEFAULT_SCREENPLAY_PROJECT),
           savedAt: now,
         };
         this.database.data.sessions.push(session);
@@ -233,8 +244,14 @@ export class TimelineSessionStore {
       session.workflowSource = input && "workflowSource" in input
         ? normalizeTimelineWorkflowSource(input.workflowSource)
         : session.workflowSource;
+      session.productionKind = input && "productionKind" in input
+        ? normalizeProjectProductionKind(input.productionKind)
+        : session.productionKind;
+      session.screenplay = input && "screenplay" in input
+        ? normalizeScreenplayProject(input.screenplay)
+        : session.screenplay;
       session.savedAt = new Date().toISOString();
-      this.database.data.version = 4;
+      this.database.data.version = 5;
       await this.database.write();
       return structuredClone(session);
     });
@@ -250,6 +267,8 @@ export class TimelineSessionStore {
       session.visualBible = structuredClone(DEFAULT_VISUAL_BIBLE);
       session.styleReference = null;
       session.workflowSource = structuredClone(DEFAULT_TIMELINE_WORKFLOW_SOURCE);
+      session.productionKind = "narrated";
+      session.screenplay = structuredClone(DEFAULT_SCREENPLAY_PROJECT);
       session.savedAt = new Date().toISOString();
       await this.database.write();
     });
@@ -286,6 +305,7 @@ export class TimelineSessionStore {
         savedAt: session.savedAt,
         active: session.id === this.database.data.activeSessionId,
         workflowMode: session.workflowMode,
+        productionKind: session.productionKind,
       }))
       .sort((left, right) => right.savedAt.localeCompare(left.savedAt));
   }

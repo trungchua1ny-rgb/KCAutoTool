@@ -1,4 +1,4 @@
-import { Bot, CalendarDays, FileText, FolderOpen, Pencil, Trash2, Workflow } from "lucide-react";
+import { Bot, CalendarDays, Clapperboard, FileText, FolderOpen, Pencil, Trash2, Workflow } from "lucide-react";
 import { useState } from "react";
 import type { TimelineSession } from "../../shared/timeline";
 import type { HomeWorkflowMode } from "../integrated-workflow";
@@ -14,6 +14,7 @@ const MODES: Array<{
   { id: "full_auto", title: "Tự động toàn bộ", description: "Nội dung thoại → Voice/SRT → Nhân vật → Visual Bible → Timeline/Prompt → Ảnh/Video", accent: "success", icon: Bot },
   { id: "srt_script", title: "Từ SRT & kịch bản", description: "SRT/kịch bản → Nhân vật → Visual Bible → Timeline/Prompt → Ảnh/Video", accent: "purple", icon: FileText },
   { id: "step_by_step", title: "Tạo từng bước", description: "Kiểm tra và chủ động chạy từng giai đoạn", accent: "warning", icon: Workflow },
+  { id: "screenplay_film", title: "Phim kịch bản hình", description: "Kịch bản hình → Nhân vật → Visual & Sound Bible → Video có ambience/SFX → CapCut", accent: "cinematic", icon: Clapperboard },
 ];
 
 function dateLabel(value: string): string {

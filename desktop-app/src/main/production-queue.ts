@@ -1621,10 +1621,10 @@ export class ProductionQueue {
       characterTokens: mediaType === "image" ? scene.usedCharacterTokens : [],
       visualBible,
       imageSettings: {
-        model: "nano-banana-pro",
+        model: "nano-banana-2",
         aspectRatio: "16:9",
         outputCount: 1,
-        expectedCredits: 0,
+        expectedCredits: null,
       },
       sourceImagePath: mediaType === "video"
         ? continuationOpeningFrame || scene.imageAssetPath || ""

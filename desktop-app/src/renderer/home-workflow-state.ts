@@ -3,7 +3,7 @@ import type { HomeWorkflowMode } from "./integrated-workflow";
 
 const HOME_MODE_KEY_PREFIX = "kc-auto-tool.session-home-mode.v1:";
 const CHARACTERS_REVIEWED_KEY_PREFIX = "kc-auto-tool.session-characters-reviewed.v1:";
-const MODES = new Set<HomeWorkflowMode>(["full_auto", "srt_script", "step_by_step"]);
+const MODES = new Set<HomeWorkflowMode>(["full_auto", "srt_script", "step_by_step", "screenplay_film"]);
 
 export type HomeSessionPhase = "choose_mode" | "setup" | "production";
 
@@ -14,11 +14,14 @@ export interface HomeSetupState {
   charactersReady: boolean;
   visualBibleReady: boolean;
   timelineReady: boolean;
-  continuePage: "voice" | "characters" | "visual-bible" | "timeline";
+  continuePage: "voice" | "screenplay" | "characters" | "visual-bible" | "timeline";
   currentStep: "mode" | "source" | "characters" | "visual_bible" | "timeline" | "production";
 }
 
 function sourceHasContent(session: TimelineSession): boolean {
+  if (session.productionKind === "screenplay") {
+    return Boolean(session.screenplay.scriptText.trim() || session.screenplay.shots.length);
+  }
   const source = session.workflowSource;
   return Boolean(
     source.narrationText?.trim() || source.narrationFileName?.trim() ||
@@ -28,6 +31,7 @@ function sourceHasContent(session: TimelineSession): boolean {
 }
 
 function inferLegacyMode(session: TimelineSession): HomeWorkflowMode | null {
+  if (session.productionKind === "screenplay") return "screenplay_film";
   if (!sourceHasContent(session) && session.scenes.length === 0) return null;
   const source = session.workflowSource;
   const usedVoice = Boolean(
@@ -52,8 +56,8 @@ export function readHomeCharactersReviewed(sessionId: string): boolean {
   return localStorage.getItem(`${CHARACTERS_REVIEWED_KEY_PREFIX}${sessionId}`) === "true";
 }
 
-export function markHomeCharactersReviewed(sessionId: string): void {
-  localStorage.setItem(`${CHARACTERS_REVIEWED_KEY_PREFIX}${sessionId}`, "true");
+export function markHomeCharactersReviewed(sessionId: string, reviewed = true): void {
+  localStorage.setItem(`${CHARACTERS_REVIEWED_KEY_PREFIX}${sessionId}`, String(reviewed));
 }
 
 export function deriveHomeSetupState(session: TimelineSession | null): HomeSetupState {
@@ -69,7 +73,9 @@ export function deriveHomeSetupState(session: TimelineSession | null): HomeSetup
   };
   const mode = readHomeWorkflowMode(session);
   const source = session.workflowSource;
-  const sourceReady = mode === "srt_script"
+  const sourceReady = mode === "screenplay_film"
+    ? session.screenplay.parseStatus === "approved" && session.screenplay.shots.length > 0
+    : mode === "srt_script"
     ? Boolean((source.srtText.trim() || source.srtFileName.trim() || source.srtPath.trim()) && (source.scriptText.trim() || source.scriptFileName.trim()))
     : Boolean(source.narrationText?.trim() && source.voiceName?.trim());
   const visualBibleReady = Boolean(session.visualBible.style.trim());
@@ -95,7 +101,9 @@ export function deriveHomeSetupState(session: TimelineSession | null): HomeSetup
     continuePage: "timeline",
     currentStep: "mode",
   };
-  const continuePage = mode !== "srt_script" && !sourceReady
+  const continuePage = mode === "screenplay_film" && !sourceReady
+    ? "screenplay"
+    : mode !== "srt_script" && !sourceReady
     ? "voice"
     : !charactersReady
       ? "characters"
@@ -118,4 +126,5 @@ export const HOME_MODE_LABELS: Record<HomeWorkflowMode, string> = {
   full_auto: "Tự động toàn bộ video",
   srt_script: "Từ SRT và kịch bản",
   step_by_step: "Tạo từng bước",
+  screenplay_film: "Phim kịch bản hình",
 };

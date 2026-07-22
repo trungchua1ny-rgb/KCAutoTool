@@ -3,6 +3,12 @@ import {
   parseCharacterTokens,
   type CharacterRosterEntry,
 } from "./character";
+import {
+  DEFAULT_SCREENPLAY_PROJECT,
+  normalizeScreenplayProject,
+  type ProjectProductionKind,
+  type ScreenplayProject,
+} from "./screenplay";
 
 export const TIMELINE_GENERATE_CHANNEL = "timeline:generate";
 export const TIMELINE_CANCEL_CHANNEL = "timeline:cancel";
@@ -158,6 +164,8 @@ export interface TimelineGenerateInput {
   visualBible: VisualBible;
   characterRoster: CharacterRosterEntry[];
   styleReference: TimelineStyleReference | null;
+  productionKind?: ProjectProductionKind;
+  screenplay?: ScreenplayProject;
 }
 
 export interface TimelineStyleReference {
@@ -196,6 +204,8 @@ export interface TimelineSession {
   styleReference: TimelineStyleReference | null;
   workflowMode: VideoWorkflowMode;
   workflowSource: TimelineWorkflowSource;
+  productionKind: ProjectProductionKind;
+  screenplay: ScreenplayProject;
   savedAt: string;
 }
 
@@ -205,6 +215,8 @@ export interface TimelineSessionInput {
   styleReference?: TimelineStyleReference | null;
   workflowMode?: VideoWorkflowMode;
   workflowSource?: TimelineWorkflowSource;
+  productionKind?: ProjectProductionKind;
+  screenplay?: ScreenplayProject;
 }
 
 export interface TimelineSessionSummary {
@@ -215,7 +227,14 @@ export interface TimelineSessionSummary {
   savedAt: string;
   active: boolean;
   workflowMode: VideoWorkflowMode;
+  productionKind: ProjectProductionKind;
 }
+
+export function normalizeProjectProductionKind(value: unknown): ProjectProductionKind {
+  return value === "screenplay" ? "screenplay" : "narrated";
+}
+
+export { DEFAULT_SCREENPLAY_PROJECT, normalizeScreenplayProject };
 
 export interface TimelineSessionDeleteResult {
   sessions: TimelineSessionSummary[];

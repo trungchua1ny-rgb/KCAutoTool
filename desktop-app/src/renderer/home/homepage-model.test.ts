@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProductionQueueSnapshot } from "../../shared/production-queue";
 import { DEFAULT_TIMELINE_WORKFLOW_SOURCE, DEFAULT_VISUAL_BIBLE, type Scene, type TimelineSession } from "../../shared/timeline";
+import { DEFAULT_SCREENPLAY_PROJECT } from "../../shared/screenplay";
 import { deriveHomepageState, nearestScenes, productionControls, productionSummary, setupSteps, sourceReady } from "./homepage-model";
 
 function scene(order: number, video = false): Scene {
@@ -40,6 +41,8 @@ function session(scenes: Scene[] = []): TimelineSession {
     styleReference: null,
     workflowMode: "automatic",
     workflowSource: { ...DEFAULT_TIMELINE_WORKFLOW_SOURCE },
+    productionKind: "narrated",
+    screenplay: structuredClone(DEFAULT_SCREENPLAY_PROJECT),
   };
 }
 
@@ -76,6 +79,18 @@ test("voice and SRT modes use different real source requirements", () => {
   value.workflowSource.srtText = "1\n00:00:00,000 --> 00:00:08,000\nTest";
   value.workflowSource.scriptText = "Test";
   assert.equal(sourceReady(value, "srt_script"), true);
+});
+
+test("screenplay mode is ready only after an approved shot plan exists", () => {
+  const value = session();
+  value.productionKind = "screenplay";
+  value.screenplay = {
+    ...structuredClone(DEFAULT_SCREENPLAY_PROJECT),
+    parseStatus: "approved",
+    shots: [{ id: "shot-001", order: 1, heading: "CẢNH 1", location: "Phòng", timeOfDay: "Đêm", action: "An mở cửa.", dialogueCues: [], ambience: "Mưa", soundEffects: ["Cửa mở"], durationSeconds: 4, approved: true }],
+  };
+  assert.equal(sourceReady(value, "screenplay_film"), true);
+  assert.equal(setupSteps(value, "screenplay_film", false)[0].title, "Kịch bản hình");
 });
 
 test("setup CTA order follows source, characters, visual bible, then start", () => {

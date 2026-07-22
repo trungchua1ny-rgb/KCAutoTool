@@ -26,6 +26,7 @@ export interface CapCutBuildInspection {
   existingSessionMatch: boolean;
   selectedProjectPath: string;
   availableProjects: CapCutProjectOption[];
+  preserveSceneAudio: boolean;
 }
 
 export interface CapCutBuildOptions {

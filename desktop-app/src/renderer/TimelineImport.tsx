@@ -28,6 +28,7 @@ import {
 } from "../shared/character";
 import {
   projectOutputFolder,
+  type ImageGenerationModel,
   type SceneMediaType,
   type SceneJobProgress,
 } from "../shared/scene-job";
@@ -1037,6 +1038,7 @@ export function TimelineImport({
     mediaType: SceneMediaType,
     prompt: string,
     characterTokens: string[] = [],
+    imageModel: ImageGenerationModel = "nano-banana-2",
   ) => {
     const key = `${sceneId}:${mediaType}`;
     const jobSessionId = activeSessionIdRef.current;
@@ -1071,10 +1073,10 @@ export function TimelineImport({
         characterTokens: mediaType === "image" ? characterTokens : [],
         visualBible,
         imageSettings: {
-          model: "nano-banana-pro",
+          model: imageModel,
           aspectRatio: visualBible.aspectRatio,
           outputCount: 1,
-          expectedCredits: 0,
+          expectedCredits: null,
         },
         sourceImagePath: mediaType === "video" ? sourceScene?.imageResultPath || "" : "",
         sourceFlowAssetKey: mediaType === "video" ? sourceScene?.imageFlowAssetKey || "" : "",
@@ -1140,6 +1142,7 @@ export function TimelineImport({
     prompt: string;
     characterPolicy: Scene["characterPolicy"];
     characterTokens: string[];
+    model: ImageGenerationModel;
   }) => {
     if (!imageModal) return;
     const { sceneId } = imageModal;
@@ -1152,7 +1155,7 @@ export function TimelineImport({
       }
       : scene));
     setImageModal(null);
-    void executeSceneJob(sceneId, "image", value.prompt, value.characterTokens);
+    void executeSceneJob(sceneId, "image", value.prompt, value.characterTokens, value.model);
   };
 
   const confirmVideoGeneration = (prompt: string) => {
@@ -1493,11 +1496,18 @@ export function TimelineImport({
     const hasDeferredVoice = Boolean(sourceInput.narrationText?.trim() && sourceInput.voiceName?.trim());
     setError("");
     setWorkflowNotice("");
+    if (!window.flowx?.timeline) {
+      setError("Timeline bridge chưa sẵn sàng");
+      return;
+    }
+    const currentSession = handoff ? null : await window.flowx.timeline.loadSession();
+    const productionKind = handoff?.productionKind || currentSession?.productionKind || "narrated";
+    const screenplayInput = handoff?.screenplay || currentSession?.screenplay;
     if (!bibleInput.style.trim()) {
       setError("Phong cách đồ họa trong Visual Bible là bắt buộc. Hãy nhập hoặc chọn một phong cách đã lưu.");
       return;
     }
-    if (automaticInput) {
+    if (automaticInput && productionKind !== "screenplay") {
       if (!sourceInput.narrationText?.trim()) { setError("Chế độ Tự động hoàn toàn chưa nhận được nội dung thoại từ Voice Studio."); return; }
       if (!sourceInput.voiceName?.trim()) { setError("Chế độ Tự động hoàn toàn chưa nhận được giọng đọc từ Voice Studio."); return; }
     } else {
@@ -1510,11 +1520,6 @@ export function TimelineImport({
       setError("ChatGPT worker chưa kết nối");
       return;
     }
-    if (!window.flowx?.timeline) {
-      setError("Timeline bridge chưa sẵn sàng");
-      return;
-    }
-
     setRunning(true);
     setProgress(null);
     try {
@@ -1558,6 +1563,8 @@ export function TimelineImport({
           styleReference: referenceInput,
           workflowMode: modeInput,
           workflowSource: preparedSource,
+          productionKind,
+          screenplay: screenplayInput,
         });
         setWorkflowNotice("Bước 2/3 · Voice và SRT đã hoàn thành. Đang chia Timeline và viết Prompt…");
       }
@@ -1586,6 +1593,8 @@ export function TimelineImport({
         visualBible: bibleInput,
         characterRoster,
         styleReference: referenceInput,
+        productionKind,
+        screenplay: screenplayInput,
       });
       const preparedScenes: Scene[] = result.scenes.map((scene) => {
         const detectedTokens = matchCharacterNames(
@@ -1611,6 +1620,8 @@ export function TimelineImport({
         styleReference: referenceInput,
         workflowMode: modeInput,
         workflowSource: nextWorkflowSource,
+        productionKind,
+        screenplay: screenplayInput,
       });
       setSessions((current) => current.map((entry) => entry.id === saved.id
         ? {

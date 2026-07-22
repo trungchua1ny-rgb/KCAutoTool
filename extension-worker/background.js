@@ -1046,29 +1046,39 @@ async function waitForFlowVideo(tabId, videoBaseline, jobId) {
   };
 }
 
-async function ensureFreeNanoBananaPro(tabId) {
-  // Close a stale model popup left behind by an interrupted/older job.
+const IMAGE_MODEL_LABELS = {
+  "nano-banana-2": "Nano Banana 2",
+  "nano-banana-2-lite": "Nano Banana 2 Lite",
+  "nano-banana-pro": "Nano Banana Pro",
+};
+
+function matchesSelectedImageModel(label, model) {
+  const value = String(label || "");
+  if (model === "nano-banana-2-lite") return /nano\s*banana\s*2\s*lite/i.test(value);
+  if (model === "nano-banana-2") {
+    return /nano\s*banana\s*2/i.test(value) && !/\blite\b/i.test(value);
+  }
+  return /nano\s*banana\s*pro/i.test(value);
+}
+
+async function ensureImageModel(tabId, imageSettings = {}) {
+  const requestedModel = Object.hasOwn(IMAGE_MODEL_LABELS, imageSettings.model)
+    ? imageSettings.model
+    : "nano-banana-2";
+  const modelLabel = IMAGE_MODEL_LABELS[requestedModel];
   await pressEscape(tabId).catch(() => {});
   await pause(150);
   const picker = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_IMAGE_MODEL_PICKER" });
   if (!picker?.ok) return picker;
-  // Flow sometimes hides the selected model label behind an icon-only control.
-  // Continue with the account's current image preset instead of blocking the job
-  // on a DOM label that Flow does not expose.
   if (picker.pickerUnavailable) {
     return {
-      ok: true,
-      model: "account-image-preset",
-      credits: "not-exposed-in-dom",
-      verification: "picker-not-exposed",
+      ok: false,
+      code: "FLOW_MODEL_NOT_FOUND",
+      error: `Không thể xác nhận model ${modelLabel} vì Google Flow không hiển thị nút chọn model.`,
     };
   }
-  if (/nano\s*banana\s*pro/i.test(String(picker.label || ""))) {
-    return {
-      ok: true,
-      model: "nano-banana-pro",
-      credits: "account-preset",
-    };
+  if (matchesSelectedImageModel(picker.label, requestedModel)) {
+    return { ok: true, model: requestedModel, credits: "account-preset" };
   }
 
   let popupOpen = false;
@@ -1076,12 +1086,27 @@ async function ensureFreeNanoBananaPro(tabId) {
   try {
     await clickAt(tabId, picker.x, picker.y);
     popupOpen = true;
-
-    const option = await sendImageToFlowTab(tabId, { type: "FLOWX_GET_NANO_BANANA_PRO_OPTION" });
+    const option = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_GET_IMAGE_MODEL_OPTION",
+      model: requestedModel,
+    });
     if (!option?.ok) return option;
+    if (
+      Number.isFinite(imageSettings.expectedCredits) &&
+      Number.isFinite(option.credits) &&
+      Number(option.credits) !== Number(imageSettings.expectedCredits)
+    ) {
+      return {
+        ok: false,
+        code: "FLOW_CREDIT_CHANGED",
+        error: `${modelLabel} đang hiển thị ${option.credits} tín dụng, khác cấu hình ${imageSettings.expectedCredits}.`,
+      };
+    }
     await clickAt(tabId, option.x, option.y);
-
-    const confirmed = await sendImageToFlowTab(tabId, { type: "FLOWX_CONFIRM_NANO_BANANA_PRO" });
+    const confirmed = await sendImageToFlowTab(tabId, {
+      type: "FLOWX_CONFIRM_IMAGE_MODEL",
+      model: requestedModel,
+    });
     completed = confirmed?.ok === true;
     return confirmed;
   } finally {
@@ -1090,14 +1115,13 @@ async function ensureFreeNanoBananaPro(tabId) {
     }
   }
 }
-
 async function generateFlowImage(tabId, payload, jobId) {
   const cleared = await sendImageToFlowTab(tabId, { type: "FLOWX_CLEAR_PROMPT_MEDIA" });
   if (!cleared?.ok) return cleared;
   if (cleared.removed > 0) {
     sendJobProgress(jobId, "preparing", `Đã gỡ ${cleared.removed} ảnh cũ khỏi prompt trước khi tạo scene độc lập`);
   }
-  const modelReady = await ensureFreeNanoBananaPro(tabId);
+  const modelReady = await ensureImageModel(tabId, payload.imageSettings);
   if (!modelReady?.ok) return modelReady;
 
   for (const reference of payload.refImages) {

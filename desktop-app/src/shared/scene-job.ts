@@ -14,6 +14,19 @@ export const SCENE_JOB_PROGRESS_CHANNEL = "scene-job:progress";
 export const SCENE_MEDIA_TYPES = ["image", "video"] as const;
 export type SceneMediaType = (typeof SCENE_MEDIA_TYPES)[number];
 
+export const IMAGE_GENERATION_MODELS = [
+  "nano-banana-2",
+  "nano-banana-2-lite",
+  "nano-banana-pro",
+] as const;
+export type ImageGenerationModel = (typeof IMAGE_GENERATION_MODELS)[number];
+
+export const IMAGE_GENERATION_MODEL_LABELS: Record<ImageGenerationModel, string> = {
+  "nano-banana-2": "Nano Banana 2",
+  "nano-banana-2-lite": "Nano Banana 2 Lite",
+  "nano-banana-pro": "Nano Banana Pro",
+};
+
 export interface SceneJobInput {
   sceneId: string;
   outputFolder?: string;
@@ -38,10 +51,10 @@ export function projectOutputFolder(projectId: string, _projectName = ""): strin
 }
 
 export interface ImageGenerationSettings {
-  model: "nano-banana-pro";
+  model: ImageGenerationModel;
   aspectRatio: ProjectAspectRatio;
   outputCount: 1;
-  expectedCredits: 0;
+  expectedCredits: number | null;
 }
 
 export interface VideoGenerationSettings {
@@ -114,11 +127,19 @@ export function normalizeSceneJobInput(value: unknown): SceneJobInput {
     throw new Error("Mỗi scene chỉ hỗ trợ tối đa 4 nhân vật tham chiếu");
   }
   const visualBible = normalizeVisualBible(input.visualBible);
+  const requestedImageSettings = input.imageSettings && typeof input.imageSettings === "object"
+    ? input.imageSettings as Record<string, unknown>
+    : null;
+  const requestedImageModel = requestedImageSettings?.model;
   const imageSettings: ImageGenerationSettings = {
-    model: "nano-banana-pro",
+    model: IMAGE_GENERATION_MODELS.includes(requestedImageModel as ImageGenerationModel)
+      ? requestedImageModel as ImageGenerationModel
+      : "nano-banana-2",
     aspectRatio: "16:9",
     outputCount: 1,
-    expectedCredits: 0,
+    expectedCredits: Number.isFinite(requestedImageSettings?.expectedCredits)
+      ? Number(requestedImageSettings?.expectedCredits)
+      : null,
   };
   const sourceImagePath = typeof input.sourceImagePath === "string"
     ? input.sourceImagePath.trim()

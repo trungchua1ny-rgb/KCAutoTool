@@ -43,7 +43,7 @@ export function CapCutBuildDialog({
           <div className="kc-capcut-dialog-success">
             <CheckCircle2 size={38} />
             <h3>Đã dựng xong {result.sceneCount} scene</h3>
-            <p>Video đã được xếp đúng thứ tự trong project <b>{result.targetProjectName}</b>. Audio gốc được giữ nguyên và âm thanh trong từng scene đã được tắt.</p>
+            <p>Video đã được xếp đúng thứ tự trong project <b>{result.targetProjectName}</b>. {result.preserveSceneAudio ? "Thoại, ambience và SFX trong từng scene được giữ nguyên." : "Voice chính của project được giữ nguyên và âm thanh trong từng scene đã được tắt."}</p>
             <div><FolderArchive size={15} /><span>Đã sao lưu: {result.backupPath}</span></div>
           </div>
         ) : inspection ? (
@@ -52,7 +52,7 @@ export function CapCutBuildDialog({
               <AudioLines size={18} />
               <div>
                 <strong>Dựng trực tiếp vào project bạn chọn</strong>
-                <span>Chọn project đã có audio. KC Auto Tool sẽ sao lưu project, giữ nguyên audio và thay riêng video track bằng toàn bộ scene đúng thứ tự.</span>
+                <span>{inspection.preserveSceneAudio ? "Chọn project đích. KC Auto Tool sẽ sao lưu, thay video track và giữ nguyên âm thanh điện ảnh trong từng scene." : "Chọn project đã có audio. KC Auto Tool sẽ sao lưu project, giữ nguyên audio và thay riêng video track bằng toàn bộ scene đúng thứ tự."}</span>
               </div>
             </div>
             <label className="kc-capcut-project-select">
@@ -68,7 +68,7 @@ export function CapCutBuildDialog({
                   </option>
                 ))}
               </select>
-              <small>Tên đầu là tên thư mục, tiếp theo là tên hiển thị trong CapCut. Hãy đóng CapCut và bấm Làm mới sau khi chèn audio.</small>
+              <small>Tên đầu là tên thư mục, tiếp theo là tên hiển thị trong CapCut. {inspection.preserveSceneAudio ? "Phim kịch bản hình không yêu cầu chèn voice chính trước." : "Hãy đóng CapCut và bấm Làm mới sau khi chèn audio."}</small>
             </label>
             <div className={`kc-capcut-readiness ${inspection.ready ? "is-ready" : "is-blocked"}`}>
               {inspection.ready ? <CheckCircle2 size={18} /> : <TriangleAlert size={18} />}
@@ -78,14 +78,14 @@ export function CapCutBuildDialog({
               <article><span>Project đích</span><strong>{inspection.targetProjectName || "Chưa tìm thấy"}</strong></article>
               <article><span>Video scene</span><strong>{inspection.completedSceneCount}/{inspection.sceneCount}</strong></article>
               <article><span>Thời lượng video</span><strong>{durationLabel(inspection.videoDurationSeconds)}</strong></article>
-              <article><span>Thời lượng voice</span><strong>{durationLabel(inspection.audioDurationSeconds)}</strong></article>
+              <article><span>{inspection.preserveSceneAudio ? "Audio scene" : "Thời lượng voice"}</span><strong>{inspection.preserveSceneAudio ? "Được giữ" : durationLabel(inspection.audioDurationSeconds)}</strong></article>
             </div>
             {inspection.existingVideoSegments > 0 && (
               <div className="kc-capcut-replace-warning"><TriangleAlert size={16} /><span>Video track đã có {inspection.existingVideoSegments} scene của phiên này. Dựng lại sẽ sao lưu rồi thay thế riêng video track; audio không bị xóa.</span></div>
             )}
             <ol className="kc-capcut-build-flow">
               <li><span>1</span><div><strong>Kiểm tra 100% scene</strong><small>File video phải còn đầy đủ trên máy.</small></div></li>
-              <li><span>2</span><div><strong>Giữ audio của project đích</strong><small>App chỉ thay video track và không xóa voice đã chèn.</small></div></li>
+              <li><span>2</span><div><strong>{inspection.preserveSceneAudio ? "Giữ âm thanh từng scene" : "Giữ audio của project đích"}</strong><small>{inspection.preserveSceneAudio ? "Thoại trực tiếp, ambience và SFX đi cùng video." : "App chỉ thay video track và không xóa voice đã chèn."}</small></div></li>
               <li><span>3</span><div><strong>Sao lưu trước khi dựng</strong><small>Toàn bộ project đích được sao lưu để có thể khôi phục.</small></div></li>
               <li><span>4</span><div><strong>Xếp scene và kiểm tra</strong><small>Không bỏ scene, không chồng clip, giữ nguyên audio.</small></div></li>
             </ol>

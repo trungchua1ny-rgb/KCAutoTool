@@ -15,13 +15,14 @@ import { TimelineImport } from "./TimelineImport";
 import { VisualBibleWorkspace } from "./VisualBibleWorkspace";
 import { VoiceWorkflow } from "./VoiceWorkflow";
 import { CapCutBuildPage } from "./CapCutBuildPage";
+import { ScreenplayStudio } from "./ScreenplayStudio";
 import { ChatGPTWorkerPanel, GoogleFlowWorkerPanel } from "./WorkerPanels";
 import { CapCutBuildDialog } from "./CapCutBuildDialog";
 import { CompletedSetupStep, type CompletedSetupStepKind } from "./CompletedSetupStep";
 import type { CapCutBuildInspection, CapCutBuildResult } from "../shared/capcut";
 import { PAGE_COPY, type AppPage } from "./app-navigation";
 import type { HomeWorkflowMode, IntegratedWorkflowHandoff } from "./integrated-workflow";
-import { markHomeCharactersReviewed, saveHomeWorkflowMode } from "./home-workflow-state";
+import { markHomeCharactersReviewed, readHomeWorkflowMode, saveHomeWorkflowMode } from "./home-workflow-state";
 import { useWorkspaceData } from "./useWorkspaceData";
 import "./style.css";
 import "./dark-fixes.css";
@@ -214,6 +215,8 @@ function App() {
         styleReference: workspace.session.styleReference,
         workflowMode: workspace.session.workflowMode,
         workflowSource: workspace.session.workflowSource,
+        productionKind: workspace.session.productionKind,
+        screenplay: workspace.session.screenplay,
       });
       await workspace.refresh();
       setToast({ tone: "success", text: "Đã lưu trạng thái phiên." });
@@ -229,14 +232,21 @@ function App() {
       let session = workspace.session;
       if (!session) session = await bridge.createSession("Video mới");
       saveHomeWorkflowMode(session.id, mode);
+      const screenplayMode = mode === "screenplay_film";
       await bridge.saveSession({
         scenes: session.scenes,
         visualBible: session.visualBible,
         styleReference: session.styleReference,
-        workflowMode: mode === "full_auto" ? "automatic" : "two_step",
+        workflowMode: mode === "full_auto" || screenplayMode ? "automatic" : "two_step",
         workflowSource: session.workflowSource,
+        productionKind: screenplayMode ? "screenplay" : "narrated",
+        screenplay: screenplayMode ? session.screenplay : undefined,
       });
       await workspace.refresh();
+      if (screenplayMode) {
+        setPage("screenplay");
+        return true;
+      }
       if (mode === "srt_script") {
         setPage("timeline");
         return true;
@@ -297,6 +307,8 @@ function App() {
       visualBible: session.visualBible,
       styleReference: session.styleReference,
       autoGenerateTimeline: true,
+      productionKind: session.productionKind,
+      screenplay: session.screenplay,
     });
     setPage("timeline");
     return true;
@@ -425,10 +437,12 @@ function App() {
     content = <SessionsView sessions={workspace.sessions} queues={workspace.sessionQueues} onCreate={() => void createSession()} onOpen={(id) => void selectSession(id)} onRename={(id) => void renameSession(id)} onDelete={(id) => void deleteSession(id)} />;
   } else if (page === "voice") {
     content = <VoiceWorkflow key={voiceUseCurrentSession ? workspace.session?.id || "voice" : `new:${voiceMode}`} mode={voiceMode} session={voiceUseCurrentSession ? workspace.session : null} onBack={() => setPage("home")} onComplete={(handoff) => { setIntegratedHandoff(handoff); setPage("characters"); void workspace.refresh(); }} />;
+  } else if (page === "screenplay") {
+    content = <ScreenplayStudio session={workspace.session} onSaved={() => void workspace.refresh()} onBack={() => setPage("home")} onContinue={() => { if (workspace.session) markHomeCharactersReviewed(workspace.session.id, false); setPage("characters"); }} />;
   } else if (page === "visual-bible") {
     content = <VisualBibleWorkspace session={workspace.session} onSaved={() => void workspace.refresh()} onBack={() => setPage("characters")} onOpenCharacters={() => setPage("characters")} onContinue={() => setPage("timeline")} />;
   } else if (page === "characters") {
-    content = <CharacterLibrary workflowStep onBack={() => setPage("voice")} onContinue={() => { if (workspace.session) markHomeCharactersReviewed(workspace.session.id); setPage("visual-bible"); }} />;
+    content = <CharacterLibrary workflowStep onBack={() => setPage(readHomeWorkflowMode(workspace.session) === "screenplay_film" ? "screenplay" : "voice")} onContinue={() => { if (workspace.session) markHomeCharactersReviewed(workspace.session.id); setPage("visual-bible"); }} />;
   } else if (page === "output") {
     content = <OutputLibrary inspection={workspace.output} session={workspace.session} />;
   } else if (page === "settings") {
